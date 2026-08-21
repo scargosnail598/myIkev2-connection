@@ -1,6 +1,6 @@
-# IKEv2 VPN — Ubuntu StrongSwan Server + Windows/Linux Clients
+# IKEv2 VPN — Ubuntu StrongSwan Server + Native Clients
 
-A complete IKEv2 VPN setup built around StrongSwan, EAP-MSCHAPv2 authentication, a private CA, and two Windows traffic modes:
+A complete IKEv2 VPN setup built around StrongSwan, EAP-MSCHAPv2 authentication, a private CA, and native Windows, Linux, and Android clients. Windows supports two traffic modes:
 
 - **Full Tunnel** — all IPv4 traffic goes through the VPN.
 - **Proxy Mode** — only the private SOCKS5 proxy endpoint goes through IKEv2; all other Windows traffic stays direct.
@@ -13,13 +13,16 @@ The Linux client currently operates as a full-tunnel client.
 
 | Component | File | Version / Target |
 |---|---|---|
-| Server | `ikev2-strongswan-ubuntu-v6.sh` | v6.0.0-en / Ubuntu 22.04 & 24.04 |
+| Server | `ikev2-strongswan-ubuntu-v6.1.1.sh` | v6.1.1-en / Ubuntu 22.04 & 24.04 |
 | Windows client | `ikev2-windows-client-v6.ps1` | v6.0.0 / PowerShell 5.1+ |
 | Linux client | `ikev2-linux-client-v1.5.sh` | v1.5.0 / Ubuntu 22.04 & 24.04 |
+| Android client | [`android-client/`](android-client/) | Phase 1 / Android 11+ |
 
 The server installer manages StrongSwan packages, certificates, users, routing, DNS, NAT, firewall rules, status, uninstall, and the optional private SOCKS5 Proxy Mode.
 
 The Windows utility supports both Full Tunnel and Proxy Mode without requiring separate VPN profiles.
+
+The native Android app provisions a single IPv4 full-tunnel profile through Android's platform IKEv2 stack. See the [Android build, security, and real-device test guide](android-client/README.md).
 
 ---
 
@@ -49,19 +52,19 @@ The installer creates its own local firewall and NAT rules, but it cannot modify
 Make the installer executable:
 
 ```bash
-chmod +x ikev2-strongswan-ubuntu-v6.sh
+chmod +x ikev2-strongswan-ubuntu-v6.1.1.sh
 ```
 
 Run the installer:
 
 ```bash
-sudo ./ikev2-strongswan-ubuntu-v6.sh install
+sudo ./ikev2-strongswan-ubuntu-v6.1.1.sh install
 ```
 
 Or run it without arguments:
 
 ```bash
-sudo ./ikev2-strongswan-ubuntu-v6.sh
+sudo ./ikev2-strongswan-ubuntu-v6.1.1.sh
 ```
 
 On a fresh server choose:
@@ -229,17 +232,17 @@ If Proxy Mode is enabled, `client-info.txt` also contains the private SOCKS5 end
 
 If an older installation was created by this installer family, you do **not** need to uninstall and reinstall the VPN.
 
-Copy `ikev2-strongswan-ubuntu-v6.sh` to the server and run:
+Copy `ikev2-strongswan-ubuntu-v6.1.1.sh` to the server and run:
 
 ```bash
-chmod +x ikev2-strongswan-ubuntu-v6.sh
-sudo ./ikev2-strongswan-ubuntu-v6.sh upgrade
+chmod +x ikev2-strongswan-ubuntu-v6.1.1.sh
+sudo ./ikev2-strongswan-ubuntu-v6.1.1.sh upgrade
 ```
 
 Or run:
 
 ```bash
-sudo ./ikev2-strongswan-ubuntu-v6.sh
+sudo ./ikev2-strongswan-ubuntu-v6.1.1.sh
 ```
 
 When an existing managed installation is detected, the menu is:
@@ -300,7 +303,7 @@ StrongSwan  : unchanged / not restarted by this upgrade
 Run:
 
 ```bash
-sudo ./ikev2-strongswan-ubuntu-v6.sh status
+sudo ./ikev2-strongswan-ubuntu-v6.1.1.sh status
 ```
 
 For StrongSwan details:
@@ -917,7 +920,7 @@ The expected route is:
 Then check the server:
 
 ```bash
-sudo ./ikev2-strongswan-ubuntu-v6.sh status
+sudo ./ikev2-strongswan-ubuntu-v6.1.1.sh status
 ```
 
 Check the proxy service:
@@ -1000,7 +1003,7 @@ Unrelated StrongSwan configuration is not removed.
 Run:
 
 ```bash
-sudo ./ikev2-strongswan-ubuntu-v6.sh uninstall
+sudo ./ikev2-strongswan-ubuntu-v6.1.1.sh uninstall
 ```
 
 Or open the interactive menu and choose:
@@ -1041,8 +1044,8 @@ Packages installed by the installer are removed only when the installer's safe p
 ## Server
 
 ```bash
-chmod +x ikev2-strongswan-ubuntu-v6.sh
-sudo ./ikev2-strongswan-ubuntu-v6.sh install
+chmod +x ikev2-strongswan-ubuntu-v6.1.1.sh
+sudo ./ikev2-strongswan-ubuntu-v6.1.1.sh install
 ```
 
 Enable the private SOCKS5 Proxy Mode when prompted if you plan to use Windows Proxy Mode.
@@ -1097,8 +1100,8 @@ sudo ./ikev2-linux-client-v1.5.sh
 ## Server
 
 ```bash
-chmod +x ikev2-strongswan-ubuntu-v6.sh
-sudo ./ikev2-strongswan-ubuntu-v6.sh upgrade
+chmod +x ikev2-strongswan-ubuntu-v6.1.1.sh
+sudo ./ikev2-strongswan-ubuntu-v6.1.1.sh upgrade
 ```
 
 Accept the defaults unless you need custom values:
@@ -1111,7 +1114,7 @@ Proxy Port : 1080
 Verify:
 
 ```bash
-sudo ./ikev2-strongswan-ubuntu-v6.sh status
+sudo ./ikev2-strongswan-ubuntu-v6.1.1.sh status
 sudo systemctl status ikev2-vpn-proxy
 sudo ss -lntp | grep 1080
 ```

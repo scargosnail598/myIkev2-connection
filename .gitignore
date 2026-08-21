@@ -1,1 +1,11 @@
 ca-cert.cer
+
+# Android / Gradle
+.gradle/
+**/build/
+local.properties
+*.apk
+*.aab
+captures/
+.idea/
+*.iml

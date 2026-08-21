@@ -23,6 +23,12 @@ class ProfileValidatorTest {
     }
 
     @Test
+    fun `rejects IPv6 literals outside the version one scope`() {
+        assertFalse(ProfileValidator.isValidServerAddress("2001:db8::1"))
+        assertFalse(ProfileValidator.isValidServerAddress("[2001:db8::1]"))
+    }
+
+    @Test
     fun `empty server is reported`() {
         val result = validInput(serverAddress = "")
 

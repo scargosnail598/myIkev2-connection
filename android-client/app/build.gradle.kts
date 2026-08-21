@@ -1,6 +1,74 @@
+import org.gradle.api.configuration.BuildFeatures
+import javax.inject.Inject
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
+}
+
+abstract class BuildFeaturesAccessor @Inject constructor(
+    val buildFeatures: BuildFeatures,
+)
+
+val releaseSigningVariableNames = listOf(
+    "ANDROID_KEYSTORE_PATH",
+    "ANDROID_KEYSTORE_PASSWORD",
+    "ANDROID_KEY_ALIAS",
+    "ANDROID_KEY_PASSWORD",
+)
+
+val releaseArtifactRequested = gradle.startParameter.taskNames.any { requestedTask ->
+    val taskName = requestedTask.substringAfterLast(':')
+    taskName.matches(Regex("(?i)(assemble|bundle|install|package|sign).*release.*"))
+}
+
+val configurationCacheRequested = objects
+    .newInstance<BuildFeaturesAccessor>()
+    .buildFeatures
+    .configurationCache
+    .requested
+    .getOrElse(false)
+
+if (releaseArtifactRequested && configurationCacheRequested) {
+    throw GradleException(
+        "Release signing must run with --no-configuration-cache so credentials are not " +
+            "retained in Gradle's configuration cache.",
+    )
+}
+
+// Do not read or configure signing secrets for debug/test/lint invocations. Besides reducing
+// exposure, this keeps them out of the configuration cache used by normal development builds.
+val releaseSigningEnvironment = if (releaseArtifactRequested) {
+    releaseSigningVariableNames.associateWith { name ->
+        providers.environmentVariable(name).orNull?.takeIf { it.isNotBlank() }
+    }
+} else {
+    emptyMap()
+}
+
+val missingReleaseSigningVariables = if (releaseArtifactRequested) {
+    releaseSigningVariableNames.filter { releaseSigningEnvironment[it] == null }
+} else {
+    emptyList()
+}
+
+if (releaseArtifactRequested && missingReleaseSigningVariables.isNotEmpty()) {
+    throw GradleException(
+        "A signed release was requested, but these environment variables are missing: " +
+            missingReleaseSigningVariables.joinToString() +
+            ". Configure all release-signing values and try again.",
+    )
+}
+
+val releaseKeystorePath = releaseSigningEnvironment["ANDROID_KEYSTORE_PATH"]
+if (
+    releaseArtifactRequested &&
+    releaseKeystorePath != null &&
+    (!file(releaseKeystorePath).isFile || !file(releaseKeystorePath).canRead())
+) {
+    throw GradleException(
+        "ANDROID_KEYSTORE_PATH must point to an existing keystore file readable by Gradle.",
+    )
 }
 
 android {
@@ -15,6 +83,26 @@ android {
         versionName = "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    signingConfigs {
+        if (releaseArtifactRequested) {
+            create("release") {
+                storeFile = file(releaseSigningEnvironment.getValue("ANDROID_KEYSTORE_PATH")!!)
+                storePassword = releaseSigningEnvironment.getValue("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = releaseSigningEnvironment.getValue("ANDROID_KEY_ALIAS")
+                keyPassword = releaseSigningEnvironment.getValue("ANDROID_KEY_PASSWORD")
+            }
+        }
+    }
+
+    buildTypes {
+        getByName("release") {
+            if (releaseArtifactRequested) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+            isMinifyEnabled = false
+        }
     }
 
     buildFeatures {
@@ -37,6 +125,38 @@ android {
     lint {
         abortOnError = true
         checkReleaseBuilds = true
+    }
+}
+
+val verifyReleaseSigning by tasks.registering {
+    group = "verification"
+    description = "Prevents release packaging from bypassing the explicit signing checks."
+    notCompatibleWithConfigurationCache(
+        "Release signing credentials must not be retained in the configuration cache.",
+    )
+
+    doLast {
+        if (!releaseArtifactRequested) {
+            throw GradleException(
+                "Release packaging must be requested explicitly with a full task name, for " +
+                    "example: ./gradlew --no-daemon --no-configuration-cache assembleRelease",
+            )
+        }
+    }
+}
+
+tasks.configureEach {
+    val lowerName = name.lowercase()
+    val isReleasePackagingTask = "release" in lowerName && listOf(
+        "assemble",
+        "bundle",
+        "install",
+        "package",
+        "sign",
+    ).any { prefix -> lowerName.startsWith(prefix) }
+
+    if (isReleasePackagingTask) {
+        dependsOn(verifyReleaseSigning)
     }
 }
 

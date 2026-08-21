@@ -15,7 +15,8 @@
         android:label="@string/app_name"
         android:roundIcon="@drawable/ic_vpn"
         android:supportsRtl="true"
-        android:theme="@style/Theme.Ikev2Vpn">
+        android:theme="@style/Theme.Ikev2Vpn"
+        android:usesCleartextTraffic="false">
 
         <activity
             android:name=".MainActivity"

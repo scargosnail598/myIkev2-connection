@@ -6,6 +6,11 @@ ca-cert.cer
 local.properties
 *.apk
 *.aab
+*.jks
+*.keystore
+keystore.properties
+signing.properties
+android-client/dist/
 captures/
 .idea/
 *.iml

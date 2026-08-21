@@ -50,6 +50,25 @@ class VpnStateReducerTest {
     }
 
     @Test
+    fun `unconfirmed legacy disconnect timeout becomes unknown`() {
+        val disconnecting = VpnStateReducer.reduce(
+            VpnState(connectionState = ConnectionState.CONNECTED, confirmed = true),
+            VpnStateEvent.DisconnectRequested,
+        )
+        val unknown = VpnStateReducer.reduce(
+            disconnecting,
+            VpnStateEvent.ConfirmationTimedOut(
+                "Android did not confirm that the VPN network was removed.",
+                StateEvidence.LOCAL_REQUEST,
+            ),
+        )
+
+        assertEquals(ConnectionState.UNKNOWN, unknown.connectionState)
+        assertEquals(StateEvidence.LOCAL_REQUEST, unknown.evidence)
+        assertFalse(unknown.confirmed)
+    }
+
+    @Test
     fun `stale API state does not regress a requested transition`() {
         assertFalse(
             VpnStateReducer.shouldApplyPlatformObservation(

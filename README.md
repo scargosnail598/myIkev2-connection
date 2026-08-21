@@ -16,13 +16,36 @@ The Linux client currently operates as a full-tunnel client.
 | Server | `ikev2-strongswan-ubuntu-v6.1.1.sh` | v6.1.1-en / Ubuntu 22.04 & 24.04 |
 | Windows client | `ikev2-windows-client-v6.ps1` | v6.0.0 / PowerShell 5.1+ |
 | Linux client | `ikev2-linux-client-v1.5.sh` | v1.5.0 / Ubuntu 22.04 & 24.04 |
-| Android client | [`android-client/`](android-client/) | Phase 1 / Android 11+ |
+| Android client | [`android-client/`](android-client/) | v1.0.0 / Android 11+ (API 30+) |
 
 The server installer manages StrongSwan packages, certificates, users, routing, DNS, NAT, firewall rules, status, uninstall, and the optional private SOCKS5 Proxy Mode.
 
 The Windows utility supports both Full Tunnel and Proxy Mode without requiring separate VPN profiles.
 
-The native Android app provisions a single IPv4 full-tunnel profile through Android's platform IKEv2 stack. See the [Android build, security, and real-device test guide](android-client/README.md).
+The **Android Client v1.0.0** is a native Android IKEv2 client for Android 11+
+(API 30+). It provisions a single IPv4 full-tunnel profile through Android's
+platform VPN stack:
+
+```text
+Android App
+    ↓
+VpnManager / Ikev2VpnProfile
+    ↓
+Android platform IKEv2/IPsec stack
+    ↓
+strongSwan server
+```
+
+It uses EAP-MSCHAPv2 and validates the server with the imported private CA. It
+does not implement IKEv2, intercept traffic, or use `VpnService`. Android v1.0
+supports profile provisioning, connect/disconnect, basic status, and diagnostics;
+it does not support Proxy Mode, split tunneling, multiple profiles, or automatic
+connection.
+
+The app needs only the server hostname or IPv4 address, EAP username/password,
+and `ca-cert.cer`. **Never transfer a server or CA private key to Android.** See
+the [Android build and release guide](android-client/README.md) and
+[release acceptance matrix](android-client/RELEASE_TESTING.md).
 
 ---
 
@@ -1153,3 +1176,9 @@ Finally, configure only the desired applications to use:
 ```text
 SOCKS5 10.254.254.1:1080
 ```
+
+---
+
+# License
+
+This project is available under the [MIT License](LICENSE).

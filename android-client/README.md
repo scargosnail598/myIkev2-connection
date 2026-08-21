@@ -1,68 +1,189 @@
-# Native Android IKEv2 Client — Phase 1
+# Native Android IKEv2 Client v1.0.0
 
-This app provisions one strongSwan-compatible IKEv2 profile through Android's platform VPN stack. It uses Kotlin, Jetpack Compose, Material 3, `VpnManager`, and `Ikev2VpnProfile`; it does not contain a `VpnService`, custom VPN engine, VPN-related native library, or custom traffic path.
+This is the Android 11+ (API 30+) client for the repository's strongSwan
+configuration. It uses Kotlin, Jetpack Compose, Material 3, and Android's native
+VPN APIs.
 
-## Requirements and build
-
-- Android 11 (API 30) or newer with `android.software.ipsec_tunnels`
-- JDK 17 and Android SDK 36
-
-From this directory:
-
-```bash
-./gradlew testDebugUnitTest
-./gradlew assembleDebug
-./gradlew lintDebug
-adb install -r app/build/outputs/apk/debug/app-debug.apk
+```text
+Android App
+    ↓
+VpnManager / Ikev2VpnProfile
+    ↓
+Android platform IKEv2/IPsec stack
+    ↓
+strongSwan server
 ```
 
-The Gradle wrapper downloads build dependencies on its first run.
+The app provisions the profile; Android performs IKEv2/IPsec processing. The
+app does not implement IKEv2, intercept VPN traffic, use `VpnService`, or embed
+a native VPN engine.
 
-## Project layout
+## Supported v1.0 scope
 
-- `app/src/main/.../certificate/`: bounded SAF import, X.509 parsing, and SHA-256 fingerprints
-- `data/`: one-profile DataStore metadata and canonical DER CA storage
-- `vpn/`: platform provisioning, API compatibility, state reduction, and API 33+ events
-- `ui/`: Compose setup, main, and diagnostics screens backed by one ViewModel/StateFlow
-- `validation/`: profile and server-address validation
-- `app/src/test/`: hermetic certificate, validation, and state tests
+Supported: Android 11+/API 30+ devices with the platform
+`android.software.ipsec_tunnels` feature, hostname or IPv4 server addresses,
+IKEv2 with EAP-MSCHAPv2, a private CA, one IPv4 full-tunnel profile,
+provisioning, VPN consent, connect/disconnect, basic status, and sanitized
+diagnostics.
 
-## Platform and security behavior
+Not supported: IPv6 literals, SOCKS5 or split-tunnel Proxy Mode, QR
+provisioning, multiple profiles, per-app VPN, transparent proxy, custom DNS or
+routing, a custom `VpnService`, Quick Settings, or auto-connect UI.
 
-The configured server address is both the gateway and Android's remote IKE identity. The username is the local IKE identity and the EAP-MSCHAPv2 username. The imported CA is passed directly as `serverRootCa`; it is never installed in Android's global trust store.
+## Required server inputs
 
-Certificate import accepts DER or PEM content selected through the document picker. The app requires exactly one currently valid X.509 certificate, stores canonical DER in private storage, verifies its stored fingerprint on load, and warns if the certificate lacks the CA basic constraint.
+Copy only the following values from the server installation:
 
-The password lives in a non-saveable local Compose field and is passed directly through one synchronous provisioning call. It is cleared before provisioning and whenever the app leaves the foreground, and is never retained by the ViewModel, StateFlow, DataStore, diagnostics, logs, or backups. Reprovisioning therefore requires entering it again. Android's provisioned profile is the intended credential boundary.
+```text
+VPN Server:     <certificate-matching hostname or IPv4 address>
+Username:       <configured EAP user>
+Password:       <configured EAP password>
+CA Certificate: ca-cert.cer
+```
 
-On API 33+, connection starts with `startProvisionedVpnProfileSession()` and state comes from `VpnProfileState`, supplemented by protected VPN-manager events. On API 30–32, the deprecated start call is isolated in the controller and connection is confirmed only when Android exposes a VPN network owned by this app. A successful start request alone remains `Connecting`.
+Do not copy the CA private key, server private key, or any server certificate
+private key to Android. The public `ca-cert.cer` is sufficient.
+
+## Identity and certificate behavior
+
+The app currently builds `Ikev2VpnProfile` with the configured server address
+as the gateway/remote IKE identity and the username as the local IKE identity.
+It also supplies that username for EAP-MSCHAPv2 authentication. This coupling
+matches the tested strongSwan configuration, whose client identity policy is
+permissive; an EAP username and local IKE identity are not universally the same
+concept. **TODO:** add a separate local IKE identity field if a future server
+policy requires a distinct IDi.
+
+The selected DER or PEM file must contain exactly one currently valid X.509
+certificate. The app displays its subject, issuer, CA warning, and SHA-256
+fingerprint, stores canonical DER privately, and passes it directly as
+`serverRootCa`. It does not install a global CA or bypass server identity checks.
+
+The password is required for each provisioning or reprovisioning operation. It
+exists transiently in a non-saveable setup field but is not copied into the
+ViewModel/StateFlow or saved in DataStore, files, backups, logs, or diagnostics.
 
 ## Configure and connect
 
-1. Open the app and enter a display name, the exact server hostname/IP, username, and password.
-2. Select **Import CA Certificate** and choose the server installer's `ca-cert.cer` (DER or PEM `.cer`/`.crt` content is supported).
-3. Verify the displayed subject, issuer, and SHA-256 fingerprint.
-4. Select **Save / Provision VPN**, then accept Android's system VPN consent dialog if shown.
-5. Select **CONNECT**. Use **Diagnostics** to inspect platform support, state evidence, identity, CA, session, and sanitized errors.
-6. Select **DISCONNECT** to restore normal connectivity.
+1. Enter a display name, the exact server hostname/IPv4 address, EAP username,
+   and password.
+2. Import the server installer's `ca-cert.cer` and verify its subject, issuer,
+   and SHA-256 fingerprint against a trusted copy.
+3. Select **Save / Provision VPN** and accept Android's VPN consent prompt.
+4. Select **CONNECT** and wait for platform-confirmed Connected status. Use
+   **Diagnostics** for sanitized state, identity, CA, session, and error details.
+5. Select **DISCONNECT** and verify ordinary connectivity returns.
 
-## Real-device acceptance
+## Build and project layout
 
-Automated builds cannot exercise Android's IKE stack. Test on at least one API 30–32 device and one API 33+ device against the existing server:
+Install JDK 17 and Android SDK 36, then run from `android-client/`:
 
-1. Install the debug APK and record the device's current public IPv4 address.
-2. Enter valid server details, import the installer's CA, and compare the displayed SHA-256 fingerprint with `openssl x509 -inform DER -in ca-cert.cer -noout -fingerprint -sha256` on a trusted machine.
-3. Deny the first consent prompt; confirm the app remains unconfigured and usable. Provision again and approve it.
-4. Open Diagnostics and verify the server/remote identity, local identity, CA subject, issuer, and fingerprint.
-5. Select **CONNECT** and wait for **Connected** with confirmed Android evidence.
-6. Confirm Android assigns a VPN address, run `sudo ./ikev2-strongswan-ubuntu-v6.1.1.sh status` on the server to inspect the established session, and verify the server-supplied DNS resolves a fresh hostname.
-7. Run a public-IP check and confirm it shows the VPN server's public IPv4 address.
-8. Select **DISCONNECT**; confirm ordinary DNS, Internet access, and the original public IP return.
-9. Repeat separately with a wrong password, unrelated CA, mismatched server identity, and unreachable server. Each must fail without showing a false confirmed connection, exposing credentials, or breaking normal networking.
-10. Rotate during setup and after provisioning, then relaunch. Non-secret profile data must remain intact while the password must be cleared.
+```bash
+./gradlew testDebugUnitTest
+./gradlew lintDebug
+./gradlew assembleDebug
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
 
-## Known limitations and Phase 2
+Production code is under `app/src/main/java/com/saeed/ikev2vpn/`:
 
-Phase 1 supports one full-tunnel profile only. API 30–32 state and failure detail are necessarily best-effort, and vendor implementations may report transitions slowly. API 33+ event diagnostics cover common IKE/network failures but are not a packet-level monitor. There is no profile deletion UI, automatic connection, custom DNS/routing, traffic statistics, or server administration.
+- `certificate/`: bounded SAF import, parsing, and SHA-256 fingerprints
+- `data/`: one-profile DataStore metadata and private canonical CA storage
+- `vpn/`: native provisioning, SDK compatibility, state, and events
+- `ui/`: Compose screens and ViewModel/StateFlow state
+- `validation/`: profile and server-address validation
+- `app/src/test/`: hermetic JUnit certificate, validation, reducer, and state tests
 
-Possible Phase 2 work includes QR provisioning, restricted-selector Proxy Mode, richer API 33+ diagnostics, multiple profiles, and Quick Settings integration.
+## Local release signing
+
+Release APKs never fall back to the debug key. Create the production key once
+and keep it in secured, backed-up storage outside the repository:
+
+```bash
+keytool -genkeypair -v \
+  -keystore /secure/path/ikev2-android-release.jks \
+  -alias ikev2-android \
+  -keyalg RSA -keysize 4096 -validity 10000
+```
+
+Set the signing inputs without committing them. Prompting avoids putting
+passwords in shell history:
+
+```bash
+export ANDROID_KEYSTORE_PATH=/secure/path/ikev2-android-release.jks
+export ANDROID_KEY_ALIAS=ikev2-android
+read -rsp "Keystore password: " ANDROID_KEYSTORE_PASSWORD; export ANDROID_KEYSTORE_PASSWORD; printf '\n'
+read -rsp "Key password: " ANDROID_KEY_PASSWORD; export ANDROID_KEY_PASSWORD; printf '\n'
+```
+
+All four variables are required for an explicit release task:
+`ANDROID_KEYSTORE_PATH`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, and
+`ANDROID_KEY_PASSWORD`. Missing values cause release tasks to fail without
+printing secrets; debug builds, tests, and lint do not require them.
+
+**Retain the same production signing key for every future update.** Losing it
+prevents users from installing upgrades over the existing application. Never
+commit a keystore or password.
+
+## Repeatable android-v1.0.0 release
+
+Confirm `versionCode = 1` and `versionName = "1.0.0"`, complete
+[RELEASE_TESTING.md](RELEASE_TESTING.md), and ensure the working tree contains
+only intended release changes. With signing variables set:
+
+```bash
+./gradlew --no-daemon --no-configuration-cache clean testDebugUnitTest lintDebug assembleRelease
+mkdir -p dist
+cp app/build/outputs/apk/release/app-release.apk dist/ikev2-android-v1.0.0.apk
+apksigner verify --verbose --print-certs dist/ikev2-android-v1.0.0.apk
+(cd dist && sha256sum ikev2-android-v1.0.0.apk > ikev2-android-v1.0.0.apk.sha256)
+(cd dist && sha256sum -c ikev2-android-v1.0.0.apk.sha256)
+unset ANDROID_KEYSTORE_PATH ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD
+```
+
+The v1.0 release build intentionally leaves R8/minification disabled to reduce
+first-release risk.
+
+Always keep `--no-daemon --no-configuration-cache` on signed-release commands
+so the signing process exits after the build and Gradle does not persist values
+supplied to the Android plugin during configuration. `apksigner` is supplied by
+Android SDK Build Tools; use its full SDK path if it is not on `PATH`, and retain
+the reported signer-certificate SHA-256 digest with the release record.
+
+Publish both files only after validation:
+
+```text
+dist/ikev2-android-v1.0.0.apk
+dist/ikev2-android-v1.0.0.apk.sha256
+```
+
+The human release owner may then create the Android-specific tag
+`android-v1.0.0`; no build command creates, pushes, or publishes it.
+
+## Future signed-release CI
+
+The normal CI workflow intentionally needs no signing secrets and does not
+publish releases. A future protected release workflow should use these GitHub
+Actions secrets:
+
+- `ANDROID_KEYSTORE_BASE64`
+- `ANDROID_KEYSTORE_PASSWORD`
+- `ANDROID_KEY_ALIAS`
+- `ANDROID_KEY_PASSWORD`
+
+Decode the keystore only into a temporary runner path, expose that path as
+`ANDROID_KEYSTORE_PATH`, avoid command tracing, and delete the file after the
+build. Restrict the secrets to protected release jobs and never upload the
+keystore itself. The base64 value is sensitive key material, not encryption.
+
+## Platform behavior and limitations
+
+API 33+ uses `startProvisionedVpnProfileSession()`, `VpnProfileState`, and
+protected VPN-manager events. API 30–32 isolates the deprecated start call and
+reports Connected only after Android exposes an app-owned VPN network. Vendor
+implementations may report transitions or failure details slowly.
+
+See [RELEASE_TESTING.md](RELEASE_TESTING.md) for the mandatory API 30–32 and API
+33+ real-device gates. Automated JVM tests cannot establish an IKEv2 tunnel.
+
+The repository is licensed under the [MIT License](../LICENSE).

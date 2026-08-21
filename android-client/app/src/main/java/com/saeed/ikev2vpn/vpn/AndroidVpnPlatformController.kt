@@ -127,6 +127,8 @@ class AndroidVpnPlatformController(context: Context) : VpnPlatformController {
                     delay(500)
                     reduceState(VpnStateEvent.LocalDisconnectCompleted)
                 }
+            } else {
+                scheduleLegacyDisconnectTimeout()
             }
             VpnResult.Success(Unit)
         } catch (exception: Exception) {
@@ -265,6 +267,21 @@ class AndroidVpnPlatformController(context: Context) : VpnPlatformController {
                 reduceState(
                     VpnStateEvent.ConfirmationTimedOut(
                         "The VPN connection was not confirmed by Android. Check the server and credentials.",
+                        StateEvidence.LOCAL_REQUEST,
+                    ),
+                )
+            }
+        }
+    }
+
+    private fun scheduleLegacyDisconnectTimeout() {
+        transitionJob?.cancel()
+        transitionJob = scope.launch {
+            delay(CONNECTION_TIMEOUT_MILLIS)
+            if (mutableState.value.connectionState == ConnectionState.DISCONNECTING) {
+                reduceState(
+                    VpnStateEvent.ConfirmationTimedOut(
+                        "Android did not confirm that the VPN network was removed. Stop or reset it before reconnecting.",
                         StateEvidence.LOCAL_REQUEST,
                     ),
                 )

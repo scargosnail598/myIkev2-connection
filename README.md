@@ -205,6 +205,17 @@ If the password is left empty, the installer generates a random password.
 
 Multiple VPN users can be created during installation.
 
+On an existing managed installation, open `User Management` from the main
+menu to list users, add a user, change a password, or remove a user without
+reinstalling the VPN. User credentials remain in `/etc/ipsec.secrets`.
+The menu derives each user's current `Online` or `Offline` state from
+StrongSwan when the view is rendered. If StrongSwan is stopped, users appear
+offline; if its active-session status cannot be queried, they appear as
+`Unknown`.
+StrongSwan rereads the secrets after each change without restarting the VPN
+service. Manually entered passwords must contain at least 12 characters;
+generated passwords are shown once.
+
 Before installation begins, review the summary and confirm with `Y`.
 
 ---
@@ -274,15 +285,17 @@ When an existing managed installation is detected, the menu is:
 IKEv2 installation detected
 
 1) Status
-2) Upgrade / Configure SOCKS5 Proxy Mode
-3) Uninstall
-4) Exit
+2) Service Control
+3) User Management
+4) Upgrade / Configure SOCKS5 Proxy Mode
+5) Uninstall
+6) Exit
 ```
 
 Choose:
 
 ```text
-2) Upgrade / Configure SOCKS5 Proxy Mode
+4) Upgrade / Configure SOCKS5 Proxy Mode
 ```
 
 Recommended defaults:
@@ -1032,7 +1045,7 @@ sudo ./ikev2-strongswan-ubuntu-v6.1.1.sh uninstall
 Or open the interactive menu and choose:
 
 ```text
-3) Uninstall
+5) Uninstall
 ```
 
 on an installed v6 system.

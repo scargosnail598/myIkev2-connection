@@ -287,15 +287,16 @@ IKEv2 installation detected
 1) Status
 2) Service Control
 3) User Management
-4) Upgrade / Configure SOCKS5 Proxy Mode
-5) Uninstall
-6) Exit
+4) Diagnostics
+5) Upgrade / Configure SOCKS5 Proxy Mode
+6) Uninstall
+7) Exit
 ```
 
 Choose:
 
 ```text
-4) Upgrade / Configure SOCKS5 Proxy Mode
+5) Upgrade / Configure SOCKS5 Proxy Mode
 ```
 
 Recommended defaults:
@@ -341,6 +342,17 @@ Run:
 ```bash
 sudo ./ikev2-strongswan-ubuntu-v6.1.1.sh status
 ```
+
+Run the read-only server health check from the installed-system menu or with:
+
+```bash
+sudo ./ikev2-strongswan-ubuntu-v6.2.0.sh diagnostics
+```
+
+Diagnostics checks the managed state, services, IKEv2 connection, forwarding,
+firewall/NAT rules, certificates and keys, secrets permissions, VPN users,
+network interface, VPN subnet, optional Proxy Mode, and active-user status. It
+reports `HEALTHY`, `WARNING`, or `FAILED` without changing the server.
 
 For StrongSwan details:
 
@@ -1045,7 +1057,7 @@ sudo ./ikev2-strongswan-ubuntu-v6.1.1.sh uninstall
 Or open the interactive menu and choose:
 
 ```text
-5) Uninstall
+6) Uninstall
 ```
 
 on an installed v6 system.

@@ -1536,18 +1536,19 @@ vpn_user_count() {
 }
 
 refresh_online_vpn_users() {
-  local status_output
+  local quiet="${1:-no}"
 
   ONLINE_VPN_USERS=()
   VPN_SESSION_STATUS_AVAILABLE="yes"
+  VPN_STATUSALL_OUTPUT=""
 
   if ! service_is_active "$STRONGSWAN_SERVICE"; then
     return 0
   fi
 
-  if ! command_exists ipsec || ! status_output=$(ipsec statusall 2>/dev/null); then
+  if ! command_exists ipsec || ! VPN_STATUSALL_OUTPUT=$(ipsec statusall 2>/dev/null); then
     VPN_SESSION_STATUS_AVAILABLE="no"
-    warn "Unable to query StrongSwan session status."
+    [[ "$quiet" == "yes" ]] || warn "Unable to query StrongSwan session status."
     return 0
   fi
 
@@ -1561,7 +1562,7 @@ refresh_online_vpn_users() {
           print identity
         }
       }
-    ' <<< "$status_output"
+    ' <<< "$VPN_STATUSALL_OUTPUT"
   )
 }
 
@@ -2203,6 +2204,265 @@ status_vpn() {
   fi
 }
 
+diag_reset() {
+  DIAG_CHECKS=0
+  DIAG_WARNINGS=0
+  DIAG_FAILURES=0
+}
+
+diag_ok() {
+  local title="$1"
+  local detail="${2:-}"
+  ((DIAG_CHECKS += 1))
+  printf '[OK]   %s\n' "$title"
+  [[ -z "$detail" ]] || printf '       %s\n' "$detail"
+}
+
+diag_warn() {
+  local title="$1"
+  local detail="${2:-}"
+  ((DIAG_CHECKS += 1))
+  ((DIAG_WARNINGS += 1))
+  printf '[WARN] %s\n' "$title"
+  [[ -z "$detail" ]] || printf '       %s\n' "$detail"
+}
+
+diag_fail() {
+  local title="$1"
+  local detail="${2:-}"
+  ((DIAG_CHECKS += 1))
+  ((DIAG_FAILURES += 1))
+  printf '[FAIL] %s\n' "$title"
+  [[ -z "$detail" ]] || printf '       %s\n' "$detail"
+}
+
+check_certificate_health() {
+  local certificate_file="$1"
+  local title="$2"
+  local end_line end_value expiry_date end_epoch now_epoch days day_label
+
+  if [[ ! -e "$certificate_file" ]]; then
+    diag_fail "$title" "${title} file is missing"
+    return 0
+  fi
+  if [[ ! -r "$certificate_file" ]]; then
+    diag_fail "$title" "${title} file is unreadable"
+    return 0
+  fi
+  if ! end_line=$(openssl x509 -in "$certificate_file" -noout -enddate 2>/dev/null); then
+    diag_fail "$title" "OpenSSL could not parse the ${title,,}"
+    return 0
+  fi
+  if ! openssl x509 -in "$certificate_file" -noout -checkend 0 >/dev/null 2>&1; then
+    diag_fail "$title" "${title} has expired"
+    return 0
+  fi
+
+  end_value="${end_line#notAfter=}"
+  expiry_date=$(date -d "$end_value" '+%F' 2>/dev/null || printf '%s' "$end_value")
+  if ! openssl x509 -in "$certificate_file" -noout -checkend 2592000 >/dev/null 2>&1; then
+    end_epoch=$(date -d "$end_value" '+%s' 2>/dev/null || true)
+    now_epoch=$(date '+%s')
+    if [[ "$end_epoch" =~ ^[0-9]+$ ]]; then
+      days=$(( (end_epoch - now_epoch) / 86400 ))
+      if (( days == 1 )); then
+        day_label="day"
+      else
+        day_label="days"
+      fi
+      diag_warn "$title" "Certificate expires in ${days} ${day_label}"
+    else
+      diag_warn "$title" "Certificate expires within 30 days"
+    fi
+  else
+    diag_ok "$title" "Expires: ${expiry_date}"
+  fi
+}
+
+check_proxy_health() {
+  local listeners
+
+  if [[ "${DIAG_STATE_LOADED:-no}" != "yes" ]]; then
+    diag_warn "SOCKS5 Proxy Mode" "Cannot verify without managed state"
+    return 0
+  fi
+  if [[ "${PROXY_ENABLED:-no}" != "yes" ]]; then
+    diag_ok "SOCKS5 Proxy Mode" "Not configured"
+    return 0
+  fi
+  if ! service_is_active "$PROXY_SERVICE"; then
+    diag_fail "SOCKS5 Proxy Mode" "Proxy Mode is configured but service is inactive"
+    return 0
+  fi
+
+  listeners=$(ss -lntH 2>/dev/null || true)
+  if awk -v endpoint="${PROXY_IP}:${PROXY_PORT}" '$4 == endpoint {found=1} END {exit !found}' <<< "$listeners"; then
+    diag_ok "SOCKS5 Proxy Mode" "${PROXY_IP}:${PROXY_PORT}"
+  else
+    diag_fail "SOCKS5 Proxy Mode" "Service is active but ${PROXY_IP}:${PROXY_PORT} is not listening"
+  fi
+}
+
+run_diagnostics() {
+  local strongswan_active="no"
+  local forwarding_value secrets_mode user_count online_count overall
+
+  diag_reset
+  DIAG_STATE_LOADED="no"
+  OUT_IF=""
+  VPN_SUBNET=""
+  PROXY_ENABLED="no"
+  PROXY_IP="$PROXY_DEFAULT_IP"
+  PROXY_PORT="$PROXY_DEFAULT_PORT"
+
+  printf '\n%bIKEv2 Server Diagnostics%b\n' "$BOLD" "$RESET"
+  printf '========================\n\n'
+
+  if [[ ! -e "$STATE_FILE" ]]; then
+    diag_fail "Managed installation state" "Managed state file is missing or unreadable"
+  elif [[ ! -r "$STATE_FILE" ]]; then
+    diag_fail "Managed installation state" "Managed state file is missing or unreadable"
+  # shellcheck disable=SC1090
+  elif source "$STATE_FILE"; then
+    initialize_proxy_state_defaults
+    DIAG_STATE_LOADED="yes"
+    diag_ok "Managed installation state"
+  else
+    diag_fail "Managed installation state" "Managed state file could not be loaded"
+  fi
+
+  OUT_IF="${OUT_IF:-}"
+  VPN_SUBNET="${VPN_SUBNET:-}"
+  PROXY_ENABLED="${PROXY_ENABLED:-no}"
+  PROXY_IP="${PROXY_IP:-$PROXY_DEFAULT_IP}"
+  PROXY_PORT="${PROXY_PORT:-$PROXY_DEFAULT_PORT}"
+
+  if service_is_active "$STRONGSWAN_SERVICE"; then
+    strongswan_active="yes"
+    diag_ok "StrongSwan service"
+  else
+    diag_fail "StrongSwan service" "${STRONGSWAN_SERVICE} is inactive"
+  fi
+
+  refresh_online_vpn_users yes
+  if [[ "$strongswan_active" != "yes" ]]; then
+    diag_warn "IKEv2 connection loaded" "Cannot verify while StrongSwan is inactive"
+  elif [[ "$VPN_SESSION_STATUS_AVAILABLE" != "yes" ]]; then
+    diag_fail "IKEv2 connection loaded" "Unable to query StrongSwan status"
+  elif grep -qE '^[[:space:]]*ikev2-eap:' <<< "$VPN_STATUSALL_OUTPUT"; then
+    diag_ok "IKEv2 connection loaded"
+  else
+    diag_fail "IKEv2 connection loaded" "Managed ikev2-eap connection was not found"
+  fi
+
+  forwarding_value=$(sysctl -n net.ipv4.ip_forward 2>/dev/null || true)
+  if [[ "$forwarding_value" == "1" ]]; then
+    diag_ok "IPv4 forwarding"
+  else
+    diag_fail "IPv4 forwarding" "net.ipv4.ip_forward is not enabled"
+  fi
+
+  if command_exists iptables && iptables -C INPUT -p udp --dport 500 -m comment --comment "$INSTALLER_NAME" -j ACCEPT >/dev/null 2>&1; then
+    diag_ok "UDP 500 firewall rule"
+  else
+    diag_fail "UDP 500 firewall rule" "Managed UDP/500 rule was not found"
+  fi
+
+  if command_exists iptables && iptables -C INPUT -p udp --dport 4500 -m comment --comment "$INSTALLER_NAME" -j ACCEPT >/dev/null 2>&1; then
+    diag_ok "UDP 4500 firewall rule"
+  else
+    diag_fail "UDP 4500 firewall rule" "Managed UDP/4500 rule was not found"
+  fi
+
+  if [[ -n "$VPN_SUBNET" && -n "$OUT_IF" ]] \
+    && command_exists iptables \
+    && iptables -C FORWARD -s "$VPN_SUBNET" -o "$OUT_IF" -m comment --comment "$INSTALLER_NAME" -j ACCEPT >/dev/null 2>&1 \
+    && iptables -C FORWARD -d "$VPN_SUBNET" -i "$OUT_IF" -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment "$INSTALLER_NAME" -j ACCEPT >/dev/null 2>&1; then
+    diag_ok "VPN forwarding rules"
+  else
+    diag_fail "VPN forwarding rules" "One or more managed FORWARD rules are missing"
+  fi
+
+  if [[ -n "$VPN_SUBNET" && -n "$OUT_IF" ]] \
+    && command_exists iptables \
+    && iptables -t nat -C POSTROUTING -s "$VPN_SUBNET" -o "$OUT_IF" -m comment --comment "$INSTALLER_NAME" -j MASQUERADE >/dev/null 2>&1; then
+    diag_ok "VPN NAT / MASQUERADE"
+  else
+    diag_fail "VPN NAT / MASQUERADE" "Managed POSTROUTING MASQUERADE rule was not found"
+  fi
+
+  if service_is_active "$FW_SERVICE"; then
+    diag_ok "Firewall / NAT service"
+  else
+    diag_fail "Firewall / NAT service" "${FW_SERVICE} is inactive"
+  fi
+
+  check_certificate_health "$SERVER_CERT" "Server certificate"
+  check_certificate_health "$CA_CERT" "CA certificate"
+
+  if [[ ! -e "$CA_KEY" || ! -e "$SERVER_KEY" ]]; then
+    diag_fail "Private key files" "One or more managed private keys are missing"
+  elif [[ ! -r "$CA_KEY" || ! -r "$SERVER_KEY" ]]; then
+    diag_fail "Private key files" "One or more managed private keys are unreadable"
+  else
+    diag_ok "Private key files"
+  fi
+
+  if [[ ! -e "$IPSEC_SECRETS" ]]; then
+    diag_fail "IPsec secrets permissions" "${IPSEC_SECRETS} is missing"
+  elif [[ ! -r "$IPSEC_SECRETS" ]]; then
+    diag_fail "IPsec secrets permissions" "${IPSEC_SECRETS} is unreadable"
+  elif ! secrets_mode=$(stat -c '%a' "$IPSEC_SECRETS" 2>/dev/null); then
+    diag_fail "IPsec secrets permissions" "Unable to read ${IPSEC_SECRETS} permissions"
+  elif [[ "$secrets_mode" != "600" ]]; then
+    diag_warn "IPsec secrets permissions" "${IPSEC_SECRETS} mode is ${secrets_mode}; expected 600"
+  else
+    diag_ok "IPsec secrets permissions"
+  fi
+
+  user_count=$(vpn_user_count)
+  if (( user_count > 0 )); then
+    diag_ok "VPN users" "Configured users: ${user_count}"
+  else
+    diag_warn "VPN users" "No EAP VPN users are configured"
+  fi
+
+  if [[ -n "$OUT_IF" ]] && command_exists ip && ip link show dev "$OUT_IF" >/dev/null 2>&1; then
+    diag_ok "Internet interface" "$OUT_IF"
+  else
+    diag_fail "Internet interface" "Configured interface '${OUT_IF}' does not exist"
+  fi
+
+  if [[ -n "$VPN_SUBNET" ]] && validate_cidr "$VPN_SUBNET"; then
+    diag_ok "VPN subnet" "$VPN_SUBNET"
+  else
+    diag_fail "VPN subnet" "Stored VPN subnet is invalid"
+  fi
+
+  check_proxy_health
+
+  if [[ "$strongswan_active" == "yes" && "$VPN_SESSION_STATUS_AVAILABLE" != "yes" ]]; then
+    diag_warn "Active VPN sessions" "Unable to query current sessions"
+  else
+    online_count=$(configured_online_vpn_user_count)
+    diag_ok "Active VPN sessions" "Online users: ${online_count}"
+  fi
+
+  if (( DIAG_FAILURES > 0 )); then
+    overall="FAILED"
+  elif (( DIAG_WARNINGS > 0 )); then
+    overall="WARNING"
+  else
+    overall="HEALTHY"
+  fi
+
+  printf '\n----------------------------------------\n'
+  printf 'Checks   : %d\n' "$DIAG_CHECKS"
+  printf 'Warnings : %d\n' "$DIAG_WARNINGS"
+  printf 'Failures : %d\n\n' "$DIAG_FAILURES"
+  printf 'Overall status: %s\n' "$overall"
+}
+
 interactive_menu() {
   local choice=""
 
@@ -2212,10 +2472,11 @@ interactive_menu() {
       printf '  1) Status\n'
       printf '  2) Service Control\n'
       printf '  3) User Management\n'
-      printf '  4) Upgrade / Configure SOCKS5 Proxy Mode\n'
-      printf '  5) Uninstall\n'
-      printf '  6) Exit\n'
-      read -r -p 'Choose [1-6]: ' choice || true
+      printf '  4) Diagnostics\n'
+      printf '  5) Upgrade / Configure SOCKS5 Proxy Mode\n'
+      printf '  6) Uninstall\n'
+      printf '  7) Exit\n'
+      read -r -p 'Choose [1-7]: ' choice || true
 
       case "$choice" in
         1)
@@ -2229,14 +2490,18 @@ interactive_menu() {
           user_management_menu
           ;;
         4)
-          upgrade_vpn
+          run_diagnostics
           pause_main_menu
           ;;
         5)
-          uninstall_vpn
+          upgrade_vpn
           pause_main_menu
           ;;
         6)
+          uninstall_vpn
+          pause_main_menu
+          ;;
+        7)
           printf '\nExiting...\n'
           exit 0
           ;;
@@ -2269,12 +2534,13 @@ interactive_menu() {
 
 usage() {
   cat <<EOF
-Usage: $0 [install|upgrade|status|start|stop|restart|proxy-start|proxy-stop|proxy-restart|start-all|stop-all|uninstall]
+Usage: $0 [install|upgrade|status|diagnostics|start|stop|restart|proxy-start|proxy-stop|proxy-restart|start-all|stop-all|uninstall]
 
 Commands:
   install        Full interactive IKEv2 installation; all previous features are retained.
   upgrade        Add or update private SOCKS5 Proxy Mode on an existing managed installation.
   status         Show VPN, StrongSwan, firewall, and Proxy Mode status.
+  diagnostics    Run read-only health checks for the managed VPN server.
   start          Start IKEv2 / StrongSwan (and the managed firewall/NAT if needed).
   stop           Stop IKEv2 / StrongSwan after confirmation.
   restart        Restart IKEv2 / StrongSwan after confirmation when active.
@@ -2300,6 +2566,7 @@ main() {
     install) install_vpn ;;
     upgrade) upgrade_vpn ;;
     status) status_vpn ;;
+    diagnostics) run_diagnostics ;;
     start) start_ikev2_service ;;
     stop) stop_ikev2_service ;;
     restart) restart_ikev2_service ;;

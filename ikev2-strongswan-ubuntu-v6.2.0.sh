@@ -1535,10 +1535,73 @@ vpn_user_count() {
   get_vpn_users | awk 'END {print NR}'
 }
 
+parse_connected_vpn_sessions() {
+  awk '
+    function emit_session() {
+      if (username != "") {
+        printf "%s\t%s\t%s\t%s\n", username, vpn_ip, public_ip, duration
+      }
+    }
+
+    $1 ~ /^[^:]+\[[0-9]+\]:$/ && $2 == "ESTABLISHED" {
+      emit_session()
+      username = ""
+
+      if ($1 !~ /^ikev2-eap\[[0-9]+\]:$/) {
+        next
+      }
+
+      identity = $0
+      sub(/^.*\[/, "", identity)
+      sub(/\].*$/, "", identity)
+      if (identity !~ /^[A-Za-z0-9._@-]+$/ || length(identity) > 64) {
+        next
+      }
+
+      username = identity
+      vpn_ip = "-"
+      public_ip = "-"
+      duration = $0
+      sub(/^.*ESTABLISHED[[:space:]]+/, "", duration)
+      sub(/,[[:space:]].*$/, "", duration)
+      if (duration == "") {
+        duration = "-"
+      }
+
+      if (index($0, "...") > 0) {
+        public_ip = $0
+        sub(/^.*\.\.\./, "", public_ip)
+        sub(/\[.*$/, "", public_ip)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", public_ip)
+        if (public_ip == "") {
+          public_ip = "-"
+        }
+      }
+      next
+    }
+
+    username != "" && $1 ~ /^ikev2-eap\{[0-9]+\}:$/ && index($0, "===") > 0 {
+      candidate = $0
+      sub(/^.*===[[:space:]]*/, "", candidate)
+      sub(/[[:space:]].*$/, "", candidate)
+      if (candidate ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\/32$/) {
+        sub(/\/32$/, "", candidate)
+        vpn_ip = candidate
+      }
+    }
+
+    END {
+      emit_session()
+    }
+  ' <<< "$VPN_STATUSALL_OUTPUT"
+}
+
 refresh_online_vpn_users() {
   local quiet="${1:-no}"
+  local session username current found
 
   ONLINE_VPN_USERS=()
+  CONNECTED_VPN_SESSIONS=()
   VPN_SESSION_STATUS_AVAILABLE="yes"
   VPN_STATUSALL_OUTPUT=""
 
@@ -1552,18 +1615,19 @@ refresh_online_vpn_users() {
     return 0
   fi
 
-  mapfile -t ONLINE_VPN_USERS < <(
-    awk '
-      $1 ~ /^ikev2-eap\[[0-9]+\]:$/ && $2 == "ESTABLISHED" {
-        identity = $0
-        sub(/^.*\[/, "", identity)
-        sub(/\].*$/, "", identity)
-        if (identity ~ /^[A-Za-z0-9._@-]+$/ && length(identity) <= 64 && !seen[identity]++) {
-          print identity
-        }
-      }
-    ' <<< "$VPN_STATUSALL_OUTPUT"
-  )
+  mapfile -t CONNECTED_VPN_SESSIONS < <(parse_connected_vpn_sessions)
+
+  for session in "${CONNECTED_VPN_SESSIONS[@]}"; do
+    IFS=$'\t' read -r username _ <<< "$session"
+    found="no"
+    for current in "${ONLINE_VPN_USERS[@]}"; do
+      if [[ "$current" == "$username" ]]; then
+        found="yes"
+        break
+      fi
+    done
+    [[ "$found" == "yes" ]] || ONLINE_VPN_USERS+=("$username")
+  done
 }
 
 vpn_user_is_online() {
@@ -1571,7 +1635,7 @@ vpn_user_is_online() {
   local current
 
   [[ "${VPN_SESSION_STATUS_AVAILABLE:-no}" == "yes" ]] || return 1
-  for current in "${ONLINE_VPN_USERS[@]:-}"; do
+  for current in "${ONLINE_VPN_USERS[@]}"; do
     [[ "$current" == "$username" ]] && return 0
   done
   return 1
@@ -1590,6 +1654,42 @@ configured_online_vpn_user_count() {
     vpn_user_is_online "$username" && ((count += 1))
   done < <(get_vpn_users)
   printf '%d\n' "$count"
+}
+
+show_connected_clients() {
+  local session username vpn_ip public_ip duration
+
+  require_managed_installation
+
+  printf '\n%bConnected VPN Clients%b\n' "$BOLD" "$RESET"
+  printf '=====================\n\n'
+
+  if ! service_is_active "$STRONGSWAN_SERVICE"; then
+    printf 'StrongSwan is currently stopped.\n\n'
+    printf 'Connected users: 0\n'
+    return 0
+  fi
+
+  refresh_online_vpn_users yes
+  if [[ "$VPN_SESSION_STATUS_AVAILABLE" != "yes" ]]; then
+    warn "Unable to query current StrongSwan sessions."
+    return 0
+  fi
+
+  if (( ${#CONNECTED_VPN_SESSIONS[@]} == 0 )); then
+    printf 'No VPN clients are currently connected.\n\n'
+    printf 'Connected users: 0\n'
+    return 0
+  fi
+
+  printf '  %-24s %-15s %-39s %s\n' "User" "VPN IP" "Public IP" "Connected"
+  for session in "${CONNECTED_VPN_SESSIONS[@]}"; do
+    IFS=$'\t' read -r username vpn_ip public_ip duration <<< "$session"
+    printf '  %-24s %-15s %-39s %s\n' "$username" "$vpn_ip" "$public_ip" "$duration"
+  done
+
+  printf '\nConnected sessions: %d\n' "${#CONNECTED_VPN_SESSIONS[@]}"
+  printf 'Connected users   : %d\n' "${#ONLINE_VPN_USERS[@]}"
 }
 
 select_vpn_user() {
@@ -2472,11 +2572,12 @@ interactive_menu() {
       printf '  1) Status\n'
       printf '  2) Service Control\n'
       printf '  3) User Management\n'
-      printf '  4) Diagnostics\n'
-      printf '  5) Upgrade / Configure SOCKS5 Proxy Mode\n'
-      printf '  6) Uninstall\n'
-      printf '  7) Exit\n'
-      read -r -p 'Choose [1-7]: ' choice || true
+      printf '  4) Connected Clients\n'
+      printf '  5) Diagnostics\n'
+      printf '  6) Upgrade / Configure SOCKS5 Proxy Mode\n'
+      printf '  7) Uninstall\n'
+      printf '  8) Exit\n'
+      read -r -p 'Choose [1-8]: ' choice || true
 
       case "$choice" in
         1)
@@ -2490,18 +2591,22 @@ interactive_menu() {
           user_management_menu
           ;;
         4)
-          run_diagnostics
+          show_connected_clients
           pause_main_menu
           ;;
         5)
-          upgrade_vpn
+          run_diagnostics
           pause_main_menu
           ;;
         6)
-          uninstall_vpn
+          upgrade_vpn
           pause_main_menu
           ;;
         7)
+          uninstall_vpn
+          pause_main_menu
+          ;;
+        8)
           printf '\nExiting...\n'
           exit 0
           ;;

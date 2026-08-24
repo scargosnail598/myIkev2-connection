@@ -216,6 +216,12 @@ StrongSwan rereads the secrets after each change without restarting the VPN
 service. Manually entered passwords must contain at least 12 characters;
 generated passwords are shown once.
 
+`Connected Clients` provides a read-only view of the current `ikev2-eap`
+sessions directly from StrongSwan runtime state. It shows each authenticated
+username and, when available, the assigned VPN IP, public peer IP, and
+connection age. It does not retain session history or collect accounting or
+traffic data.
+
 Before installation begins, review the summary and confirm with `Y`.
 
 ---
@@ -287,10 +293,11 @@ IKEv2 installation detected
 1) Status
 2) Service Control
 3) User Management
-4) Diagnostics
-5) Upgrade / Configure SOCKS5 Proxy Mode
-6) Uninstall
-7) Exit
+4) Connected Clients
+5) Diagnostics
+6) Upgrade / Configure SOCKS5 Proxy Mode
+7) Uninstall
+8) Exit
 ```
 
 Choose:
@@ -1057,7 +1064,7 @@ sudo ./ikev2-strongswan-ubuntu-v6.1.1.sh uninstall
 Or open the interactive menu and choose:
 
 ```text
-6) Uninstall
+7) Uninstall
 ```
 
 on an installed v6 system.

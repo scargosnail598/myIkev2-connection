@@ -14,7 +14,7 @@ The Linux client currently operates as a full-tunnel client.
 | Component | File | Version / Target |
 |---|---|---|
 | Server | `ikev2-strongswan-ubuntu-v6.1.1.sh` | v6.1.1-en / Ubuntu 22.04 & 24.04 |
-| Windows client | `ikev2-windows-client-v6.ps1` | v6.0.0 / PowerShell 5.1+ |
+| Windows client | `ikev2-windows-client-v6.1.ps1` | v6.1.0 / PowerShell 5.1+ |
 | Linux client | `ikev2-linux-client-v1.6.sh` | v1.6.0 / Ubuntu 22.04 & 24.04 |
 | Android client | [`android-client/`](android-client/) | v1.0.0 / Android 11+ (API 30+) |
 
@@ -478,12 +478,16 @@ The proxy itself does not use a second username/password layer. Access is protec
 
 # 7. Prepare client files
 
-Every client needs:
+Manual client setup needs:
 
 - the appropriate client utility
 - the server-generated `ca-cert.cer`
 - the VPN server IP or hostname
 - a VPN username/password created on the server
+
+Portable `.ikev` setup needs the client utility, the exported `username.ikev`,
+and the user's VPN password. The public CA and server settings are embedded in
+the profile.
 
 Example certificate copy:
 
@@ -495,11 +499,18 @@ Do **not** copy the CA private key to clients. For manual setup, keep
 `ca-cert.cer` next to the client utility. Portable `.ikev` profiles embed the
 public CA certificate and do not require a separate certificate file.
 
-Windows:
+Windows manual setup:
 
 ```text
-ikev2-windows-client-v6.ps1
+ikev2-windows-client-v6.1.ps1
 ca-cert.cer
+```
+
+Windows portable-profile import:
+
+```text
+ikev2-windows-client-v6.1.ps1
+username.ikev
 ```
 
 Linux manual setup:
@@ -518,298 +529,194 @@ username.ikev
 
 ---
 
-# 8. Windows client v6
+# 8. Windows client v6.1
 
 ## Requirements
 
 - Windows with built-in VPN PowerShell cmdlets
 - PowerShell 5.1+
 - Administrator privileges
-- `ikev2-windows-client-v6.ps1`
-- `ca-cert.cer` in the same directory
+- `ikev2-windows-client-v6.1.ps1`
+- either `ca-cert.cer` for manual setup or an exported `username.ikev` for portable setup
 
 The script automatically requests Administrator privileges through UAC when required.
 
 ## Run the utility
 
-Open PowerShell in the directory containing the files:
-
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\ikev2-windows-client-v6.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\ikev2-windows-client-v6.1.ps1
 ```
 
-At startup, the utility validates the CA certificate and imports it into:
+A sibling `ca-cert.cer` is still validated and trusted at startup when present.
+When no local `.cer` exists, v6.1 starts normally and displays:
 
 ```text
-Local Computer / Trusted Root Certification Authorities
+Trusted CA : no local CA loaded
+Credentials: Windows native EAP dialog
 ```
 
-when required.
+This allows a directory containing only the script and `username.ikev` to
+provision the VPN. After a successful portable import, the menu displays the
+embedded CA's name as utility status.
 
 The menu is:
 
 ```text
-IKEv2 Windows VPN Utility v6.0.0
-==============================
+IKEv2 Windows VPN Utility v6.1.0
+===============================
 
 1) Install / Update IKEv2 VPN
-2) Status
-3) Connect
-4) Disconnect
-5) Traffic Mode (Full Tunnel / Proxy Mode)
-6) Exit
+2) Import .ikev Profile
+3) Status
+4) Connect
+5) Disconnect
+6) Traffic Mode (Full Tunnel / Proxy Mode)
+7) Exit
 ```
 
 ---
 
-# 9. Create a Windows VPN profile
+# 9. Create or import a Windows VPN profile
 
-Choose:
+## Manual setup
 
-```text
-1) Install / Update IKEv2 VPN
-```
-
-Enter:
+Keep together:
 
 ```text
-VPN profile name
-VPN server IP or hostname
+ikev2-windows-client-v6.1.ps1
+ca-cert.cer
 ```
 
-The server value must exactly match the Server / Remote ID used during server installation.
+Choose `Install / Update IKEv2 VPN`, enter the connection name and server, and
+select Full Tunnel or Proxy Mode. The server value must exactly match the
+Server / Remote ID used during server installation.
 
-The utility then asks for the traffic mode:
+If no sibling CA exists, manual setup stops with guidance to add
+`ca-cert.cer` or use portable import.
+
+## Import a portable `.ikev` profile
+
+Keep together:
 
 ```text
-Traffic Mode
-============
-
-1) Full Tunnel
-   Route all IPv4 traffic through the VPN.
-
-2) Proxy Mode
-   Route only the private SOCKS5 endpoint through IKEv2.
-   All other Windows traffic stays DIRECT.
+ikev2-windows-client-v6.1.ps1
+username.ikev
 ```
 
-The default is:
+Then:
 
-```text
-1) Full Tunnel
-```
+1. Export `username.ikev` from the server.
+2. Copy it to Windows.
+3. Run the Windows client as Administrator.
+4. Choose `Import .ikev Profile`.
+5. Enter the profile path.
+6. Verify the server and CA SHA-256 fingerprint.
+7. Trust the profile.
+8. Choose Full Tunnel or Proxy Mode when Proxy Mode is advertised.
+9. Connect.
+10. Enter the displayed username and its password in the native Windows EAP dialog.
+
+The importer uses native `Get-Content -Raw` and `ConvertFrom-Json`, validates
+the frozen schema version 1 fields, decodes the embedded DER certificate with
+`.NET`, verifies CA Basic Constraints and validity dates, and calculates the
+SHA-256 fingerprint over the DER bytes before offering trust.
+
+**`.ikev` files never contain VPN passwords or private keys.** Windows retains
+its native EAP credential handling; the importer does not use Credential
+Manager, `cmdkey`, or a custom password store.
+
+Windows v6.1 currently requires imported `remote_id` to match `server` because
+the PowerShell/RAS profile API used here has no safe independent equivalent of
+StrongSwan's `rightid` setting. Profiles where they differ are rejected.
 
 ---
 
 # 10. Windows Full Tunnel mode
 
-Choose:
+Full Tunnel is the default for manual setup and portable import. The created
+All-Users IKEv2/EAP profile has split tunneling disabled, so all IPv4 traffic
+uses the VPN while connected.
 
 ```text
-1) Full Tunnel
+Windows IPv4 traffic -> IKEv2 -> VPN Server -> Internet
 ```
 
-In this mode:
-
-```text
-Windows IPv4 traffic
-        |
-        v
-      IKEv2
-        |
-        v
-   VPN Server
-        |
-        v
-     Internet
-```
-
-The Windows VPN profile uses:
-
-```text
-Split tunneling: Disabled
-```
-
-All IPv4 traffic uses the VPN while connected.
+If an imported profile advertises `proxy.enabled = false`, Full Tunnel is
+selected automatically.
 
 ---
 
 # 11. Windows Proxy Mode
 
-Choose:
+For manual setup, Proxy Mode continues to prompt for the SOCKS5 IP and port.
+For portable import, Proxy Mode is offered only when validated SOCKS5 metadata
+is present, and the imported host and port are used without another prompt.
 
-```text
-2) Proxy Mode
-```
-
-The client asks:
-
-```text
-SOCKS5 proxy IP [10.254.254.1]:
-SOCKS5 proxy port [1080]:
-```
-
-If the server uses the default v6 settings, simply press Enter for both.
-
-The Windows utility enables split tunneling and installs only this VPN-specific route:
+With the default server settings, the client enables split tunneling and adds
+only this utility-managed VPN route:
 
 ```text
 10.254.254.1/32 -> IKEv2
+SOCKS5 endpoint: 10.254.254.1:1080
+All other Windows traffic: DIRECT
 ```
 
-All other Windows traffic stays on the normal Internet connection.
-
-The resulting routing model is:
-
-```text
-Normal Windows traffic
-        |
-        +------------------------> ISP / DIRECT
-
-
-Application using SOCKS5
-        |
-        v
-10.254.254.1:1080
-        |
-        v
-      IKEv2
-        |
-        v
-   VPN Server
-        |
-        v
-     Internet
-```
-
-After a successful VPN connection, the utility also checks whether the private SOCKS5 endpoint is reachable.
-
-Expected output:
-
-```text
-[+] Checking private SOCKS5 endpoint 10.254.254.1:1080...
-SOCKS5 endpoint is reachable through the VPN.
-```
+No default VPN route is added in Proxy Mode. After connection, the utility
+checks whether the private SOCKS5 endpoint is reachable.
 
 ---
 
 # 12. Configure an application to use Proxy Mode
 
-Connecting the VPN in Proxy Mode does **not** automatically send applications through the proxy.
-
-Only applications explicitly configured to use:
+Connecting the VPN in Proxy Mode does **not** automatically proxy applications.
+Configure only selected SOCKS5-capable applications with the endpoint shown by
+the utility. For the default server configuration:
 
 ```text
 SOCKS5 10.254.254.1:1080
 ```
 
-will use the VPN server as their Internet exit.
-
-## Firefox example
-
-Open:
-
-```text
-Settings
-→ Network Settings
-→ Manual proxy configuration
-```
-
-Set:
-
-```text
-SOCKS Host : 10.254.254.1
-Port       : 1080
-SOCKS v5   : enabled
-```
-
-When available, enable proxy/remote DNS for SOCKS5 to avoid sending those application DNS queries through the normal local resolver.
-
-With this setup:
-
-```text
-Firefox -> SOCKS5 -> IKEv2 -> VPN Server -> Internet
-```
-
-while applications that are not configured for the SOCKS5 proxy remain direct.
+When available, enable remote/proxy DNS in the application to reduce DNS
+leakage outside the proxy path.
 
 ---
 
 # 13. Change Windows traffic mode later
 
-You do not need to recreate the VPN profile.
-
-Run the Windows utility and choose:
+Run the utility and choose:
 
 ```text
-5) Traffic Mode (Full Tunnel / Proxy Mode)
+6) Traffic Mode (Full Tunnel / Proxy Mode)
 ```
 
-Select the VPN profile and then choose either:
-
-```text
-1) Full Tunnel
-```
-
-or:
-
-```text
-2) Proxy Mode
-```
-
-When switching to Full Tunnel, the utility removes the proxy route it manages and disables split tunneling.
-
-When switching to Proxy Mode, it enables split tunneling and creates the private `/32` route for the SOCKS5 endpoint.
-
-If the VPN is already connected while changing modes, disconnect and reconnect the VPN before relying on the new routing state.
+The existing `Apply-TrafficMode` path removes utility-managed stale Proxy Mode
+state when switching to Full Tunnel and creates only the selected `/32` route
+when switching to Proxy Mode. If connected, disconnect and reconnect before
+relying on the changed routing state.
 
 ---
 
-# 14. Upgrade an existing Windows v5 profile
+# 14. Upgrade an existing Windows profile
 
-Windows v6 can configure the traffic mode of an existing IKEv2 profile.
-
-You normally do not need to delete and recreate the v5 VPN profile.
-
-Place:
-
-```text
-ikev2-windows-client-v6.ps1
-ca-cert.cer
-```
-
-in the same directory and run:
+Windows v6.1 can configure the traffic mode of existing IKEv2 profiles. Run:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\ikev2-windows-client-v6.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\ikev2-windows-client-v6.1.ps1
 ```
 
-Then choose:
-
-```text
-5) Traffic Mode (Full Tunnel / Proxy Mode)
-```
-
-Select the existing profile and enable Proxy Mode.
-
-With the default server v6 Proxy Mode:
-
-```text
-SOCKS5 host : 10.254.254.1
-SOCKS5 port : 1080
-```
+Then choose option 6 and select the existing profile. Manual creation still
+uses `ca-cert.cer`; portable import uses its embedded CA.
 
 ---
 
-# 15. Windows VPN credentials
+# 15. Windows VPN credentials and IPsec policy
 
-The utility uses Windows native EAP credential handling.
+Windows owns VPN credential entry. On the first imported-profile connection,
+the utility displays the imported username and opens the native EAP credential
+dialog when saved credentials are unavailable. No password is read or stored
+by the PowerShell importer.
 
-When connecting for the first time, Windows may display its native VPN credential dialog.
-
-Enter the VPN username and password configured on the server.
-
-The VPN cryptographic policy applied by the utility is:
+Both manual and imported profiles use the unchanged policy:
 
 ```text
 IKE encryption : AES256
@@ -827,19 +734,12 @@ PFS            : None
 Choose:
 
 ```text
-2) Status
+3) Status
 ```
 
-In Full Tunnel mode, the status reports the profile as Full Tunnel.
-
-In Proxy Mode, it includes information similar to:
-
-```text
-Split tunneling  : True
-Traffic mode     : Proxy Mode
-SOCKS5 proxy     : 10.254.254.1:1080
-VPN-only route   : 10.254.254.1/32
-```
+Full Tunnel reports split tunneling disabled. Proxy Mode reports split
+tunneling enabled, its saved SOCKS5 endpoint, and the single VPN-only `/32`
+route.
 
 ---
 
@@ -1188,27 +1088,34 @@ sudo ./ikev2-strongswan-ubuntu-v6.1.1.sh install
 
 Enable the private SOCKS5 Proxy Mode when prompted if you plan to use Windows Proxy Mode.
 
-Copy:
+For manual setup, copy:
 
 ```text
 /root/ikev2-client/ca-cert.cer
 ```
 
-to each client.
+For portable setup, export and copy the user's `username.ikev` instead.
 
 ## Windows
 
-Keep together:
+Manual setup:
 
 ```text
-ikev2-windows-client-v6.ps1
+ikev2-windows-client-v6.1.ps1
 ca-cert.cer
+```
+
+Portable setup:
+
+```text
+ikev2-windows-client-v6.1.ps1
+username.ikev
 ```
 
 Run:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\ikev2-windows-client-v6.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\ikev2-windows-client-v6.1.ps1
 ```
 
 Choose either:
@@ -1262,13 +1169,13 @@ sudo ss -lntp | grep 1080
 Run:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\ikev2-windows-client-v6.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\ikev2-windows-client-v6.1.ps1
 ```
 
 Choose:
 
 ```text
-5) Traffic Mode (Full Tunnel / Proxy Mode)
+6) Traffic Mode (Full Tunnel / Proxy Mode)
 ```
 
 Then:

@@ -15,6 +15,7 @@ class MainActivity : ComponentActivity() {
         VpnViewModel.Factory(
             profileRepository = application.profileRepository,
             certificateImporter = application.certificateImporter,
+            ikevProfileImporter = application.ikevProfileImporter,
             vpnController = application.vpnController,
         )
     }

@@ -27,6 +27,11 @@ fun VpnApp(viewModel: VpnViewModel) {
     ) { uri ->
         uri?.let(viewModel::importCertificate)
     }
+    val ikevProfilePicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        uri?.let(viewModel::importIkevProfile)
+    }
     val consentLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult(),
     ) { result ->
@@ -68,6 +73,7 @@ fun VpnApp(viewModel: VpnViewModel) {
             onProfileNameChanged = viewModel::updateProfileName,
             onServerChanged = viewModel::updateServerAddress,
             onUsernameChanged = viewModel::updateUsername,
+            onImportIkevProfile = { ikevProfilePicker.launch(arrayOf("*/*")) },
             onImportCertificate = { certificatePicker.launch(arrayOf("*/*")) },
             onProvision = viewModel::provisionProfile,
             onBack = viewModel::showMain,

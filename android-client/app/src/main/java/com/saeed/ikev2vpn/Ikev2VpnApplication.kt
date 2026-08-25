@@ -6,12 +6,16 @@ import com.saeed.ikev2vpn.certificate.CertificateImporter
 import com.saeed.ikev2vpn.certificate.CertificateLoader
 import com.saeed.ikev2vpn.data.DataStoreProfileRepository
 import com.saeed.ikev2vpn.data.ProfileRepository
+import com.saeed.ikev2vpn.profile.AndroidIkevProfileImporter
+import com.saeed.ikev2vpn.profile.IkevProfileImporter
 import com.saeed.ikev2vpn.vpn.AndroidVpnPlatformController
 
 class Ikev2VpnApplication : Application() {
     lateinit var profileRepository: ProfileRepository
         private set
     lateinit var certificateImporter: CertificateImporter
+        private set
+    lateinit var ikevProfileImporter: IkevProfileImporter
         private set
     lateinit var vpnController: AndroidVpnPlatformController
         private set
@@ -21,6 +25,7 @@ class Ikev2VpnApplication : Application() {
         val certificateLoader = CertificateLoader()
         profileRepository = DataStoreProfileRepository(this, certificateLoader)
         certificateImporter = AndroidCertificateImporter(contentResolver, certificateLoader)
+        ikevProfileImporter = AndroidIkevProfileImporter(contentResolver, certificateLoader)
         vpnController = AndroidVpnPlatformController(this)
     }
 }

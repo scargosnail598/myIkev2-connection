@@ -12,6 +12,9 @@ import com.saeed.ikev2vpn.data.ProfileRepository
 import com.saeed.ikev2vpn.data.ProvisioningStatus
 import com.saeed.ikev2vpn.data.RepositorySnapshot
 import com.saeed.ikev2vpn.data.VpnProfileConfig
+import com.saeed.ikev2vpn.profile.IkevProfileImportException
+import com.saeed.ikev2vpn.profile.IkevProfileImporter
+import com.saeed.ikev2vpn.profile.ImportedProxyMetadata
 import com.saeed.ikev2vpn.validation.ProfileField
 import com.saeed.ikev2vpn.validation.ProfileValidator
 import com.saeed.ikev2vpn.vpn.ConnectionState
@@ -35,6 +38,7 @@ sealed interface VpnUiEffect {
 class VpnViewModel(
     private val profileRepository: ProfileRepository,
     private val certificateImporter: CertificateImporter,
+    private val ikevProfileImporter: IkevProfileImporter,
     private val vpnController: VpnPlatformController,
 ) : ViewModel() {
     private val mutableUiState = MutableStateFlow(
@@ -45,7 +49,7 @@ class VpnViewModel(
     private var selectedCertificate: LoadedCertificate? = null
     private var draftInitialized = false
     private var initialNavigationComplete = false
-    private var certificateImportGeneration = 0
+    private var setupImportGeneration = 0
     private var forceUnconfigured = false
     private var consentRequestActive = false
 
@@ -103,26 +107,81 @@ class VpnViewModel(
     }
 
     fun importCertificate(uri: Uri) {
-        val importGeneration = ++certificateImportGeneration
+        val importGeneration = ++setupImportGeneration
         mutableUiState.update { it.copy(isBusy = true, error = null, technicalError = null) }
         viewModelScope.launch {
             try {
                 val loaded = certificateImporter.import(uri)
-                if (importGeneration != certificateImportGeneration) return@launch
+                if (importGeneration != setupImportGeneration) return@launch
                 selectedCertificate = loaded
                 mutableUiState.update { current ->
                     current.copy(
                         certificateInfo = loaded.info,
+                        importedProfileInfo = null,
                         fieldErrors = current.fieldErrors - ProfileField.CERTIFICATE,
                         isBusy = false,
                     )
                 }
             } catch (exception: CertificateLoadException) {
-                if (importGeneration != certificateImportGeneration) return@launch
+                if (importGeneration != setupImportGeneration) return@launch
                 showError(exception.message, technicalMessage(exception))
             } catch (exception: Exception) {
-                if (importGeneration != certificateImportGeneration) return@launch
+                if (importGeneration != setupImportGeneration) return@launch
                 showError("The CA certificate could not be read.", technicalMessage(exception))
+            }
+        }
+    }
+
+    fun importIkevProfile(uri: Uri) {
+        val state = mutableUiState.value
+        if (state.connectionState in ACTIVE_CONNECTION_STATES) {
+            showError(
+                "Disconnect the VPN before importing another profile.",
+                "Portable profile import was blocked while the current state was " +
+                    "${state.connectionState}.",
+            )
+            return
+        }
+
+        val importGeneration = ++setupImportGeneration
+        mutableUiState.update { it.copy(isBusy = true, error = null, technicalError = null) }
+        viewModelScope.launch {
+            try {
+                val imported = ikevProfileImporter.import(uri)
+                if (importGeneration != setupImportGeneration) return@launch
+                selectedCertificate = imported.certificate
+                mutableUiState.update { current ->
+                    current.copy(
+                        screen = AppScreen.SETUP,
+                        profileName = imported.config.profileName,
+                        serverAddress = imported.config.serverAddress,
+                        username = imported.config.username,
+                        certificateInfo = imported.certificate.info,
+                        importedProfileInfo = ImportedProfileUiInfo(
+                            remoteId = imported.remoteId,
+                            serverProfile = imported.serverProfile,
+                            proxySummary = proxySummary(imported.proxy),
+                            importRevision = importGeneration,
+                        ),
+                        fieldErrors = current.fieldErrors - setOf(
+                            ProfileField.PROFILE_NAME,
+                            ProfileField.SERVER_ADDRESS,
+                            ProfileField.USERNAME,
+                            ProfileField.CERTIFICATE,
+                            ProfileField.PASSWORD,
+                        ),
+                        isBusy = false,
+                    )
+                }
+            } catch (exception: IkevProfileImportException) {
+                if (importGeneration != setupImportGeneration) return@launch
+                showError(exception.message, technicalMessage(exception))
+            } catch (exception: CertificateLoadException) {
+                if (importGeneration != setupImportGeneration) return@launch
+                showError(exception.message, technicalMessage(exception))
+            } catch (exception: Exception) {
+                if (importGeneration != setupImportGeneration) return@launch
+                showError("The .ikev profile could not be read.", technicalMessage(exception))
             }
         }
     }
@@ -221,6 +280,7 @@ class VpnViewModel(
                         isBusy = false,
                         error = null,
                         technicalError = null,
+                        importedProfileInfo = null,
                     )
                 }
                 vpnController.refreshState()
@@ -282,7 +342,7 @@ class VpnViewModel(
                 it.status == ProvisioningStatus.PROVISIONED
             }
             if (current.screen == AppScreen.SETUP && current.configured && committed != null) {
-                certificateImportGeneration += 1
+                setupImportGeneration += 1
                 selectedCertificate = committed.certificate
                 current.copy(
                     screen = AppScreen.MAIN,
@@ -290,6 +350,7 @@ class VpnViewModel(
                     serverAddress = committed.config.serverAddress,
                     username = committed.config.username,
                     certificateInfo = committed.certificate.info,
+                    importedProfileInfo = null,
                     fieldErrors = emptyMap(),
                     isBusy = false,
                     error = null,
@@ -371,6 +432,7 @@ class VpnViewModel(
                         connectionState = ConnectionState.DISCONNECTED,
                         isBusy = false,
                         fieldErrors = emptyMap(),
+                        importedProfileInfo = null,
                     )
                 }
                 vpnController.refreshState()
@@ -464,19 +526,37 @@ class VpnViewModel(
         transform: VpnUiState.() -> VpnUiState,
     ) {
         mutableUiState.update { current ->
-            current.transform().copy(fieldErrors = current.fieldErrors - field)
+            current.transform().copy(
+                importedProfileInfo = null,
+                fieldErrors = current.fieldErrors - field,
+            )
+        }
+    }
+
+    private fun proxySummary(proxy: ImportedProxyMetadata): String {
+        return if (proxy.enabled) {
+            "Proxy Mode available: ${proxy.host}:${proxy.port}\n" +
+                "Android v1.1 currently uses Full Tunnel only."
+        } else {
+            "Proxy Mode not advertised"
         }
     }
 
     class Factory(
         private val profileRepository: ProfileRepository,
         private val certificateImporter: CertificateImporter,
+        private val ikevProfileImporter: IkevProfileImporter,
         private val vpnController: VpnPlatformController,
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             require(modelClass.isAssignableFrom(VpnViewModel::class.java))
-            return VpnViewModel(profileRepository, certificateImporter, vpnController) as T
+            return VpnViewModel(
+                profileRepository,
+                certificateImporter,
+                ikevProfileImporter,
+                vpnController,
+            ) as T
         }
     }
 

@@ -63,6 +63,13 @@ class ProfileValidatorTest {
         assertTrue(ProfileField.PASSWORD in result.errors)
     }
 
+    @Test
+    fun `profile name allows portable names up to 128 characters and rejects controls`() {
+        assertTrue(ProfileValidator.isValidProfileName("a".repeat(128)))
+        assertFalse(ProfileValidator.isValidProfileName("a".repeat(129)))
+        assertFalse(ProfileValidator.isValidProfileName("bad\nname"))
+    }
+
     private fun validInput(
         serverAddress: String = "vpn.example.com",
         username: String = "vpn-user",

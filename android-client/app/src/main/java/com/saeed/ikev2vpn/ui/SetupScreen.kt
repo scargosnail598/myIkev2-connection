@@ -24,6 +24,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -44,12 +45,16 @@ fun SetupScreen(
     onProfileNameChanged: (String) -> Unit,
     onServerChanged: (String) -> Unit,
     onUsernameChanged: (String) -> Unit,
+    onImportIkevProfile: () -> Unit,
     onImportCertificate: () -> Unit,
     onProvision: (String) -> Unit,
     onBack: () -> Unit,
     onDismissError: () -> Unit,
 ) {
     var password by remember { mutableStateOf("") }
+    LaunchedEffect(state.importedProfileInfo?.importRevision) {
+        if (state.importedProfileInfo != null) password = ""
+    }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -99,6 +104,46 @@ fun SetupScreen(
         }
         state.error?.let { error ->
             ErrorCard(message = error, onDismiss = onDismissError)
+        }
+
+        Button(
+            onClick = onImportIkevProfile,
+            modifier = Modifier.fillMaxWidth(),
+            enabled = !state.isBusy,
+        ) {
+            Text("Import .ikev Profile")
+        }
+        Text(
+            text = "or configure manually below",
+            modifier = Modifier.align(Alignment.CenterHorizontally),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        state.importedProfileInfo?.let { imported ->
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                ),
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Text("Imported .ikev v1", style = MaterialTheme.typography.titleMedium)
+                    ImportedProfileRow("Server", state.serverAddress)
+                    ImportedProfileRow("Remote ID", imported.remoteId)
+                    ImportedProfileRow("Username", state.username)
+                    ImportedProfileRow("Mode", "Full tunnel")
+                    ImportedProfileRow(
+                        "CA SHA-256",
+                        state.certificateInfo?.sha256Fingerprint.orEmpty(),
+                    )
+                    ImportedProfileRow("Server profile", imported.serverProfile)
+                    ImportedProfileRow("Proxy", imported.proxySummary)
+                }
+            }
         }
 
         OutlinedTextField(
@@ -218,6 +263,12 @@ fun SetupScreen(
             }
         }
     }
+}
+
+@Composable
+private fun ImportedProfileRow(label: String, value: String) {
+    Text(label, style = MaterialTheme.typography.labelMedium)
+    Text(value, style = MaterialTheme.typography.bodySmall)
 }
 
 @Composable

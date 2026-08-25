@@ -12,6 +12,13 @@ enum class AppScreen {
     DIAGNOSTICS,
 }
 
+data class ImportedProfileUiInfo(
+    val remoteId: String,
+    val serverProfile: String,
+    val proxySummary: String,
+    val importRevision: Int,
+)
+
 data class VpnUiState(
     val initialized: Boolean = false,
     val screen: AppScreen = AppScreen.SETUP,
@@ -26,6 +33,7 @@ data class VpnUiState(
     val serverAddress: String = "",
     val username: String = "",
     val certificateInfo: CertificateInfo? = null,
+    val importedProfileInfo: ImportedProfileUiInfo? = null,
     val sessionId: String? = null,
     val error: String? = null,
     val technicalError: String? = null,

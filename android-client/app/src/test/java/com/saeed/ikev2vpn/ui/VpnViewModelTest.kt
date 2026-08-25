@@ -11,6 +11,9 @@ import com.saeed.ikev2vpn.data.RepositorySnapshot
 import com.saeed.ikev2vpn.data.StoredDiagnostics
 import com.saeed.ikev2vpn.data.StoredProfile
 import com.saeed.ikev2vpn.data.VpnProfileConfig
+import com.saeed.ikev2vpn.profile.IkevProfileImporter
+import com.saeed.ikev2vpn.profile.ImportedIkevProfile
+import com.saeed.ikev2vpn.profile.ImportedProxyMetadata
 import com.saeed.ikev2vpn.vpn.ConnectionState
 import com.saeed.ikev2vpn.vpn.ProvisioningAction
 import com.saeed.ikev2vpn.vpn.VpnPlatformController
@@ -102,13 +105,61 @@ class VpnViewModelTest {
         assertFalse(state.toString().contains("temporary-password"))
     }
 
+    @Test
+    fun `portable import populates setup without provisioning or persistence`() = runTest {
+        val certificate = testCertificate()
+        val repository = FakeProfileRepository(RepositorySnapshot())
+        val controller = FakeVpnController()
+        val imported = ImportedIkevProfile(
+            config = VpnProfileConfig("saeed@155.117.13.45", "155.117.13.45", "saeed"),
+            certificate = certificate,
+            remoteId = "155.117.13.45",
+            serverProfile = "secure",
+            proxy = ImportedProxyMetadata(true, "socks5", "10.254.254.1", 1080),
+        )
+        val viewModel = createViewModel(repository, controller, imported)
+
+        viewModel.importIkevProfile(Uri.EMPTY)
+
+        val state = viewModel.uiState.value
+        assertEquals("saeed@155.117.13.45", state.profileName)
+        assertEquals("155.117.13.45", state.serverAddress)
+        assertEquals("saeed", state.username)
+        assertEquals(certificate.info.sha256Fingerprint, state.certificateInfo?.sha256Fingerprint)
+        assertTrue(state.importedProfileInfo?.proxySummary.orEmpty().contains("10.254.254.1:1080"))
+        assertEquals(0, controller.provisionCalls)
+        assertEquals(0, repository.saveCalls)
+        assertFalse(state.toString().contains("password", ignoreCase = true))
+    }
+
+    @Test
+    fun `portable import is blocked while connected`() = runTest {
+        val repository = FakeProfileRepository(provisionedSnapshot(testCertificate()))
+        val controller = FakeVpnController(
+            VpnState(connectionState = ConnectionState.CONNECTED, confirmed = true),
+        )
+        val viewModel = createViewModel(repository, controller)
+
+        viewModel.importIkevProfile(Uri.EMPTY)
+
+        assertTrue(viewModel.uiState.value.error.orEmpty().contains("Disconnect"))
+        assertEquals(0, controller.provisionCalls)
+        assertEquals("Saved VPN", viewModel.uiState.value.profileName)
+    }
+
     private fun createViewModel(
         repository: ProfileRepository,
         controller: VpnPlatformController,
+        importedProfile: ImportedIkevProfile? = null,
     ): VpnViewModel = VpnViewModel(
         profileRepository = repository,
         certificateImporter = object : CertificateImporter {
             override suspend fun import(uri: Uri): LoadedCertificate = error("Not used in this test")
+        },
+        ikevProfileImporter = object : IkevProfileImporter {
+            override suspend fun import(uri: Uri): ImportedIkevProfile {
+                return importedProfile ?: error("Not used in this test")
+            }
         },
         vpnController = controller,
     )
@@ -132,12 +183,14 @@ class VpnViewModelTest {
         private val mutableSnapshots = MutableStateFlow(initial)
         override val snapshots: Flow<RepositorySnapshot> = mutableSnapshots
         var failSave = false
+        var saveCalls = 0
 
         override suspend fun saveProfile(
             config: VpnProfileConfig,
             certificate: LoadedCertificate,
             status: ProvisioningStatus,
         ) {
+            saveCalls += 1
             if (failSave) error("Simulated storage failure")
             mutableSnapshots.value = RepositorySnapshot(StoredProfile(config, certificate, status))
         }
@@ -167,6 +220,7 @@ class VpnViewModelTest {
         private val mutableState = MutableStateFlow(initialState)
         override val state = mutableState
         var deleteCalls = 0
+        var provisionCalls = 0
 
         override fun isPlatformSupported(): Boolean = true
 
@@ -174,7 +228,10 @@ class VpnViewModelTest {
             config: VpnProfileConfig,
             password: String,
             serverRootCa: X509Certificate,
-        ): VpnResult<ProvisioningAction> = VpnResult.Success(ProvisioningAction.Complete)
+        ): VpnResult<ProvisioningAction> {
+            provisionCalls += 1
+            return VpnResult.Success(ProvisioningAction.Complete)
+        }
 
         override fun connect(): VpnResult<String?> = VpnResult.Success(null)
         override fun disconnect(): VpnResult<Unit> = VpnResult.Success(Unit)

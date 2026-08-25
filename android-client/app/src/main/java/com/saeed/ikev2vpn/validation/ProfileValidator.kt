@@ -27,8 +27,15 @@ object ProfileValidator {
         val errors = buildMap {
             if (profileName.isBlank()) {
                 put(ProfileField.PROFILE_NAME, "Enter a profile name.")
-            } else if (profileName.trim().length > 64) {
-                put(ProfileField.PROFILE_NAME, "Profile name must be 64 characters or fewer.")
+            } else if (
+                profileName.any { character -> character.isISOControl() } ||
+                profileName.trim().length > MAX_PROFILE_NAME_LENGTH
+            ) {
+                put(
+                    ProfileField.PROFILE_NAME,
+                    "Profile name must contain no control characters and be " +
+                        "$MAX_PROFILE_NAME_LENGTH characters or fewer.",
+                )
             }
 
             when {
@@ -55,7 +62,7 @@ object ProfileValidator {
     fun isValidServerAddress(value: String): Boolean {
         if (value.isBlank() || value != value.trim()) return false
         if (value.contains("://") || value.contains('/') || value.contains(':')) return false
-        if (value.matches(Regex("[0-9.]+"))) return isValidIpv4(value)
+        if (value.matches(Regex("[0-9.]+"))) return isValidIpv4Address(value)
 
         val ascii = try {
             IDN.toASCII(value, IDN.USE_STD3_ASCII_RULES)
@@ -70,7 +77,14 @@ object ProfileValidator {
         }
     }
 
-    private fun isValidIpv4(value: String): Boolean {
+    fun isValidProfileName(value: String): Boolean {
+        return value.isNotBlank() &&
+            value == value.trim() &&
+            value.length <= MAX_PROFILE_NAME_LENGTH &&
+            value.none { character -> character.isISOControl() }
+    }
+
+    fun isValidIpv4Address(value: String): Boolean {
         val octets = value.split('.')
         return octets.size == 4 && octets.all { octet ->
             octet.isNotEmpty() &&
@@ -80,5 +94,6 @@ object ProfileValidator {
         }
     }
 
+    const val MAX_PROFILE_NAME_LENGTH = 128
     private val HOST_LABEL = Regex("[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?")
 }

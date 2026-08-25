@@ -16,13 +16,13 @@ The Linux client currently operates as a full-tunnel client.
 | Server | `ikev2-strongswan-ubuntu-v6.1.1.sh` | v6.1.1-en / Ubuntu 22.04 & 24.04 |
 | Windows client | `ikev2-windows-client-v6.1.ps1` | v6.1.0 / PowerShell 5.1+ |
 | Linux client | `ikev2-linux-client-v1.6.sh` | v1.6.0 / Ubuntu 22.04 & 24.04 |
-| Android client | [`android-client/`](android-client/) | v1.0.0 / Android 11+ (API 30+) |
+| Android client | [`android-client/`](android-client/) | v1.1.0 / Android 11+ (API 30+) |
 
 The server installer manages StrongSwan packages, certificates, users, routing, DNS, NAT, firewall rules, status, uninstall, and the optional private SOCKS5 Proxy Mode.
 
 The Windows utility supports both Full Tunnel and Proxy Mode without requiring separate VPN profiles.
 
-The **Android Client v1.0.0** is a native Android IKEv2 client for Android 11+
+The **Android Client v1.1.0** is a native Android IKEv2 client for Android 11+
 (API 30+). It provisions a single IPv4 full-tunnel profile through Android's
 platform VPN stack:
 
@@ -37,13 +37,16 @@ strongSwan server
 ```
 
 It uses EAP-MSCHAPv2 and validates the server with the imported private CA. It
-does not implement IKEv2, intercept traffic, or use `VpnService`. Android v1.0
-supports profile provisioning, connect/disconnect, basic status, and diagnostics;
+does not implement IKEv2, intercept traffic, or use `VpnService`. Android v1.1
+supports portable `.ikev` v1 import, manual profile provisioning,
+connect/disconnect, basic status, and diagnostics;
 it does not support Proxy Mode, split tunneling, multiple profiles, or automatic
 connection.
 
-The app needs only the server hostname or IPv4 address, EAP username/password,
-and `ca-cert.cer`. **Never transfer a server or CA private key to Android.** See
+For portable onboarding, the app needs only `username.ikev` and the VPN
+password entered during provisioning; the profile embeds the public CA. Manual
+setup remains available with the server address, username, password, and
+`ca-cert.cer`. **Never transfer a server or CA private key to Android.** See
 the [Android build and release guide](android-client/README.md) and
 [release acceptance matrix](android-client/RELEASE_TESTING.md).
 
@@ -255,8 +258,8 @@ client-credentials.txt
 The server can export a configured user as the project's portable `.ikev`
 VPN profile format. Version 1 is a JSON document identified by
 `format = ikev-profile` and `version = 1`. It is designed for later import
-by the Windows, Linux, and Android clients. Linux v1.6 is the first importer;
-Windows and Android import support will follow separately.
+by the Windows, Linux, and Android clients. Linux v1.6, Windows v6.1, and
+Android v1.1 all import this same frozen format.
 
 The profile embeds the public CA certificate as single-line Base64-encoded DER
 and includes its OpenSSL SHA-256 fingerprint. VPN passwords, private keys, and

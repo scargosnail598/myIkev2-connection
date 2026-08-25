@@ -1726,6 +1726,122 @@ select_vpn_user() {
   done
 }
 
+export_ikev_profile() {
+  local profiles_dir profile_path temp_file=""
+  local ca_data ca_fingerprint fingerprint_output
+  local profile_name server_profile proxy_summary
+
+  require_managed_installation
+
+  printf '\n%bIKEv Client Profile Export%b\n' "$BOLD" "$RESET"
+  printf '==========================\n\n'
+
+  if [[ ! -r "$CA_CERT" ]]; then
+    warn "Cannot export profile because the managed CA certificate is missing."
+    return 0
+  fi
+
+  if ! select_vpn_user; then
+    info "Export canceled."
+    return 0
+  fi
+
+  profile_name="${SELECTED_VPN_USER}@${SERVER_ID}"
+  profiles_dir="${CLIENT_DIR}/profiles"
+  profile_path="${profiles_dir}/${SELECTED_VPN_USER}.ikev"
+
+  if [[ -e "$profile_path" ]]; then
+    printf "Profile '%s' already exists.\n" "${SELECTED_VPN_USER}.ikev"
+    if ! ask_yes_no "Replace it?" N; then
+      info "Export canceled."
+      return 0
+    fi
+  fi
+
+  if ! command_exists openssl || \
+     ! ca_data=$(openssl x509 -in "$CA_CERT" -outform DER 2>/dev/null | openssl base64 -A 2>/dev/null) || \
+     ! fingerprint_output=$(openssl x509 -in "$CA_CERT" -noout -fingerprint -sha256 2>/dev/null); then
+    warn "Cannot export profile because the CA certificate could not be processed."
+    return 0
+  fi
+  ca_fingerprint="${fingerprint_output#*=}"
+  if [[ -z "$ca_data" || -z "$ca_fingerprint" || "$ca_fingerprint" == "$fingerprint_output" ]]; then
+    warn "Cannot export profile because the CA certificate could not be processed."
+    return 0
+  fi
+
+  if [[ "${ALLOW_STOCK_WINDOWS:-no}" == "yes" ]]; then
+    server_profile="stock-windows-compatible"
+  else
+    server_profile="secure"
+  fi
+
+  if [[ "${PROXY_ENABLED:-no}" == "yes" ]]; then
+    proxy_summary="available (${PROXY_IP}:${PROXY_PORT})"
+  else
+    proxy_summary="not configured"
+  fi
+
+  if ! install -d -m 700 "$CLIENT_DIR" "$profiles_dir"; then
+    warn "Cannot create the client profile export directory."
+    return 0
+  fi
+  if ! temp_file=$(mktemp "${profiles_dir}/.${SELECTED_VPN_USER}.ikev.tmp.XXXXXX"); then
+    warn "Cannot create a temporary client profile file."
+    return 0
+  fi
+
+  if ! {
+    printf '{\n'
+    printf '  "format": "ikev-profile",\n'
+    printf '  "version": 1,\n'
+    printf '  "name": "%s",\n' "$profile_name"
+    printf '  "server": "%s",\n' "$SERVER_ID"
+    printf '  "remote_id": "%s",\n' "$SERVER_ID"
+    printf '  "username": "%s",\n' "$SELECTED_VPN_USER"
+    printf '  "authentication": "eap-mschapv2",\n'
+    printf '  "ca_certificate": {\n'
+    printf '    "encoding": "der-base64",\n'
+    printf '    "data": "%s",\n' "$ca_data"
+    printf '    "sha256": "%s"\n' "$ca_fingerprint"
+    printf '  },\n'
+    printf '  "connection": {\n'
+    printf '    "mode": "full-tunnel"\n'
+    printf '  },\n'
+    printf '  "server_profile": "%s",\n' "$server_profile"
+    printf '  "proxy": {\n'
+    if [[ "${PROXY_ENABLED:-no}" == "yes" ]]; then
+      printf '    "enabled": true,\n'
+      printf '    "type": "socks5",\n'
+      printf '    "host": "%s",\n' "$PROXY_IP"
+      printf '    "port": %s\n' "$PROXY_PORT"
+    else
+      printf '    "enabled": false\n'
+    fi
+    printf '  }\n'
+    printf '}\n'
+  } > "$temp_file"; then
+    rm -f -- "$temp_file"
+    warn "Cannot write the client profile."
+    return 0
+  fi
+
+  if ! chmod 600 "$temp_file" || ! mv -f -- "$temp_file" "$profile_path"; then
+    rm -f -- "$temp_file"
+    warn "Cannot finalize the client profile."
+    return 0
+  fi
+
+  printf '\nUser       : %s\n' "$SELECTED_VPN_USER"
+  printf 'Server     : %s\n' "$SERVER_ID"
+  printf 'Remote ID  : %s\n' "$SERVER_ID"
+  printf 'Mode       : Full tunnel\n'
+  printf 'Proxy Mode : %s\n\n' "$proxy_summary"
+  log "IKEv profile created successfully."
+  printf '\nFile:\n  %s\n\n' "$profile_path"
+  printf 'Password was NOT included in this profile.\n'
+}
+
 collect_new_vpn_password() {
   local prompt="$1"
   local password=""
@@ -2574,10 +2690,11 @@ interactive_menu() {
       printf '  3) User Management\n'
       printf '  4) Connected Clients\n'
       printf '  5) Diagnostics\n'
-      printf '  6) Upgrade / Configure SOCKS5 Proxy Mode\n'
-      printf '  7) Uninstall\n'
-      printf '  8) Exit\n'
-      read -r -p 'Choose [1-8]: ' choice || true
+      printf '  6) Export Client Profile (.ikev)\n'
+      printf '  7) Upgrade / Configure SOCKS5 Proxy Mode\n'
+      printf '  8) Uninstall\n'
+      printf '  9) Exit\n'
+      read -r -p 'Choose [1-9]: ' choice || true
 
       case "$choice" in
         1)
@@ -2599,14 +2716,18 @@ interactive_menu() {
           pause_main_menu
           ;;
         6)
-          upgrade_vpn
+          export_ikev_profile
           pause_main_menu
           ;;
         7)
-          uninstall_vpn
+          upgrade_vpn
           pause_main_menu
           ;;
         8)
+          uninstall_vpn
+          pause_main_menu
+          ;;
+        9)
           printf '\nExiting...\n'
           exit 0
           ;;

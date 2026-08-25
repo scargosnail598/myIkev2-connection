@@ -250,6 +250,56 @@ client-info.txt
 client-credentials.txt
 ```
 
+## Portable `.ikev` Client Profiles
+
+The server can export a configured user as the project's portable `.ikev`
+VPN profile format. Version 1 is a JSON document identified by
+`format = ikev-profile` and `version = 1`. It is designed for later import
+by the Windows, Linux, and Android clients; client-side import is not included
+in this server-export phase.
+
+The profile embeds the public CA certificate as single-line Base64-encoded DER
+and includes its OpenSSL SHA-256 fingerprint. VPN passwords, private keys, and
+other secret material are never included. Profiles are written with mode
+`0600` under:
+
+```text
+/root/ikev2-client/profiles/
+```
+
+Example with deliberately fake certificate data:
+
+```json
+{
+  "format": "ikev-profile",
+  "version": 1,
+  "name": "saeed@vpn.example.com",
+  "server": "vpn.example.com",
+  "remote_id": "vpn.example.com",
+  "username": "saeed",
+  "authentication": "eap-mschapv2",
+  "ca_certificate": {
+    "encoding": "der-base64",
+    "data": "RkFLRS1ERVItQ0VSVElGSUNBVEUtREFUQQ==",
+    "sha256": "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99"
+  },
+  "connection": {
+    "mode": "full-tunnel"
+  },
+  "server_profile": "secure",
+  "proxy": {
+    "enabled": true,
+    "type": "socks5",
+    "host": "10.254.254.1",
+    "port": 1080
+  }
+}
+```
+
+When Proxy Mode is unavailable, `proxy` contains only
+`"enabled": false`. Exporting a profile does not reload StrongSwan or modify
+VPN, user, firewall, NAT, certificate, or proxy configuration.
+
 For the included Windows and Linux clients, the main certificate file is:
 
 ```text
@@ -295,15 +345,16 @@ IKEv2 installation detected
 3) User Management
 4) Connected Clients
 5) Diagnostics
-6) Upgrade / Configure SOCKS5 Proxy Mode
-7) Uninstall
-8) Exit
+6) Export Client Profile (.ikev)
+7) Upgrade / Configure SOCKS5 Proxy Mode
+8) Uninstall
+9) Exit
 ```
 
 Choose:
 
 ```text
-5) Upgrade / Configure SOCKS5 Proxy Mode
+7) Upgrade / Configure SOCKS5 Proxy Mode
 ```
 
 Recommended defaults:
@@ -1064,7 +1115,7 @@ sudo ./ikev2-strongswan-ubuntu-v6.1.1.sh uninstall
 Or open the interactive menu and choose:
 
 ```text
-7) Uninstall
+8) Uninstall
 ```
 
 on an installed v6 system.

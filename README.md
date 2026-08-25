@@ -15,7 +15,7 @@ The Linux client currently operates as a full-tunnel client.
 |---|---|---|
 | Server | `ikev2-strongswan-ubuntu-v6.1.1.sh` | v6.1.1-en / Ubuntu 22.04 & 24.04 |
 | Windows client | `ikev2-windows-client-v6.ps1` | v6.0.0 / PowerShell 5.1+ |
-| Linux client | `ikev2-linux-client-v1.5.sh` | v1.5.0 / Ubuntu 22.04 & 24.04 |
+| Linux client | `ikev2-linux-client-v1.6.sh` | v1.6.0 / Ubuntu 22.04 & 24.04 |
 | Android client | [`android-client/`](android-client/) | v1.0.0 / Android 11+ (API 30+) |
 
 The server installer manages StrongSwan packages, certificates, users, routing, DNS, NAT, firewall rules, status, uninstall, and the optional private SOCKS5 Proxy Mode.
@@ -255,8 +255,8 @@ client-credentials.txt
 The server can export a configured user as the project's portable `.ikev`
 VPN profile format. Version 1 is a JSON document identified by
 `format = ikev-profile` and `version = 1`. It is designed for later import
-by the Windows, Linux, and Android clients; client-side import is not included
-in this server-export phase.
+by the Windows, Linux, and Android clients. Linux v1.6 is the first importer;
+Windows and Android import support will follow separately.
 
 The profile embeds the public CA certificate as single-line Base64-encoded DER
 and includes its OpenSSL SHA-256 fingerprint. VPN passwords, private keys, and
@@ -491,9 +491,9 @@ Example certificate copy:
 scp root@YOUR_SERVER:/root/ikev2-client/ca-cert.cer .
 ```
 
-Do **not** copy the CA private key to clients.
-
-Keep `ca-cert.cer` next to the client utility.
+Do **not** copy the CA private key to clients. For manual setup, keep
+`ca-cert.cer` next to the client utility. Portable `.ikev` profiles embed the
+public CA certificate and do not require a separate certificate file.
 
 Windows:
 
@@ -502,11 +502,18 @@ ikev2-windows-client-v6.ps1
 ca-cert.cer
 ```
 
-Linux:
+Linux manual setup:
 
 ```text
-ikev2-linux-client-v1.5.sh
+ikev2-linux-client-v1.6.sh
 ca-cert.cer
+```
+
+Linux portable-profile import:
+
+```text
+ikev2-linux-client-v1.6.sh
+username.ikev
 ```
 
 ---
@@ -843,23 +850,18 @@ The Linux client is designed for Ubuntu 22.04 and 24.04.
 Current Linux client version:
 
 ```text
-1.5.0
+1.6.0
 ```
 
-The Linux client currently uses **Full Tunnel IPv4** and does not implement the Windows Proxy Mode feature.
-
-Keep these files together:
-
-```text
-ikev2-linux-client-v1.5.sh
-ca-cert.cer
-```
+Linux uses **Full Tunnel IPv4**. Version 1.6 can display advertised SOCKS5
+Proxy Mode metadata during import, but it does not configure or use the proxy,
+add proxy routes, or enable split tunneling.
 
 Run:
 
 ```bash
-chmod +x ikev2-linux-client-v1.5.sh
-sudo ./ikev2-linux-client-v1.5.sh
+chmod +x ikev2-linux-client-v1.6.sh
+sudo ./ikev2-linux-client-v1.6.sh
 ```
 
 Menu:
@@ -867,18 +869,26 @@ Menu:
 ```text
 IKEv2 Linux VPN Utility
 =======================
-Version: 1.5.0
+Version: 1.6.0
 
 1) Install / Update IKEv2 VPN
-2) List / Status
-3) Connect
-4) Disconnect
-5) Remove Profile
-6) Uninstall Utility
-7) Exit
+2) Import .ikev Profile
+3) List / Status
+4) Connect
+5) Disconnect
+6) Remove Profile
+7) Uninstall Utility
+8) Exit
 ```
 
-## Create the Linux VPN profile
+## Manual setup
+
+Keep these files together:
+
+```text
+ikev2-linux-client-v1.6.sh
+ca-cert.cer
+```
 
 Choose:
 
@@ -886,28 +896,44 @@ Choose:
 1) Install / Update IKEv2 VPN
 ```
 
-Enter:
+Enter the profile name, server IP or hostname, VPN username, and VPN password.
+The server value must match the Server / Remote ID used during server
+installation.
 
-```text
-VPN profile name
-VPN server IP or hostname
-VPN username
-VPN password
-```
+The unchanged manual workflow installs the required StrongSwan packages,
+validates and installs the sibling CA certificate, writes root-only EAP
+credentials, creates the full-tunnel profile, preserves the existing DNS
+integration, and reloads StrongSwan.
 
-The server value must match the Server / Remote ID used during server installation.
+## Import a portable `.ikev` profile
 
-The utility automatically:
+The easier v1.6 workflow is:
 
-- installs required StrongSwan packages when necessary
-- validates and installs the VPN CA
-- creates the IKEv2 profile
-- stores EAP credentials in root-only configuration
-- configures full-tunnel IPv4 operation
-- handles VPN DNS
-- reloads StrongSwan
+1. Export `username.ikev` on the VPN server.
+2. Copy the `.ikev` file to Ubuntu.
+3. Run the Linux client.
+4. Choose `Import .ikev Profile`.
+5. Enter the path to the file.
+6. Review the server, remote identity, username, CA fingerprint, and proxy
+   availability.
+7. Confirm trust and enter the VPN password.
+8. Connect.
 
-Linux client crypto profile:
+Linux v1.6 supports `.ikev` schema version 1 only. It parses JSON with
+Python 3's standard-library `json` module, verifies the embedded DER CA and
+SHA-256 fingerprint, and then uses the same StrongSwan profile, secrets, DNS,
+reload, and connection architecture as manual setup.
+
+**`.ikev` files never contain the VPN password or private keys.** The
+importer asks for the password using hidden input and stores it only through
+the existing root-only StrongSwan secrets mechanism. The original `.ikev`
+file and embedded Base64 data are not copied into managed runtime state.
+
+Linux v1.6 uses one managed VPN CA at a time. A profile using the existing CA
+reuses it. A different CA is rejected while managed profiles exist because
+silently replacing trust could break them.
+
+Linux client crypto policy remains:
 
 ```text
 IKEv2
@@ -921,7 +947,7 @@ Full Tunnel IPv4
 
 # 18. Optional Linux system-wide command
 
-After creating a profile, the Linux utility asks:
+After creating a profile through manual setup, the Linux utility asks:
 
 ```text
 Install this utility system-wide as the 'ikev2' command? [y/N]
@@ -944,6 +970,10 @@ You can then run:
 ```bash
 sudo ikev2
 ```
+
+`.ikev` import also works through this installed command. The selected
+profile may remain anywhere readable on the machine and is not copied into
+`/opt/ikev2-client`.
 
 ---
 
@@ -988,7 +1018,9 @@ Also verify any cloud firewall or provider security group.
 
 ## Certificate or trust error
 
-Use the exact `ca-cert.cer` generated by the server installation.
+For manual Linux setup, use the exact `ca-cert.cer` generated by the server.
+For `.ikev` import, the Linux utility validates the embedded CA certificate
+and requires its SHA-256 fingerprint to match before asking for trust.
 
 Do not reuse a CA certificate generated by another VPN server.
 
@@ -1080,13 +1112,13 @@ The Linux utility uses native StrongSwan/systemd-resolved integration when suita
 Run the Linux utility:
 
 ```bash
-sudo ./ikev2-linux-client-v1.5.sh
+sudo ./ikev2-linux-client-v1.6.sh
 ```
 
 Choose:
 
 ```text
-6) Uninstall Utility
+7) Uninstall Utility
 ```
 
 The uninstall removes utility-managed:
@@ -1195,8 +1227,8 @@ SOCKS5 10.254.254.1:1080
 ## Linux
 
 ```bash
-chmod +x ikev2-linux-client-v1.5.sh
-sudo ./ikev2-linux-client-v1.5.sh
+chmod +x ikev2-linux-client-v1.6.sh
+sudo ./ikev2-linux-client-v1.6.sh
 ```
 
 ---

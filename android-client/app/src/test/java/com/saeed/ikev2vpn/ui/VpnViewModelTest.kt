@@ -33,6 +33,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import org.mockito.Mockito.mock
 import java.security.cert.X509Certificate
 import java.time.Instant
 import java.util.Base64
@@ -118,8 +119,9 @@ class VpnViewModelTest {
             proxy = ImportedProxyMetadata(true, "socks5", "10.254.254.1", 1080),
         )
         val viewModel = createViewModel(repository, controller, imported)
+        val uri = mock(Uri::class.java)
 
-        viewModel.importIkevProfile(Uri.EMPTY)
+        viewModel.importIkevProfile(uri)
 
         val state = viewModel.uiState.value
         assertEquals("saeed@155.117.13.45", state.profileName)
@@ -138,19 +140,27 @@ class VpnViewModelTest {
         val controller = FakeVpnController(
             VpnState(connectionState = ConnectionState.CONNECTED, confirmed = true),
         )
-        val viewModel = createViewModel(repository, controller)
+        var importerCalls = 0
+        val viewModel = createViewModel(
+            repository = repository,
+            controller = controller,
+            onIkevProfileImport = { importerCalls += 1 },
+        )
+        val uri = mock(Uri::class.java)
 
-        viewModel.importIkevProfile(Uri.EMPTY)
+        viewModel.importIkevProfile(uri)
 
         assertTrue(viewModel.uiState.value.error.orEmpty().contains("Disconnect"))
         assertEquals(0, controller.provisionCalls)
         assertEquals("Saved VPN", viewModel.uiState.value.profileName)
+        assertEquals(0, importerCalls)
     }
 
     private fun createViewModel(
         repository: ProfileRepository,
         controller: VpnPlatformController,
         importedProfile: ImportedIkevProfile? = null,
+        onIkevProfileImport: () -> Unit = {},
     ): VpnViewModel = VpnViewModel(
         profileRepository = repository,
         certificateImporter = object : CertificateImporter {
@@ -158,6 +168,7 @@ class VpnViewModelTest {
         },
         ikevProfileImporter = object : IkevProfileImporter {
             override suspend fun import(uri: Uri): ImportedIkevProfile {
+                onIkevProfileImport()
                 return importedProfile ?: error("Not used in this test")
             }
         },

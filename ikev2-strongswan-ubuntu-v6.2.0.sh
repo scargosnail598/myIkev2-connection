@@ -489,6 +489,7 @@ record_proxy_baseline() {
 # GitHub Release self-update. This only replaces the installer script itself.
 GITHUB_REPO="scargosnail598/myIkev2-connection"
 GITHUB_RELEASE_API="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
+GITHUB_RELEASE_TAG_PREFIX="server-v"
 
 installer_semver() {
   printf '%s' "${CURRENT_INSTALLER_VERSION%%-*}"
@@ -510,13 +511,14 @@ version_is_newer() {
 }
 
 latest_release_version() {
-  local response tag
+  local response release_tag tag
   command_exists curl || die "curl is required for installer updates."
   response="$(curl -fsSL --retry 3 --connect-timeout 10 --max-time 30 \
     -H 'Accept: application/vnd.github+json' \
     -H 'X-GitHub-Api-Version: 2022-11-28' \
     "$GITHUB_RELEASE_API")" || die "Unable to query the latest GitHub Release."
-  tag="$(printf '%s' "$response" | sed -nE 's/^[[:space:]]*"tag_name":[[:space:]]*"v([0-9]+\.[0-9]+\.[0-9]+)".*/\1/p' | head -n1)"
+  release_tag="$(printf '%s' "$response" | sed -nE 's/^[[:space:]]*"tag_name":[[:space:]]*"([^"]+)".*/\1/p' | head -n1)"
+  tag="${release_tag#${GITHUB_RELEASE_TAG_PREFIX}}"
   [[ "$tag" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "The latest GitHub Release did not contain a valid semver tag."
   printf '%s' "$tag"
 }
@@ -544,21 +546,22 @@ update_installer() {
   current_path="$(readlink -f "$0")"
   tmp_dir="$(mktemp -d "${STATE_DIR}/update.XXXXXX")"
   artifact="ikev2-strongswan-ubuntu-v${latest}.sh"
+  release_tag="${GITHUB_RELEASE_TAG_PREFIX}${latest}"
   sums="$tmp_dir/SHA256SUMS"
   tmp_artifact="$tmp_dir/$artifact"
 
   cleanup_update_tmp() { rm -rf "$tmp_dir"; }
   trap cleanup_update_tmp RETURN
 
-  log "Downloading release v${latest}..."
+  log "Downloading release ${release_tag}..."
   curl -fsSL --retry 3 --connect-timeout 10 --max-time 120 \
     -o "$tmp_artifact" \
-    "https://github.com/${GITHUB_REPO}/releases/download/v${latest}/${artifact}" \
+    "https://github.com/${GITHUB_REPO}/releases/download/${release_tag}/${artifact}" \
     || die "Failed to download ${artifact}."
 
   curl -fsSL --retry 3 --connect-timeout 10 --max-time 30 \
     -o "$sums" \
-    "https://github.com/${GITHUB_REPO}/releases/download/v${latest}/SHA256SUMS" \
+    "https://github.com/${GITHUB_REPO}/releases/download/${release_tag}/SHA256SUMS" \
     || die "Failed to download release checksums."
 
   expected="$(awk -v file="$artifact" '$2 == file || $2 == "./" file {print $1; exit}' "$sums")"

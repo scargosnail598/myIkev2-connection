@@ -6,7 +6,7 @@ The examples use:
 
 - Server IP: `155.117.13.45`
 - SSH port: `9011`
-- Installer: `ikev2-strongswan-ubuntu-v6.2.0.sh`
+- Installer: `ikev2-strongswan-ubuntu.sh`
 
 > Port `9011` is treated as the SSH port. StrongSwan still requires UDP ports `500` and `4500` for IKEv2.
 
@@ -35,11 +35,11 @@ The first installation should be performed manually because it asks for the serv
 Copy the installer to the server and run it:
 
 ```bash
-scp -P 9011 ikev2-strongswan-ubuntu-v6.2.0.sh admin@155.117.13.45:/tmp/
+scp -P 9011 ikev2-strongswan-ubuntu.sh admin@155.117.13.45:/tmp/
 ssh -p 9011 admin@155.117.13.45
 
-chmod +x /tmp/ikev2-strongswan-ubuntu-v6.2.0.sh
-sudo /tmp/ikev2-strongswan-ubuntu-v6.2.0.sh install
+chmod +x /tmp/ikev2-strongswan-ubuntu.sh
+sudo /tmp/ikev2-strongswan-ubuntu.sh install
 ```
 
 Use `155.117.13.45` as the server address or identity unless you have a DNS hostname that clients will use instead.
@@ -47,8 +47,8 @@ Use `155.117.13.45` as the server address or identity unless you have a DNS host
 After installation, verify the server:
 
 ```bash
-sudo /tmp/ikev2-strongswan-ubuntu-v6.2.0.sh status
-sudo /tmp/ikev2-strongswan-ubuntu-v6.2.0.sh diagnostics
+sudo /tmp/ikev2-strongswan-ubuntu.sh status
+sudo /tmp/ikev2-strongswan-ubuntu.sh diagnostics
 sudo ss -lunp | grep -E ':(500|4500)\\b'
 ```
 
@@ -190,7 +190,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          file="ikev2-strongswan-ubuntu-v6.2.0.sh"
+          file="ikev2-strongswan-ubuntu.sh"
           bash -n "$file"
 
       - name: Configure SSH
@@ -219,13 +219,13 @@ jobs:
           ssh "${ssh_args[@]}" "$USER@$HOST" \
             "sudo install -d -m 0755 '$INSTALL_DIR'"
           scp "${ssh_args[@]}" \
-            ikev2-strongswan-ubuntu-v6.2.0.sh \
-            "$USER@$HOST:/tmp/ikev2-strongswan-ubuntu-v6.2.0.sh"
+            ikev2-strongswan-ubuntu.sh \
+            "$USER@$HOST:/tmp/ikev2-strongswan-ubuntu.sh"
           ssh "${ssh_args[@]}" "$USER@$HOST" \
-            "bash -n /tmp/ikev2-strongswan-ubuntu-v6.2.0.sh && \
-             sudo install -m 0755 /tmp/ikev2-strongswan-ubuntu-v6.2.0.sh \
-             '$INSTALL_DIR/ikev2-strongswan-ubuntu-v6.2.0.sh' && \
-             rm -f /tmp/ikev2-strongswan-ubuntu-v6.2.0.sh"
+            "bash -n /tmp/ikev2-strongswan-ubuntu.sh && \
+             sudo install -m 0755 /tmp/ikev2-strongswan-ubuntu.sh \
+             '$INSTALL_DIR/ikev2-strongswan-ubuntu.sh' && \
+             rm -f /tmp/ikev2-strongswan-ubuntu.sh"
 
       - name: Verify deployed installer
         shell: bash
@@ -238,7 +238,7 @@ jobs:
           set -Eeuo pipefail
           ssh_args=(-i "$HOME/.ssh/production_deploy" -p "$PORT")
           ssh "${ssh_args[@]}" "$USER@$HOST" \
-            "sudo '$INSTALL_DIR/ikev2-strongswan-ubuntu-v6.2.0.sh' status"
+            "sudo '$INSTALL_DIR/ikev2-strongswan-ubuntu.sh' status"
 ```
 
 This workflow uploads the installer, applies the DPD-based reconnect policy, and verifies the installation. It does not automatically run `install`, `upgrade`, `uninstall`, or certificate rotation. Those operations should require a deliberate production procedure.
@@ -257,7 +257,7 @@ This workflow uploads the installer, applies the DPD-based reconnect policy, and
 - Run the installer diagnostics after any manual server change:
 
 ```bash
-sudo /opt/ikev2/ikev2-strongswan-ubuntu-v6.2.0.sh diagnostics
+sudo /opt/ikev2/ikev2-strongswan-ubuntu.sh diagnostics
 ```
 
 ## 9. Troubleshooting
@@ -289,7 +289,7 @@ Check all of the following:
 Check the server directly:
 
 ```bash
-sudo /opt/ikev2/ikev2-strongswan-ubuntu-v6.2.0.sh status
-sudo /opt/ikev2/ikev2-strongswan-ubuntu-v6.2.0.sh diagnostics
+sudo /opt/ikev2/ikev2-strongswan-ubuntu.sh status
+sudo /opt/ikev2/ikev2-strongswan-ubuntu.sh diagnostics
 sudo ss -lunp | grep -E ':(500|4500)\\b'
 ```

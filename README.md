@@ -13,7 +13,7 @@ The Linux client currently operates as a full-tunnel client.
 
 | Component | File | Version / Target |
 |---|---|---|
-| Server | `ikev2-strongswan-ubuntu-v6.2.0.sh` | v6.2.0 / Ubuntu 22.04 & 24.04 |
+| Server | `ikev2-strongswan-ubuntu.sh` | v6.2.1 / Ubuntu 22.04 & 24.04 |
 | Windows client | `ikev2-windows-client-v6.1.ps1` | v6.1.0 / PowerShell 5.1+ |
 | Linux client | `ikev2-linux-client-v1.6.sh` | v1.6.0 / Ubuntu 22.04 & 24.04 |
 
@@ -49,19 +49,19 @@ The installer creates its own local firewall and NAT rules, but it cannot modify
 Make the installer executable:
 
 ```bash
-chmod +x ikev2-strongswan-ubuntu-v6.2.0.sh
+chmod +x ikev2-strongswan-ubuntu.sh
 ```
 
 Run the installer:
 
 ```bash
-sudo ./ikev2-strongswan-ubuntu-v6.2.0.sh install
+sudo ./ikev2-strongswan-ubuntu.sh install
 ```
 
 Or run it without arguments:
 
 ```bash
-sudo ./ikev2-strongswan-ubuntu-v6.2.0.sh
+sudo ./ikev2-strongswan-ubuntu.sh
 ```
 
 On a fresh server choose:
@@ -296,17 +296,17 @@ If Proxy Mode is enabled, `client-info.txt` also contains the private SOCKS5 end
 
 If an older installation was created by this installer family, you do **not** need to uninstall and reinstall the VPN.
 
-Copy `ikev2-strongswan-ubuntu-v6.2.0.sh` to the server and run:
+Copy `ikev2-strongswan-ubuntu.sh` to the server and run:
 
 ```bash
-chmod +x ikev2-strongswan-ubuntu-v6.2.0.sh
-sudo ./ikev2-strongswan-ubuntu-v6.2.0.sh upgrade
+chmod +x ikev2-strongswan-ubuntu.sh
+sudo ./ikev2-strongswan-ubuntu.sh upgrade
 ```
 
 Or run:
 
 ```bash
-sudo ./ikev2-strongswan-ubuntu-v6.2.0.sh
+sudo ./ikev2-strongswan-ubuntu.sh
 ```
 
 When an existing managed installation is detected, the menu is:
@@ -372,13 +372,13 @@ StrongSwan  : unchanged / not restarted by this upgrade
 Run:
 
 ```bash
-sudo ./ikev2-strongswan-ubuntu-v6.2.0.sh status
+sudo ./ikev2-strongswan-ubuntu.sh status
 ```
 
 Run the read-only server health check from the installed-system menu or with:
 
 ```bash
-sudo ./ikev2-strongswan-ubuntu-v6.2.0.sh diagnostics
+sudo ./ikev2-strongswan-ubuntu.sh diagnostics
 ```
 
 Diagnostics checks the managed state, services, IKEv2 connection, forwarding,
@@ -932,7 +932,7 @@ The expected route is:
 Then check the server:
 
 ```bash
-sudo ./ikev2-strongswan-ubuntu-v6.2.0.sh status
+sudo ./ikev2-strongswan-ubuntu.sh status
 ```
 
 Check the proxy service:
@@ -1015,7 +1015,7 @@ Unrelated StrongSwan configuration is not removed.
 Run:
 
 ```bash
-sudo ./ikev2-strongswan-ubuntu-v6.2.0.sh uninstall
+sudo ./ikev2-strongswan-ubuntu.sh uninstall
 ```
 
 Or open the interactive menu and choose:
@@ -1056,8 +1056,8 @@ Packages installed by the installer are removed only when the installer's safe p
 ## Server
 
 ```bash
-chmod +x ikev2-strongswan-ubuntu-v6.2.0.sh
-sudo ./ikev2-strongswan-ubuntu-v6.2.0.sh install
+chmod +x ikev2-strongswan-ubuntu.sh
+sudo ./ikev2-strongswan-ubuntu.sh install
 ```
 
 Enable the private SOCKS5 Proxy Mode when prompted if you plan to use Windows Proxy Mode.
@@ -1119,8 +1119,8 @@ sudo ./ikev2-linux-client-v1.6.sh
 ## Server
 
 ```bash
-chmod +x ikev2-strongswan-ubuntu-v6.2.0.sh
-sudo ./ikev2-strongswan-ubuntu-v6.2.0.sh upgrade
+chmod +x ikev2-strongswan-ubuntu.sh
+sudo ./ikev2-strongswan-ubuntu.sh upgrade
 ```
 
 Accept the defaults unless you need custom values:
@@ -1133,7 +1133,7 @@ Proxy Port : 1080
 Verify:
 
 ```bash
-sudo ./ikev2-strongswan-ubuntu-v6.2.0.sh status
+sudo ./ikev2-strongswan-ubuntu.sh status
 sudo systemctl status ikev2-vpn-proxy
 sudo ss -lntp | grep 1080
 ```

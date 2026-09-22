@@ -2,9 +2,6 @@ name: Deploy Production Server Installer
 
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - "v*.*.*"
 
 permissions:
   contents: read
@@ -24,7 +21,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          file="ikev2-strongswan-ubuntu-v6.2.0.sh"
+          file="ikev2-strongswan-ubuntu.sh"
           bash -n "$file"
 
       - name: Configure SSH
@@ -53,13 +50,13 @@ jobs:
           ssh "${ssh_args[@]}" "$USER@$HOST" \
             "sudo install -d -m 0755 '$INSTALL_DIR'"
           scp -i "$HOME/.ssh/production_deploy" -P "$PORT" \
-            ikev2-strongswan-ubuntu-v6.2.0.sh \
-            "$USER@$HOST:/tmp/ikev2-strongswan-ubuntu-v6.2.0.sh"
+            ikev2-strongswan-ubuntu.sh \
+            "$USER@$HOST:/tmp/ikev2-strongswan-ubuntu.sh"
           ssh "${ssh_args[@]}" "$USER@$HOST" \
-            "bash -n /tmp/ikev2-strongswan-ubuntu-v6.2.0.sh && \
-             sudo install -m 0755 /tmp/ikev2-strongswan-ubuntu-v6.2.0.sh \
-             '$INSTALL_DIR/ikev2-strongswan-ubuntu-v6.2.0.sh' && \
-             rm -f /tmp/ikev2-strongswan-ubuntu-v6.2.0.sh"
+            "bash -n /tmp/ikev2-strongswan-ubuntu.sh && \
+             sudo install -m 0755 /tmp/ikev2-strongswan-ubuntu.sh \
+             '$INSTALL_DIR/ikev2-strongswan-ubuntu.sh' && \
+             rm -f /tmp/ikev2-strongswan-ubuntu.sh"
 
       - name: Verify deployed installer
         shell: bash
@@ -72,7 +69,7 @@ jobs:
           set -Eeuo pipefail
           ssh_args=(-i "$HOME/.ssh/production_deploy" -p "$PORT")
           ssh "${ssh_args[@]}" "$USER@$HOST" \
-            "sudo '$INSTALL_DIR/ikev2-strongswan-ubuntu-v6.2.0.sh' status"
+            "sudo '$INSTALL_DIR/ikev2-strongswan-ubuntu.sh' status"
 
       - name: Apply reconnect policy
         shell: bash
@@ -85,4 +82,4 @@ jobs:
           set -Eeuo pipefail
           ssh_args=(-i "$HOME/.ssh/production_deploy" -p "$PORT")
           ssh "${ssh_args[@]}" "$USER@$HOST" \
-            "sudo '$INSTALL_DIR/ikev2-strongswan-ubuntu-v6.2.0.sh' reconnect"
+            "sudo '$INSTALL_DIR/ikev2-strongswan-ubuntu.sh' reconnect"

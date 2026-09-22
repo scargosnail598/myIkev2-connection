@@ -2,11 +2,11 @@
 
 ## Project Structure & Module Organization
 
-The repository contains top-level platform scripts: `ikev2-strongswan-ubuntu-v6.2.0.sh` manages the Ubuntu StrongSwan server, while the Linux and Windows scripts manage desktop clients. Keep generated certificates and credentials out of source control.
+The repository contains top-level platform scripts: `ikev2-strongswan-ubuntu.sh` manages the Ubuntu StrongSwan server, while the Linux and Windows scripts manage desktop clients. Keep generated certificates and credentials out of source control.
 
 ## Build, Test, and Development Commands
 
-From the repository root, run `bash -n ikev2-strongswan-ubuntu-v6.2.0.sh ikev2-linux-client-v1.6.sh` and, when installed, ShellCheck on both files. Use disposable VMs for privileged VPN integration tests.
+From the repository root, run `bash -n ikev2-strongswan-ubuntu.sh ikev2-linux-client-v1.6.sh` and, when installed, ShellCheck on both files. Use disposable VMs for privileged VPN integration tests.
 
 ## Coding Style & Naming Conventions
 

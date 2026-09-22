@@ -1,0 +1,57 @@
+name: Client CI
+
+on:
+  push:
+    paths:
+      - "ikev2-windows-client-*.ps1"
+      - "ikev2-linux-client-*.sh"
+      - ".github/workflows/clients-ci.yml"
+  pull_request:
+    paths:
+      - "ikev2-windows-client-*.ps1"
+      - "ikev2-linux-client-*.sh"
+      - ".github/workflows/clients-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate-clients:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install ShellCheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Validate Linux client
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mapfile -t files < <(find . -maxdepth 1 -type f -name 'ikev2-linux-client-*.sh' -print | sort)
+          [[ ${#files[@]} -eq 1 ]] || {
+            printf 'Expected exactly one Linux client script, found %s.\n' "${#files[@]}"
+            exit 1
+          }
+          bash -n "${files[0]}"
+          shellcheck --severity=warning "${files[0]}"
+
+      - name: Validate Windows client
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -File -Filter "ikev2-windows-client-*.ps1"
+          if ($files.Count -ne 1) {
+            throw "Expected exactly one Windows client script, found $($files.Count)."
+          }
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            $files[0].FullName,
+            [ref]$null,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | Format-List
+            throw "PowerShell parser reported errors."
+          }
+          Write-Host "Windows client syntax is valid: $($files[0].Name)"

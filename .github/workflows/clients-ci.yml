@@ -44,10 +44,11 @@ jobs:
           if ($files.Count -ne 1) {
             throw "Expected exactly one Windows client script, found $($files.Count)."
           }
+          $tokens = $null
           $errors = $null
           [System.Management.Automation.Language.Parser]::ParseFile(
             $files[0].FullName,
-            [ref]$null,
+            [ref]$tokens,
             [ref]$errors
           ) | Out-Null
           if ($errors.Count -gt 0) {

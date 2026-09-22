@@ -2634,11 +2634,11 @@ run_diagnostics() {
   printf '\n%bIKEv2 Server Diagnostics%b\n' "$BOLD" "$RESET"
   printf '========================\n\n'
 
+  # shellcheck disable=SC1090
   if [[ ! -e "$STATE_FILE" ]]; then
     diag_fail "Managed installation state" "Managed state file is missing or unreadable"
   elif [[ ! -r "$STATE_FILE" ]]; then
     diag_fail "Managed installation state" "Managed state file is missing or unreadable"
-  # shellcheck disable=SC1090
   elif source "$STATE_FILE"; then
     initialize_proxy_state_defaults
     DIAG_STATE_LOADED="yes"

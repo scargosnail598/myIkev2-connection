@@ -2066,7 +2066,7 @@ add_vpn_user() {
 change_vpn_user_password() {
   local escaped_password
   local temp_file
-  local line entry_username separator secret_type remainder
+  local line entry_username separator secret_type
 
   require_managed_installation
   if [[ ! -f "$IPSEC_SECRETS" ]]; then
@@ -2093,6 +2093,7 @@ change_vpn_user_password() {
       entry_username=""
       separator=""
       secret_type=""
+<<<<<<< HEAD
       IFS=
         printf '%s : EAP "%s"\n' "$SELECTED_VPN_USER" "$escaped_password"
       else
@@ -2163,6 +2164,9 @@ remove_vpn_user() {
       secret_type=""
       remainder=""
       IFS=$' \t' read -r entry_username separator secret_type remainder <<< "$line"
+=======
+      IFS=$' \t' read -r entry_username separator secret_type _ <<< "$line"
+>>>>>>> 926050a (review)
       if [[ "$entry_username" == "$SELECTED_VPN_USER" && "$separator" == ":" && "$secret_type" == "EAP" ]]; then
         continue
       fi
@@ -2941,7 +2945,7 @@ main "$@" \t' read -r entry_username separator secret_type _ <<< "$line"
 remove_vpn_user() {
   local user_count
   local temp_file
-  local line entry_username separator secret_type remainder
+  local line entry_username separator secret_type
 
   require_managed_installation
   if [[ ! -f "$IPSEC_SECRETS" ]]; then
@@ -2981,8 +2985,7 @@ remove_vpn_user() {
       entry_username=""
       separator=""
       secret_type=""
-      remainder=""
-      IFS=$' \t' read -r entry_username separator secret_type remainder <<< "$line"
+      IFS=$' \t' read -r entry_username separator secret_type _ <<< "$line"
       if [[ "$entry_username" == "$SELECTED_VPN_USER" && "$separator" == ":" && "$secret_type" == "EAP" ]]; then
         continue
       fi

@@ -828,9 +828,7 @@ PY
     IKEV_USERNAME="${values[3]}"
     IKEV_CA_DATA="${values[4]}"
     IKEV_CA_SHA256="${values[5]}"
-    IKEV_SERVER_PROFILE="${values[6]}"
     IKEV_PROXY_ENABLED="${values[7]}"
-    IKEV_PROXY_TYPE="${values[8]}"
     IKEV_PROXY_HOST="${values[9]}"
     IKEV_PROXY_PORT="${values[10]}"
 

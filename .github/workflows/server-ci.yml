@@ -1,0 +1,58 @@
+name: Server CI
+
+on:
+  push:
+    paths:
+      - "ikev2-strongswan-ubuntu-*.sh"
+      - ".github/workflows/server-ci.yml"
+  pull_request:
+    paths:
+      - "ikev2-strongswan-ubuntu-*.sh"
+      - ".github/workflows/server-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate-server:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install ShellCheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Find server installer
+        id: server
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mapfile -t files < <(find . -maxdepth 1 -type f -name 'ikev2-strongswan-ubuntu-*.sh' -print | sort)
+          [[ ${#files[@]} -eq 1 ]] || {
+            printf 'Expected exactly one server installer, found %s.\n' "${#files[@]}"
+            printf '%s\n' "${files[@]}"
+            exit 1
+          }
+          printf 'path=%s\n' "${files[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Bash syntax check
+        run: bash -n "${{ steps.server.outputs.path }}"
+
+      - name: ShellCheck
+        run: shellcheck --severity=warning "${{ steps.server.outputs.path }}"
+
+      - name: Validate installer version
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          file="${{ steps.server.outputs.path }}"
+          filename_version=$(basename "$file" | sed -nE 's/^ikev2-strongswan-ubuntu-v([0-9]+\.[0-9]+\.[0-9]+)\.sh$/\1/p')
+          script_version=$(sed -nE 's/^CURRENT_INSTALLER_VERSION="([0-9]+\.[0-9]+\.[0-9]+).*"$/\1/p' "$file" | head -n1)
+          [[ -n "$filename_version" ]] || { echo "Could not parse version from filename"; exit 1; }
+          [[ -n "$script_version" ]] || { echo "Could not parse CURRENT_INSTALLER_VERSION"; exit 1; }
+          [[ "$filename_version" == "$script_version" ]] || {
+            echo "Version mismatch: filename=$filename_version script=$script_version"
+            exit 1
+          }
+          echo "Server installer version: $script_version"

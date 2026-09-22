@@ -309,15 +309,27 @@ function Read-IkevProfile {
     if ($caSha256 -notmatch '^(?:[0-9A-F]{2}:){31}[0-9A-F]{2}$') {
         throw "The embedded CA certificate fingerprint is invalid."
     }
+            $certificateTrust = $profile.certificate_trust
+            if ([string]::IsNullOrWhiteSpace($certificateTrust)) {
+                $certificateTrust = "private-ca"
+            }
+            if ($certificateTrust -cne "private-ca" -and $certificateTrust -cne "public") {
+                throw "Unsupported certificate trust mode: $certificateTrust."
+            }
 
-    $proxy = Get-RequiredIkevProperty -Object $profile -Name "proxy"
-    $proxyEnabled = Get-RequiredIkevProperty -Object $proxy -Name "enabled"
-    if ($proxyEnabled -isnot [bool]) {
-        throw "The .ikev profile contains invalid proxy metadata."
-    }
-
-    $proxyType = $null
-    $proxyHost = $null
+            $caData = $null
+            $caSha256 = $null
+            if ($certificateTrust -cne "public") {
+                $ca = Get-RequiredIkevProperty -Object $profile -Name "ca_certificate"
+                $caEncoding = Get-RequiredIkevString -Object $ca -Name "encoding"
+                if ($caEncoding -cne "der-base64") {
+                    throw "Unsupported CA certificate encoding: $caEncoding."
+                }
+                $caData = Get-RequiredIkevString -Object $ca -Name "data"
+                $caSha256 = Get-RequiredIkevString -Object $ca -Name "sha256"
+                if ($caSha256 -notmatch '^(?:[0-9A-F]{2}:){31}[0-9A-F]{2}$') {
+                    throw "The embedded CA certificate fingerprint is invalid."
+                }
     $proxyPort = $null
     if ($proxyEnabled) {
         $proxyType = Get-RequiredIkevString -Object $proxy -Name "type"
@@ -348,7 +360,7 @@ function Read-IkevProfile {
         ConnectionMode = $mode
         ServerProfile = $serverProfile
         CaData        = $caData
-        CaSha256      = $caSha256.ToUpperInvariant()
+        CaSha256      = if ($caSha256) { $caSha256.ToUpperInvariant() } else { $null }
         ProxyEnabled  = [bool]$proxyEnabled
         ProxyType     = $proxyType
         ProxyHost     = $proxyHost
@@ -1325,7 +1337,10 @@ function Import-IkevProfile {
 
     try {
         $importedProfile = Read-IkevProfile -Path $profilePath
-        $certificateInfo = Get-IkevCertificateInfo -Profile $importedProfile
+        $certificateInfo = $null
+        if ($importedProfile.CertificateTrust -ne "public") {
+            $certificateInfo = Get-IkevCertificateInfo -Profile $importedProfile
+        }
     }
     catch {
         $_.Exception.Message -split "`r?`n" | ForEach-Object { Write-Warn $_ }
@@ -1350,7 +1365,12 @@ function Import-IkevProfile {
         Write-Host "Username    : $($importedProfile.Username)"
         Write-Host "Auth        : EAP-MSCHAPv2"
         Write-Host "Mode        : Full tunnel"
-        Write-Host "CA SHA-256  : $($certificateInfo.Fingerprint)"
+        if ($importedProfile.CertificateTrust -eq "public") {
+            Write-Host "Trust       : Public system trust"
+        }
+        else {
+            Write-Host "CA SHA-256  : $($certificateInfo.Fingerprint)"
+        }
         Write-Host "Server type : $($importedProfile.ServerProfile)"
         Write-Host "Proxy Mode  : $proxySummary"
         Write-Host ""
@@ -1378,14 +1398,24 @@ function Import-IkevProfile {
             $replaceExisting = $true
         }
 
-        try {
-            $script:caInfo = Ensure-ImportedCaTrusted `
-                -Certificate $certificateInfo.Certificate `
-                -DerBytes $certificateInfo.DerBytes
+        if ($importedProfile.CertificateTrust -eq "public") {
+            $script:caInfo = [PSCustomObject]@{
+                File = $null
+                Name = "public system trust"
+                Subject = $null
+                Thumbprint = $null
+            }
         }
-        catch {
-            Write-Host "[!] $($_.Exception.Message)" -ForegroundColor Red
-            return
+        else {
+            try {
+                $script:caInfo = Ensure-ImportedCaTrusted `
+                    -Certificate $certificateInfo.Certificate `
+                    -DerBytes $certificateInfo.DerBytes
+            }
+            catch {
+                Write-Host "[!] $($_.Exception.Message)" -ForegroundColor Red
+                return
+            }
         }
 
         $newProfile = Install-Ikev2ProfileCore `
@@ -1714,13 +1744,18 @@ while ($true) {
     switch ($choice) {
         "1" {
             Install-OrUpdateVpn
-            Pause-Menu
-        }
-
-        "2" {
+            if ($manualCaFile) {
+                $script:caInfo = Ensure-CaTrusted -CertificateFile $manualCaFile
+            }
+            else {
+                $script:caInfo = [PSCustomObject]@{
+                    File = $null
+                    Name = "public system trust"
+                    Subject = $null
+                    Thumbprint = $null
+                }
+                Write-Info "No custom CA found; Windows will use the public system trust store."
             Import-IkevProfile
-            Pause-Menu
-        }
 
         "3" {
             $profile = Select-Ikev2Profile -Action "view"

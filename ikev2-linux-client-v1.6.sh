@@ -732,14 +732,20 @@ mode = string_field(connection, "mode")
 if mode != "full-tunnel":
     fail("MODE", mode)
 
-ca_certificate = profile.get("ca_certificate")
-if not isinstance(ca_certificate, dict):
-    fail("SCHEMA", "ca_certificate")
-encoding = string_field(ca_certificate, "encoding")
-if encoding != "der-base64":
-    fail("ENCODING", encoding)
-ca_data = string_field(ca_certificate, "data")
-ca_sha256 = string_field(ca_certificate, "sha256")
+certificate_trust = profile.get("certificate_trust", "private-ca")
+if certificate_trust not in ("private-ca", "public"):
+    fail("TRUST", certificate_trust)
+ca_data = ""
+ca_sha256 = ""
+if certificate_trust == "private-ca":
+    ca_certificate = profile.get("ca_certificate")
+    if not isinstance(ca_certificate, dict):
+        fail("SCHEMA", "ca_certificate")
+    encoding = string_field(ca_certificate, "encoding")
+    if encoding != "der-base64":
+        fail("ENCODING", encoding)
+    ca_data = string_field(ca_certificate, "data")
+    ca_sha256 = string_field(ca_certificate, "sha256")
 
 server_profile = string_field(profile, "server_profile")
 if server_profile not in ("secure", "stock-windows-compatible"):
@@ -768,6 +774,7 @@ for value in (
     remote_id,
     username,
     ca_data,
+    certificate_trust,
     ca_sha256,
     server_profile,
     "true" if proxy_enabled else "false",
@@ -803,6 +810,9 @@ PY
             SERVER_PROFILE)
                 warn "Unsupported server profile: ${error_value}."
                 ;;
+            TRUST)
+                warn "Unsupported certificate trust mode: ${error_value}."
+                ;;
             PROXY_TYPE)
                 warn "Unsupported proxy type: ${error_value}."
                 ;;
@@ -827,10 +837,11 @@ PY
     IKEV_REMOTE_ID="${values[2]}"
     IKEV_USERNAME="${values[3]}"
     IKEV_CA_DATA="${values[4]}"
-    IKEV_CA_SHA256="${values[5]}"
-    IKEV_PROXY_ENABLED="${values[7]}"
-    IKEV_PROXY_HOST="${values[9]}"
-    IKEV_PROXY_PORT="${values[10]}"
+    IKEV_CERTIFICATE_TRUST="${values[5]}"
+    IKEV_CA_SHA256="${values[6]}"
+    IKEV_PROXY_ENABLED="${values[8]}"
+    IKEV_PROXY_HOST="${values[10]}"
+    IKEV_PROXY_PORT="${values[11]}"
 
     if ! validate_profile_name "$IKEV_NAME"; then
         warn "The .ikev profile name is invalid."
@@ -1026,17 +1037,19 @@ import_ikev_profile() (
     chmod 0700 "$IKEV_IMPORT_TEMP_DIR"
     trap cleanup_ikev_import_temp EXIT
 
-    temp_der="$IKEV_IMPORT_TEMP_DIR/ca.der"
-    temp_pem="$IKEV_IMPORT_TEMP_DIR/ca.pem"
-    if ! (umask 077; printf '%s' "$IKEV_CA_DATA" | base64 --decode > "$temp_der" 2>/dev/null); then
-        warn "The embedded CA certificate is invalid."
-        return
-    fi
-    if ! verify_imported_ca "$temp_der" "$temp_pem" "$IKEV_CA_SHA256"; then
-        return
-    fi
-    if ! check_imported_ca_compatibility "$IKEV_VERIFIED_CA_FINGERPRINT"; then
-        return
+    if [[ "$IKEV_CERTIFICATE_TRUST" == "private-ca" ]]; then
+        temp_der="$IKEV_IMPORT_TEMP_DIR/ca.der"
+        temp_pem="$IKEV_IMPORT_TEMP_DIR/ca.pem"
+        if ! (umask 077; printf '%s' "$IKEV_CA_DATA" | base64 --decode > "$temp_der" 2>/dev/null); then
+            warn "The embedded CA certificate is invalid."
+            return
+        fi
+        if ! verify_imported_ca "$temp_der" "$temp_pem" "$IKEV_CA_SHA256"; then
+            return
+        fi
+        if ! check_imported_ca_compatibility "$IKEV_VERIFIED_CA_FINGERPRINT"; then
+            return
+        fi
     fi
 
     if [[ "$IKEV_PROXY_ENABLED" == "true" ]]; then
@@ -1053,7 +1066,11 @@ import_ikev_profile() (
     printf 'Username    : %s\n' "$IKEV_USERNAME"
     printf 'Auth        : EAP-MSCHAPv2\n'
     printf 'Mode        : Full tunnel\n'
-    printf 'CA SHA-256  : %s\n' "$IKEV_VERIFIED_CA_FINGERPRINT"
+    if [[ "$IKEV_CERTIFICATE_TRUST" == "public" ]]; then
+        printf 'Trust       : Public system trust\n'
+    else
+        printf 'CA SHA-256  : %s\n' "$IKEV_VERIFIED_CA_FINGERPRINT"
+    fi
     printf 'Proxy Mode  : %s\n\n' "$proxy_summary"
 
     if ! read -r -p "Import and trust this VPN profile? [y/N]: " answer ||
@@ -1084,9 +1101,11 @@ import_ikev_profile() (
         warn "Password cannot be empty."
     done
 
-    if ! install_imported_ca "$temp_pem"; then
-        unset password
-        return
+    if [[ "$IKEV_CERTIFICATE_TRUST" == "private-ca" ]]; then
+        if ! install_imported_ca "$temp_pem"; then
+            unset password
+            return
+        fi
     fi
 
     ensure_directories

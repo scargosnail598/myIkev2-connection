@@ -13,7 +13,7 @@ The Linux client currently operates as a full-tunnel client.
 
 | Component | File | Version / Target |
 |---|---|---|
-| Server | `ikev2-strongswan-ubuntu.sh` | v6.2.3 / Ubuntu 22.04 & 24.04 |
+| Server | `ikev2-strongswan-ubuntu.sh` | v6.3.0 / Ubuntu 22.04 & 24.04 |
 | Windows client | `ikev2-windows-client-v6.1.ps1` | v6.1.0 / PowerShell 5.1+ |
 | Linux client | `ikev2-linux-client-v1.6.sh` | v1.6.0 / Ubuntu 22.04 & 24.04 |
 
@@ -126,6 +126,20 @@ IKEv2 VPN Root CA
 
 The installer generates a private CA and signs the VPN server certificate with it.
 
+### Public Let’s Encrypt certificate
+
+The installer can instead use a publicly trusted Let’s Encrypt certificate. Choose
+`Yes` when prompted to use Let’s Encrypt, then enter a DNS name such as
+`vpn.example.com`. The name must resolve to the server and TCP port `80` must be
+reachable during the initial HTTP-01 certificate request. An IPv4 address cannot
+be used for this mode.
+
+Certbot renews the 90-day certificate through its normal systemd timer. The
+installer adds a deploy hook that reloads the StrongSwan certificates after a
+successful renewal. The server's `status` command reports the selected trust mode.
+No custom CA file is exported or imported in this mode; supported clients use the
+operating system's public trust store.
+
 ### Windows compatibility
 
 The server offers optional stock Windows compatibility.
@@ -232,9 +246,10 @@ VPN profile format. Version 1 is a JSON document identified by
 by the Windows and Linux clients. Linux v1.6 and Windows v6.1 import this same
 frozen format.
 
-The profile embeds the public CA certificate as single-line Base64-encoded DER
-and includes its OpenSSL SHA-256 fingerprint. VPN passwords, private keys, and
-other secret material are never included. Profiles are written with mode
+Private-CA profiles embed the public CA certificate as single-line Base64-encoded
+DER and include its OpenSSL SHA-256 fingerprint. Let’s Encrypt profiles instead
+contain `"certificate_trust": "public"` and do not embed a CA certificate. VPN
+passwords, private keys, and other secret material are never included. Profiles are written with mode
 `0600` under:
 
 ```text

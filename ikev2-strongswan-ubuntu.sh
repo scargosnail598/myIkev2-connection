@@ -6,7 +6,7 @@ IFS=$'\n\t'
 # Uses StrongSwan, EAP-MSCHAPv2, a private CA, and IPv4 full-tunnel NAT.
 
 INSTALLER_NAME="ikev2-easy-installer"
-CURRENT_INSTALLER_VERSION="6.2.3-en"
+CURRENT_INSTALLER_VERSION="6.3.0-en"
 INSTALLER_VERSION="$CURRENT_INSTALLER_VERSION"
 
 STATE_DIR="/var/lib/${INSTALLER_NAME}"
@@ -39,6 +39,7 @@ CA_KEY="/etc/ipsec.d/private/ikev2-installer-ca-key.pem"
 CA_CERT="/etc/ipsec.d/cacerts/ikev2-installer-ca-cert.pem"
 SERVER_KEY="/etc/ipsec.d/private/ikev2-installer-server-key.pem"
 SERVER_CERT="/etc/ipsec.d/certs/ikev2-installer-server-cert.pem"
+CERTBOT_RELOAD_HOOK="/etc/letsencrypt/renewal-hooks/deploy/ikev2-strongswan-reload.sh"
 
 REQUESTED_PACKAGES=(
   strongswan-starter
@@ -393,6 +394,8 @@ write_state() {
     printf 'VPN_SUBNET=%q\n' "$VPN_SUBNET"
     printf 'DNS_SERVERS=%q\n' "$DNS_SERVERS"
     printf 'CA_NAME=%q\n' "$CA_NAME"
+    printf 'CERTIFICATE_MODE=%q\n' "${CERTIFICATE_MODE:-private-ca}"
+    printf 'CERTBOT_RELOAD_HOOK_EXISTED=%q\n' "${CERTBOT_RELOAD_HOOK_EXISTED:-no}"
     printf 'ALLOW_STOCK_WINDOWS=%q\n' "$ALLOW_STOCK_WINDOWS"
     printf 'CLIENT_DIR=%q\n' "$CLIENT_DIR"
     printf 'NEW_PACKAGES=%q\n' "$NEW_PACKAGES"
@@ -662,6 +665,10 @@ record_preinstall_state() {
   mkdir -p "$BACKUP_DIR"
   chmod 700 "$STATE_DIR" "$BACKUP_DIR"
 
+  if [[ "${CERTIFICATE_MODE:-private-ca}" == "public-trust" ]]; then
+    REQUESTED_PACKAGES+=(certbot)
+  fi
+
   STRONGSWAN_WAS_ENABLED="no"
   STRONGSWAN_WAS_ACTIVE="no"
   FW_SERVICE_WAS_ENABLED="no"
@@ -697,6 +704,12 @@ record_preinstall_state() {
   backup_file "$CA_CERT" "ca-cert.pem" && CA_CERT_EXISTED="yes" || true
   backup_file "$SERVER_KEY" "server-key.pem" && SERVER_KEY_EXISTED="yes" || true
   backup_file "$SERVER_CERT" "server-cert.pem" && SERVER_CERT_EXISTED="yes" || true
+  if [[ -e "$CERTBOT_RELOAD_HOOK" ]]; then
+    CERTBOT_RELOAD_HOOK_EXISTED="yes"
+    backup_file "$CERTBOT_RELOAD_HOOK" "certbot-reload-hook"
+  else
+    CERTBOT_RELOAD_HOOK_EXISTED="no"
+  fi
 
   NEW_PACKAGES=""
   local package
@@ -728,43 +741,58 @@ install_packages() {
 }
 
 create_certificates() {
-  log "Generating the private CA and server certificate..."
+  log "Preparing the VPN server certificate..."
 
   install -d -m 700 /etc/ipsec.d/private
   install -d -m 755 /etc/ipsec.d/cacerts /etc/ipsec.d/certs
 
-  umask 077
-  pki --gen --type rsa --size 4096 --outform pem > "$CA_KEY"
-  pki --self --ca --lifetime 3650 --in "$CA_KEY" --type rsa \
-    --dn "CN=${CA_NAME}" --outform pem > "$CA_CERT"
-
-  pki --gen --type rsa --size 3072 --outform pem > "$SERVER_KEY"
-
-  if is_ipv4 "$SERVER_ID"; then
-    pki --pub --in "$SERVER_KEY" --type rsa | \
-      pki --issue --lifetime 1825 --cacert "$CA_CERT" --cakey "$CA_KEY" \
-        --dn "CN=${SERVER_ID}" \
-        --san "$SERVER_ID" \
-        --san "dns:${SERVER_ID}" \
-        --flag serverAuth \
-        --flag ikeIntermediate \
-        --outform pem > "$SERVER_CERT"
+  if [[ "$CERTIFICATE_MODE" == "public-trust" ]]; then
+    [[ ! "$SERVER_ID" =~ ^[0-9.]+$ ]] || die "Let's Encrypt requires a DNS name, not an IPv4 address."
+    log "Requesting a Let's Encrypt certificate for ${SERVER_ID}..."
+    certbot certonly --standalone --non-interactive --agree-tos \
+      --register-unsafely-without-email -d "$SERVER_ID"
+    [[ -r "/etc/letsencrypt/live/${SERVER_ID}/fullchain.pem" ]] || die "Let's Encrypt certificate was not created."
+    [[ -r "/etc/letsencrypt/live/${SERVER_ID}/privkey.pem" ]] || die "Let's Encrypt private key was not created."
+    ln -sfn "/etc/letsencrypt/live/${SERVER_ID}/fullchain.pem" "$SERVER_CERT"
+    ln -sfn "/etc/letsencrypt/live/${SERVER_ID}/privkey.pem" "$SERVER_KEY"
+    install -d -m 755 "$(dirname "$CERTBOT_RELOAD_HOOK")"
+    cat > "$CERTBOT_RELOAD_HOOK" <<EOF
+#!/usr/bin/env bash
+set -Eeuo pipefail
+if systemctl is-active --quiet ${STRONGSWAN_SERVICE}; then
+  ipsec rereadall >/dev/null 2>&1 || systemctl restart ${STRONGSWAN_SERVICE}
+fi
+EOF
+    chmod 700 "$CERTBOT_RELOAD_HOOK"
   else
-    pki --pub --in "$SERVER_KEY" --type rsa | \
-      pki --issue --lifetime 1825 --cacert "$CA_CERT" --cakey "$CA_KEY" \
-        --dn "CN=${SERVER_ID}" \
-        --san "$SERVER_ID" \
-        --flag serverAuth \
-        --flag ikeIntermediate \
-        --outform pem > "$SERVER_CERT"
+    umask 077
+    pki --gen --type rsa --size 4096 --outform pem > "$CA_KEY"
+    pki --self --ca --lifetime 3650 --in "$CA_KEY" --type rsa \
+      --dn "CN=${CA_NAME}" --outform pem > "$CA_CERT"
+
+    pki --gen --type rsa --size 3072 --outform pem > "$SERVER_KEY"
+
+    if is_ipv4 "$SERVER_ID"; then
+      pki --pub --in "$SERVER_KEY" --type rsa | \
+        pki --issue --lifetime 1825 --cacert "$CA_CERT" --cakey "$CA_KEY" \
+        --dn "CN=${SERVER_ID}" --san "$SERVER_ID" --san "dns:${SERVER_ID}" \
+        --flag serverAuth --flag ikeIntermediate --outform pem > "$SERVER_CERT"
+    else
+      pki --pub --in "$SERVER_KEY" --type rsa | \
+        pki --issue --lifetime 1825 --cacert "$CA_CERT" --cakey "$CA_KEY" \
+        --dn "CN=${SERVER_ID}" --san "$SERVER_ID" \
+        --flag serverAuth --flag ikeIntermediate --outform pem > "$SERVER_CERT"
+    fi
+
+    chmod 600 "$CA_KEY" "$SERVER_KEY"
+    chmod 644 "$CA_CERT" "$SERVER_CERT"
   fi
 
-  chmod 600 "$CA_KEY" "$SERVER_KEY"
-  chmod 644 "$CA_CERT" "$SERVER_CERT"
-
   install -d -m 700 "$CLIENT_DIR"
-  install -m 644 "$CA_CERT" "${CLIENT_DIR}/ca-cert.pem"
-  openssl x509 -in "$CA_CERT" -outform der -out "${CLIENT_DIR}/ca-cert.cer"
+  if [[ "$CERTIFICATE_MODE" == "private-ca" ]]; then
+    install -m 644 "$CA_CERT" "${CLIENT_DIR}/ca-cert.pem"
+    openssl x509 -in "$CA_CERT" -outform der -out "${CLIENT_DIR}/ca-cert.cer"
+  fi
   install -m 644 "$SERVER_CERT" "${CLIENT_DIR}/server-cert.pem"
 }
 
@@ -947,17 +975,33 @@ Remote ID: ${SERVER_ID}
 Authentication: EAP-MSCHAPv2 username and password
 VPN address pool: ${VPN_SUBNET}
 DNS servers: ${DNS_SERVERS}
-CA certificate for Windows: ca-cert.cer
-CA certificate in PEM format: ca-cert.pem
+Certificate trust mode: ${CERTIFICATE_MODE}
 
 Client setup summary
 --------------------
+EOF
+
+  if [[ "$CERTIFICATE_MODE" == "private-ca" ]]; then
+    cat >> "${CLIENT_DIR}/client-info.txt" <<'EOF'
+CA certificate for Windows: ca-cert.cer
+CA certificate in PEM format: ca-cert.pem
+
 1. Import the CA certificate into the trusted root CA store.
 2. Create an IKEv2 VPN connection to the server address shown above.
 3. Use the same server address as the remote/server identity when the client asks for it.
 4. Authenticate with one of the configured usernames and passwords.
 5. Allow UDP ports 500 and 4500 in any external cloud firewall or security group.
 EOF
+  else
+    cat >> "${CLIENT_DIR}/client-info.txt" <<'EOF'
+
+1. Create an IKEv2 VPN connection to the server address shown above.
+2. Use the same server address as the remote/server identity when the client asks for it.
+3. Authenticate with one of the configured usernames and passwords.
+4. The server certificate is publicly trusted; no custom CA import is required.
+5. Allow UDP ports 500 and 4500 in any external cloud firewall or security group.
+EOF
+  fi
 
   if [[ "$ALLOW_STOCK_WINDOWS" == "no" ]]; then
     cat >> "${CLIENT_DIR}/client-info.txt" <<'EOF'
@@ -1316,8 +1360,12 @@ show_install_result() {
     printf '  Password: %s\n' "${USER_PASSWORDS[$index]}"
   done
 
-  printf '\nImport this CA certificate into each client trusted root store:\n'
-  printf '  %s\n' "${CLIENT_DIR}/ca-cert.cer"
+  if [[ "${CERTIFICATE_MODE:-private-ca}" == "private-ca" ]]; then
+    printf '\nImport this CA certificate into each client trusted root store:\n'
+    printf '  %s\n' "${CLIENT_DIR}/ca-cert.cer"
+  else
+    printf '\nServer certificate trust: public system trust (Let''s Encrypt)\n'
+  fi
   printf '\nRoot-only credential copy:\n'
   printf '  %s\n' "${CLIENT_DIR}/client-credentials.txt"
   printf '\nStatus:    sudo %s status\n' "$0"
@@ -1391,14 +1439,24 @@ install_vpn() {
     warn "Enter one or more valid IPv4 DNS addresses separated by commas."
   done
 
-  while true; do
-    ask_value CA_NAME \
-      "Private CA name" \
-      "Display name of the private Root CA that will sign the VPN server certificate." \
-      "IKEv2 VPN Root CA"
-    validate_ca_name "$CA_NAME" && break
-    warn "Use letters, numbers, spaces, dot, underscore, and hyphen only; maximum 64 characters."
-  done
+  printf '\n%bCertificate trust%b\n' "$BOLD" "$RESET"
+  printf '  Private CA requires distributing ca-cert.cer to clients.\n'
+  printf '  Let''s Encrypt requires a public DNS name pointing to this server and TCP/80 available during issuance.\n'
+  if ask_yes_no "Use Let's Encrypt for the server certificate?" N; then
+    CERTIFICATE_MODE="public-trust"
+    CA_NAME=""
+    [[ ! "$SERVER_ID" =~ ^[0-9.]+$ ]] || die "Let''s Encrypt requires a DNS name, not an IPv4 address."
+  else
+    CERTIFICATE_MODE="private-ca"
+    while true; do
+      ask_value CA_NAME \
+        "Private CA name" \
+        "Display name of the private Root CA that will sign the VPN server certificate." \
+        "IKEv2 VPN Root CA"
+      validate_ca_name "$CA_NAME" && break
+      warn "Use letters, numbers, spaces, dot, underscore, and hyphen only; maximum 64 characters."
+    done
+  fi
 
   printf '\n%bWindows compatibility%b\n' "$BOLD" "$RESET"
   printf '  Stock Windows clients commonly require legacy MODP-1024 and ESP SHA-1 fallback unless their IPsec policy is changed.\n'
@@ -1435,7 +1493,8 @@ install_vpn() {
   printf '  Internet interface : %s\n' "$OUT_IF"
   printf '  VPN subnet         : %s\n' "$VPN_SUBNET"
   printf '  DNS servers        : %s\n' "$DNS_SERVERS"
-  printf '  CA name            : %s\n' "$CA_NAME"
+  printf '  Certificate trust  : %s\n' "$CERTIFICATE_MODE"
+  [[ "$CERTIFICATE_MODE" == "private-ca" ]] && printf '  CA name            : %s\n' "$CA_NAME"
   printf '  Users              : %s\n' "${#USER_NAMES[@]}"
   printf '  Windows profile    : %s\n' "$( [[ "$ALLOW_STOCK_WINDOWS" == "yes" ]] && echo 'stock-compatible' || echo 'secure' )"
   if [[ "$PROXY_ENABLED" == "yes" ]]; then
@@ -1582,6 +1641,11 @@ uninstall_vpn() {
   restore_file "$CA_CERT" "ca-cert.pem" "${CA_CERT_EXISTED:-no}"
   restore_file "$SERVER_KEY" "server-key.pem" "${SERVER_KEY_EXISTED:-no}"
   restore_file "$SERVER_CERT" "server-cert.pem" "${SERVER_CERT_EXISTED:-no}"
+  if [[ "${CERTBOT_RELOAD_HOOK_EXISTED:-no}" == "yes" ]]; then
+    restore_file "$CERTBOT_RELOAD_HOOK" "certbot-reload-hook" yes
+  else
+    rm -f "$CERTBOT_RELOAD_HOOK"
+  fi
 
   if [[ "$PROXY_BASELINE_RECORDED" == "yes" ]]; then
     restore_file "$PROXY_CONF" "proxy-danted.conf" "${PROXY_CONF_EXISTED:-no}"
@@ -1835,7 +1899,7 @@ select_vpn_user() {
 
 export_ikev_profile() {
   local profiles_dir profile_path temp_file=""
-  local ca_data ca_fingerprint fingerprint_output
+  local ca_data="" ca_fingerprint="" fingerprint_output=""
   local profile_name server_profile proxy_summary
 
   require_managed_installation
@@ -1843,7 +1907,7 @@ export_ikev_profile() {
   printf '\n%bIKEv Client Profile Export%b\n' "$BOLD" "$RESET"
   printf '==========================\n\n'
 
-  if [[ ! -r "$CA_CERT" ]]; then
+  if [[ "${CERTIFICATE_MODE:-private-ca}" == "private-ca" && ! -r "$CA_CERT" ]]; then
     warn "Cannot export profile because the managed CA certificate is missing."
     return 0
   fi
@@ -1865,16 +1929,18 @@ export_ikev_profile() {
     fi
   fi
 
-  if ! command_exists openssl || \
-     ! ca_data=$(openssl x509 -in "$CA_CERT" -outform DER 2>/dev/null | openssl base64 -A 2>/dev/null) || \
-     ! fingerprint_output=$(openssl x509 -in "$CA_CERT" -noout -fingerprint -sha256 2>/dev/null); then
-    warn "Cannot export profile because the CA certificate could not be processed."
-    return 0
-  fi
-  ca_fingerprint="${fingerprint_output#*=}"
-  if [[ -z "$ca_data" || -z "$ca_fingerprint" || "$ca_fingerprint" == "$fingerprint_output" ]]; then
-    warn "Cannot export profile because the CA certificate could not be processed."
-    return 0
+  if [[ "${CERTIFICATE_MODE:-private-ca}" == "private-ca" ]]; then
+    if ! command_exists openssl || \
+       ! ca_data=$(openssl x509 -in "$CA_CERT" -outform DER 2>/dev/null | openssl base64 -A 2>/dev/null) || \
+       ! fingerprint_output=$(openssl x509 -in "$CA_CERT" -noout -fingerprint -sha256 2>/dev/null); then
+      warn "Cannot export profile because the CA certificate could not be processed."
+      return 0
+    fi
+    ca_fingerprint="${fingerprint_output#*=}"
+    if [[ -z "$ca_data" || -z "$ca_fingerprint" || "$ca_fingerprint" == "$fingerprint_output" ]]; then
+      warn "Cannot export profile because the CA certificate could not be processed."
+      return 0
+    fi
   fi
 
   if [[ "${ALLOW_STOCK_WINDOWS:-no}" == "yes" ]]; then
@@ -1907,11 +1973,16 @@ export_ikev_profile() {
     printf '  "remote_id": "%s",\n' "$SERVER_ID"
     printf '  "username": "%s",\n' "$SELECTED_VPN_USER"
     printf '  "authentication": "eap-mschapv2",\n'
-    printf '  "ca_certificate": {\n'
-    printf '    "encoding": "der-base64",\n'
-    printf '    "data": "%s",\n' "$ca_data"
-    printf '    "sha256": "%s"\n' "$ca_fingerprint"
-    printf '  },\n'
+    if [[ "${CERTIFICATE_MODE:-private-ca}" == "private-ca" ]]; then
+      printf '  "certificate_trust": "private-ca",\n'
+      printf '  "ca_certificate": {\n'
+      printf '    "encoding": "der-base64",\n'
+      printf '    "data": "%s",\n' "$ca_data"
+      printf '    "sha256": "%s"\n' "$ca_fingerprint"
+      printf '  },\n'
+    else
+      printf '  "certificate_trust": "public",\n'
+    fi
     printf '  "connection": {\n'
     printf '    "mode": "full-tunnel"\n'
     printf '  },\n'
@@ -2520,6 +2591,7 @@ status_vpn() {
   printf '  Internet interface : %s\n' "$OUT_IF"
   printf '  VPN subnet         : %s\n' "$VPN_SUBNET"
   printf '  DNS servers        : %s\n' "$DNS_SERVERS"
+  printf '  Certificate trust  : %s\n' "${CERTIFICATE_MODE:-private-ca}"
   printf '  Client directory   : %s\n' "$CLIENT_DIR"
   printf '  Windows profile    : %s\n' "$( [[ "${ALLOW_STOCK_WINDOWS:-no}" == "yes" ]] && echo 'stock-compatible' || echo 'secure' )"
   printf '  StrongSwan service : %s\n' "$(systemctl is-active "$STRONGSWAN_SERVICE" 2>/dev/null || true)"
@@ -2744,11 +2816,17 @@ run_diagnostics() {
   fi
 
   check_certificate_health "$SERVER_CERT" "Server certificate"
-  check_certificate_health "$CA_CERT" "CA certificate"
+  if [[ "${CERTIFICATE_MODE:-private-ca}" == "private-ca" ]]; then
+    check_certificate_health "$CA_CERT" "CA certificate"
+  else
+    diag_ok "Certificate trust" "Public system trust (Let''s Encrypt)"
+  fi
 
-  if [[ ! -e "$CA_KEY" || ! -e "$SERVER_KEY" ]]; then
+  if [[ "${CERTIFICATE_MODE:-private-ca}" == "private-ca" && ! -e "$CA_KEY" ]] ||
+     [[ ! -e "$SERVER_KEY" ]]; then
     diag_fail "Private key files" "One or more managed private keys are missing"
-  elif [[ ! -r "$CA_KEY" || ! -r "$SERVER_KEY" ]]; then
+  elif [[ "${CERTIFICATE_MODE:-private-ca}" == "private-ca" && ! -r "$CA_KEY" ]] ||
+       [[ ! -r "$SERVER_KEY" ]]; then
     diag_fail "Private key files" "One or more managed private keys are unreadable"
   else
     diag_ok "Private key files"

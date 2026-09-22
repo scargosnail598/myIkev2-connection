@@ -1,0 +1,119 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      server: ${{ steps.server.outputs.server }}
+      windows: ${{ steps.windows.outputs.windows }}
+      linux: ${{ steps.linux.outputs.linux }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install validation tools
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Validate tag and artifacts
+        id: version
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          [[ "$tag" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+
+          mapfile -t server_files < <(find . -maxdepth 1 -type f -name 'ikev2-strongswan-ubuntu-*.sh' -print | sort)
+          mapfile -t windows_files < <(find . -maxdepth 1 -type f -name 'ikev2-windows-client-*.ps1' -print | sort)
+          mapfile -t linux_files < <(find . -maxdepth 1 -type f -name 'ikev2-linux-client-*.sh' -print | sort)
+
+          [[ ${#server_files[@]} -eq 1 ]] || { echo "Expected one server script"; exit 1; }
+          [[ ${#windows_files[@]} -eq 1 ]] || { echo "Expected one Windows client"; exit 1; }
+          [[ ${#linux_files[@]} -eq 1 ]] || { echo "Expected one Linux client"; exit 1; }
+
+          server="${server_files[0]}"
+          server_version=$(sed -nE 's/^CURRENT_INSTALLER_VERSION="([0-9]+\.[0-9]+\.[0-9]+).*"$/\1/p' "$server" | head -n1)
+          [[ "$server_version" == "$tag" ]] || {
+            echo "Tag/version mismatch: tag=$tag script=$server_version"
+            exit 1
+          }
+
+          bash -n "$server"
+          shellcheck --severity=warning "$server"
+          bash -n "${linux_files[0]}"
+          shellcheck --severity=warning "${linux_files[0]}"
+
+          echo "version=$tag" >> "$GITHUB_OUTPUT"
+          echo "server=$server" >> "$GITHUB_OUTPUT"
+          echo "windows=${windows_files[0]}" >> "$GITHUB_OUTPUT"
+          echo "linux=${linux_files[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Validate Windows client syntax
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -File -Filter "ikev2-windows-client-*.ps1"
+          if ($files.Count -ne 1) { throw "Expected one Windows client script." }
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            $files[0].FullName,
+            [ref]$null,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | Format-List
+            throw "PowerShell parser reported errors."
+          }
+
+  release:
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare release bundle
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf dist
+          mkdir -p dist
+          cp "${{ needs.validate.outputs.server }}" "dist/"
+          cp "${{ needs.validate.outputs.windows }}" "dist/"
+          cp "${{ needs.validate.outputs.linux }}" "dist/"
+
+          (
+            cd dist
+            sha256sum ./* > SHA256SUMS
+          )
+
+          cat > dist/RELEASE.json <<EOF
+          {
+            "version": "${{ needs.validate.outputs.version }}",
+            "channel": "stable",
+            "artifacts": {
+              "server": "$(basename "${{ needs.validate.outputs.server }}")",
+              "windows": "$(basename "${{ needs.validate.outputs.windows }}")",
+              "linux": "$(basename "${{ needs.validate.outputs.linux }}")",
+              "checksums": "SHA256SUMS"
+            }
+          }
+          EOF
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "IKEv2 Server/Clients ${GITHUB_REF_NAME}" \
+            --generate-notes \
+            dist/*

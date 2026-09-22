@@ -45,6 +45,7 @@ REQUESTED_PACKAGES=(
   strongswan-charon
   strongswan-libcharon
   strongswan-pki
+  curl
   libstrongswan-standard-plugins
   libstrongswan-extra-plugins
   libcharon-extauth-plugins
@@ -577,9 +578,10 @@ update_installer() {
 
   install -m 0755 "$tmp_artifact" "${current_path}.new"
   mv -f "${current_path}.new" "$current_path"
+  trap - RETURN
 
   log "Installer updated successfully: v${current} -> v${latest}"
-  info "Previous installer backup: $backup_path"
+  info "Previous installer backup: ${backup_path}"
   info "VPN configuration, certificates, users, and StrongSwan runtime were not modified."
 }
 
@@ -2296,3 +2298,619 @@ start_proxy_service() {
   fi
 
   if ! service_is_active "$STRONGSWAN_SERVICE"; then
+    warn "StrongSwan is currently stopped. The proxy can start, but clients cannot reach it until IKEv2 is started."
+  fi
+
+  log "Starting SOCKS5 Proxy Mode..."
+  systemctl start "$PROXY_SERVICE"
+
+  if service_is_active "$PROXY_SERVICE"; then
+    log "SOCKS5 Proxy Mode is running at ${PROXY_IP}:${PROXY_PORT}."
+  else
+    systemctl --no-pager -l status "$PROXY_SERVICE" || true
+    die "The SOCKS5 Proxy Mode service failed to start."
+  fi
+}
+
+stop_proxy_service() {
+  require_managed_installation
+
+  if ! proxy_mode_available; then
+    warn "SOCKS5 Proxy Mode is not configured."
+    return 0
+  fi
+
+  if ! service_is_active "$PROXY_SERVICE"; then
+    info "SOCKS5 Proxy Mode is already stopped."
+    return 0
+  fi
+
+  log "Stopping SOCKS5 Proxy Mode..."
+  systemctl stop "$PROXY_SERVICE"
+  log "SOCKS5 Proxy Mode is stopped."
+}
+
+restart_proxy_service() {
+  require_managed_installation
+
+  if ! proxy_mode_available; then
+    warn "SOCKS5 Proxy Mode is not configured."
+    warn "Use the upgrade/configure Proxy Mode option first."
+    return 0
+  fi
+
+  log "Restarting SOCKS5 Proxy Mode..."
+  systemctl restart "$PROXY_SERVICE"
+
+  if service_is_active "$PROXY_SERVICE"; then
+    log "SOCKS5 Proxy Mode restarted successfully at ${PROXY_IP}:${PROXY_PORT}."
+  else
+    systemctl --no-pager -l status "$PROXY_SERVICE" || true
+    die "The SOCKS5 Proxy Mode service failed to restart."
+  fi
+}
+
+start_all_vpn_services() {
+  require_managed_installation
+
+  if ! service_is_active "$FW_SERVICE"; then
+    log "Starting VPN firewall/NAT..."
+    systemctl start "$FW_SERVICE"
+  fi
+
+  if ! service_is_active "$STRONGSWAN_SERVICE"; then
+    log "Starting IKEv2 / StrongSwan..."
+    systemctl start "$STRONGSWAN_SERVICE"
+  fi
+
+  if proxy_mode_available && ! service_is_active "$PROXY_SERVICE"; then
+    log "Starting SOCKS5 Proxy Mode..."
+    systemctl start "$PROXY_SERVICE"
+  fi
+
+  log "Managed VPN services are running."
+}
+
+stop_all_vpn_services() {
+  require_managed_installation
+
+  if service_is_active "$STRONGSWAN_SERVICE"; then
+    confirm_ikev2_interruption "Stopping all managed VPN services" || {
+      info "Stop canceled."
+      return 0
+    }
+  fi
+
+  if proxy_mode_available && service_is_active "$PROXY_SERVICE"; then
+    log "Stopping SOCKS5 Proxy Mode..."
+    systemctl stop "$PROXY_SERVICE"
+  fi
+
+  if service_is_active "$STRONGSWAN_SERVICE"; then
+    log "Stopping IKEv2 / StrongSwan..."
+    systemctl stop "$STRONGSWAN_SERVICE"
+  fi
+
+  if service_is_active "$FW_SERVICE"; then
+    log "Stopping VPN firewall/NAT..."
+    systemctl stop "$FW_SERVICE"
+  fi
+
+  log "All managed VPN runtime services are stopped."
+  info "Configuration and boot enable/disable settings were not removed or changed."
+}
+
+service_control_menu() {
+  local choice=""
+
+  while true; do
+    require_managed_installation
+
+    printf '\n%bService Control%b\n' "$BOLD" "$RESET"
+    printf '  IKEv2 / StrongSwan : %s\n' "$(systemctl is-active "$STRONGSWAN_SERVICE" 2>/dev/null || true)"
+    printf '  Firewall / NAT     : %s\n' "$(systemctl is-active "$FW_SERVICE" 2>/dev/null || true)"
+    if proxy_mode_available; then
+      printf '  SOCKS5 Proxy       : %s (%s:%s)\n' "$(systemctl is-active "$PROXY_SERVICE" 2>/dev/null || true)" "$PROXY_IP" "$PROXY_PORT"
+    else
+      printf '  SOCKS5 Proxy       : not configured\n'
+    fi
+
+    printf '\n'
+    printf '  1) Start IKEv2\n'
+    printf '  2) Stop IKEv2\n'
+    printf '  3) Restart IKEv2\n'
+    printf '  4) Start SOCKS5 Proxy\n'
+    printf '  5) Stop SOCKS5 Proxy\n'
+    printf '  6) Restart SOCKS5 Proxy\n'
+    printf '  7) Start All VPN Services\n'
+    printf '  8) Stop All VPN Services\n'
+    printf '  9) Back\n'
+    read -r -p 'Choose [1-9]: ' choice || true
+
+    case "$choice" in
+      1) start_ikev2_service ;;
+      2) stop_ikev2_service ;;
+      3) restart_ikev2_service ;;
+      4) start_proxy_service ;;
+      5) stop_proxy_service ;;
+      6) restart_proxy_service ;;
+      7) start_all_vpn_services ;;
+      8) stop_all_vpn_services ;;
+      9) return 0 ;;
+      *) warn "Invalid selection." ;;
+    esac
+  done
+}
+
+user_management_menu() {
+  local choice="" online_count
+
+  while true; do
+    require_managed_installation
+    refresh_online_vpn_users
+    online_count=$(configured_online_vpn_user_count)
+
+    printf '\n%bUser Management%b\n' "$BOLD" "$RESET"
+    printf '===============\n\n'
+    printf 'Configured users : %s\n' "$(vpn_user_count)"
+    printf 'Online users     : %s\n\n' "$online_count"
+    printf '  1) List Users\n'
+    printf '  2) Add User\n'
+    printf '  3) Change Password\n'
+    printf '  4) Remove User\n'
+    printf '  5) Back\n'
+    read -r -p 'Choose [1-5]: ' choice || true
+
+    case "$choice" in
+      1) list_vpn_users ;;
+      2) add_vpn_user ;;
+      3) change_vpn_user_password ;;
+      4) remove_vpn_user ;;
+      5) return 0 ;;
+      *) warn "Invalid selection." ;;
+    esac
+  done
+}
+
+status_vpn() {
+  if [[ ! -f "$STATE_FILE" ]]; then
+    echo "Status: NOT INSTALLED by this script"
+    return 0
+  fi
+
+  # shellcheck disable=SC1090
+  source "$STATE_FILE"
+  local installed_version="${INSTALLER_VERSION:-unknown}"
+  initialize_proxy_state_defaults
+
+  printf '%bIKEv2 installer status%b\n' "$BOLD" "$RESET"
+  printf '  Installed version  : %s\n' "$installed_version"
+  printf '  Script version     : %s\n' "$CURRENT_INSTALLER_VERSION"
+  printf '  Server ID          : %s\n' "$SERVER_ID"
+  printf '  Internet interface : %s\n' "$OUT_IF"
+  printf '  VPN subnet         : %s\n' "$VPN_SUBNET"
+  printf '  DNS servers        : %s\n' "$DNS_SERVERS"
+  printf '  Client directory   : %s\n' "$CLIENT_DIR"
+  printf '  Windows profile    : %s\n' "$( [[ "${ALLOW_STOCK_WINDOWS:-no}" == "yes" ]] && echo 'stock-compatible' || echo 'secure' )"
+  printf '  StrongSwan service : %s\n' "$(systemctl is-active "$STRONGSWAN_SERVICE" 2>/dev/null || true)"
+  printf '  Firewall service   : %s\n' "$(systemctl is-active "$FW_SERVICE" 2>/dev/null || true)"
+  printf '  IPv4 forwarding    : %s\n' "$(sysctl -n net.ipv4.ip_forward 2>/dev/null || echo unknown)"
+
+  if [[ "$PROXY_ENABLED" == "yes" ]]; then
+    printf '  SOCKS5 Proxy Mode  : enabled\n'
+    printf '  SOCKS5 endpoint    : %s:%s\n' "$PROXY_IP" "$PROXY_PORT"
+    printf '  Proxy service      : %s\n' "$(systemctl is-active "$PROXY_SERVICE" 2>/dev/null || true)"
+    printf '  Proxy exposure     : VPN subnet only (%s)\n' "$VPN_SUBNET"
+  else
+    printf '  SOCKS5 Proxy Mode  : disabled/not configured\n'
+  fi
+
+  echo
+  echo "Configured users:"
+  if [[ -r "$IPSEC_SECRETS" ]]; then
+    get_vpn_users | sed 's/^/  - /' || true
+  else
+    echo "  Unable to read ${IPSEC_SECRETS}"
+  fi
+
+  if command_exists ipsec; then
+    echo
+    echo "StrongSwan status:"
+    ipsec statusall 2>/dev/null | sed -n '1,80p' || true
+  fi
+}
+
+diag_reset() {
+  DIAG_CHECKS=0
+  DIAG_WARNINGS=0
+  DIAG_FAILURES=0
+}
+
+diag_ok() {
+  local title="$1"
+  local detail="${2:-}"
+  ((DIAG_CHECKS += 1))
+  printf '[OK]   %s\n' "$title"
+  [[ -z "$detail" ]] || printf '       %s\n' "$detail"
+}
+
+diag_warn() {
+  local title="$1"
+  local detail="${2:-}"
+  ((DIAG_CHECKS += 1))
+  ((DIAG_WARNINGS += 1))
+  printf '[WARN] %s\n' "$title"
+  [[ -z "$detail" ]] || printf '       %s\n' "$detail"
+}
+
+diag_fail() {
+  local title="$1"
+  local detail="${2:-}"
+  ((DIAG_CHECKS += 1))
+  ((DIAG_FAILURES += 1))
+  printf '[FAIL] %s\n' "$title"
+  [[ -z "$detail" ]] || printf '       %s\n' "$detail"
+}
+
+check_certificate_health() {
+  local certificate_file="$1"
+  local title="$2"
+  local end_line end_value expiry_date end_epoch now_epoch days day_label
+
+  if [[ ! -e "$certificate_file" ]]; then
+    diag_fail "$title" "${title} file is missing"
+    return 0
+  fi
+  if [[ ! -r "$certificate_file" ]]; then
+    diag_fail "$title" "${title} file is unreadable"
+    return 0
+  fi
+  if ! end_line=$(openssl x509 -in "$certificate_file" -noout -enddate 2>/dev/null); then
+    diag_fail "$title" "OpenSSL could not parse the ${title,,}"
+    return 0
+  fi
+  if ! openssl x509 -in "$certificate_file" -noout -checkend 0 >/dev/null 2>&1; then
+    diag_fail "$title" "${title} has expired"
+    return 0
+  fi
+
+  end_value="${end_line#notAfter=}"
+  expiry_date=$(date -d "$end_value" '+%F' 2>/dev/null || printf '%s' "$end_value")
+  if ! openssl x509 -in "$certificate_file" -noout -checkend 2592000 >/dev/null 2>&1; then
+    end_epoch=$(date -d "$end_value" '+%s' 2>/dev/null || true)
+    now_epoch=$(date '+%s')
+    if [[ "$end_epoch" =~ ^[0-9]+$ ]]; then
+      days=$(( (end_epoch - now_epoch) / 86400 ))
+      if (( days == 1 )); then
+        day_label="day"
+      else
+        day_label="days"
+      fi
+      diag_warn "$title" "Certificate expires in ${days} ${day_label}"
+    else
+      diag_warn "$title" "Certificate expires within 30 days"
+    fi
+  else
+    diag_ok "$title" "Expires: ${expiry_date}"
+  fi
+}
+
+check_proxy_health() {
+  local listeners
+
+  if [[ "${DIAG_STATE_LOADED:-no}" != "yes" ]]; then
+    diag_warn "SOCKS5 Proxy Mode" "Cannot verify without managed state"
+    return 0
+  fi
+  if [[ "${PROXY_ENABLED:-no}" != "yes" ]]; then
+    diag_ok "SOCKS5 Proxy Mode" "Not configured"
+    return 0
+  fi
+  if ! service_is_active "$PROXY_SERVICE"; then
+    diag_fail "SOCKS5 Proxy Mode" "Proxy Mode is configured but service is inactive"
+    return 0
+  fi
+
+  listeners=$(ss -lntH 2>/dev/null || true)
+  if awk -v endpoint="${PROXY_IP}:${PROXY_PORT}" '$4 == endpoint {found=1} END {exit !found}' <<< "$listeners"; then
+    diag_ok "SOCKS5 Proxy Mode" "${PROXY_IP}:${PROXY_PORT}"
+  else
+    diag_fail "SOCKS5 Proxy Mode" "Service is active but ${PROXY_IP}:${PROXY_PORT} is not listening"
+  fi
+}
+
+run_diagnostics() {
+  local strongswan_active="no"
+  local forwarding_value secrets_mode user_count online_count overall
+
+  diag_reset
+  DIAG_STATE_LOADED="no"
+  OUT_IF=""
+  VPN_SUBNET=""
+  PROXY_ENABLED="no"
+  PROXY_IP="$PROXY_DEFAULT_IP"
+  PROXY_PORT="$PROXY_DEFAULT_PORT"
+
+  printf '\n%bIKEv2 Server Diagnostics%b\n' "$BOLD" "$RESET"
+  printf '========================\n\n'
+
+  if [[ ! -e "$STATE_FILE" ]]; then
+    diag_fail "Managed installation state" "Managed state file is missing or unreadable"
+  elif [[ ! -r "$STATE_FILE" ]]; then
+    diag_fail "Managed installation state" "Managed state file is missing or unreadable"
+  # shellcheck disable=SC1090
+  elif source "$STATE_FILE"; then
+    initialize_proxy_state_defaults
+    DIAG_STATE_LOADED="yes"
+    diag_ok "Managed installation state"
+  else
+    diag_fail "Managed installation state" "Managed state file could not be loaded"
+  fi
+
+  OUT_IF="${OUT_IF:-}"
+  VPN_SUBNET="${VPN_SUBNET:-}"
+  PROXY_ENABLED="${PROXY_ENABLED:-no}"
+  PROXY_IP="${PROXY_IP:-$PROXY_DEFAULT_IP}"
+  PROXY_PORT="${PROXY_PORT:-$PROXY_DEFAULT_PORT}"
+
+  if service_is_active "$STRONGSWAN_SERVICE"; then
+    strongswan_active="yes"
+    diag_ok "StrongSwan service"
+  else
+    diag_fail "StrongSwan service" "${STRONGSWAN_SERVICE} is inactive"
+  fi
+
+  refresh_online_vpn_users yes
+  if [[ "$strongswan_active" != "yes" ]]; then
+    diag_warn "IKEv2 connection loaded" "Cannot verify while StrongSwan is inactive"
+  elif [[ "$VPN_SESSION_STATUS_AVAILABLE" != "yes" ]]; then
+    diag_fail "IKEv2 connection loaded" "Unable to query StrongSwan status"
+  elif grep -qE '^[[:space:]]*ikev2-eap:' <<< "$VPN_STATUSALL_OUTPUT"; then
+    diag_ok "IKEv2 connection loaded"
+  else
+    diag_fail "IKEv2 connection loaded" "Managed ikev2-eap connection was not found"
+  fi
+
+  forwarding_value=$(sysctl -n net.ipv4.ip_forward 2>/dev/null || true)
+  if [[ "$forwarding_value" == "1" ]]; then
+    diag_ok "IPv4 forwarding"
+  else
+    diag_fail "IPv4 forwarding" "net.ipv4.ip_forward is not enabled"
+  fi
+
+  if command_exists iptables && iptables -C INPUT -p udp --dport 500 -m comment --comment "$INSTALLER_NAME" -j ACCEPT >/dev/null 2>&1; then
+    diag_ok "UDP 500 firewall rule"
+  else
+    diag_fail "UDP 500 firewall rule" "Managed UDP/500 rule was not found"
+  fi
+
+  if command_exists iptables && iptables -C INPUT -p udp --dport 4500 -m comment --comment "$INSTALLER_NAME" -j ACCEPT >/dev/null 2>&1; then
+    diag_ok "UDP 4500 firewall rule"
+  else
+    diag_fail "UDP 4500 firewall rule" "Managed UDP/4500 rule was not found"
+  fi
+
+  if [[ -n "$VPN_SUBNET" && -n "$OUT_IF" ]] \
+    && command_exists iptables \
+    && iptables -C FORWARD -s "$VPN_SUBNET" -o "$OUT_IF" -m comment --comment "$INSTALLER_NAME" -j ACCEPT >/dev/null 2>&1 \
+    && iptables -C FORWARD -d "$VPN_SUBNET" -i "$OUT_IF" -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment "$INSTALLER_NAME" -j ACCEPT >/dev/null 2>&1; then
+    diag_ok "VPN forwarding rules"
+  else
+    diag_fail "VPN forwarding rules" "One or more managed FORWARD rules are missing"
+  fi
+
+  if [[ -n "$VPN_SUBNET" && -n "$OUT_IF" ]] \
+    && command_exists iptables \
+    && iptables -t nat -C POSTROUTING -s "$VPN_SUBNET" -o "$OUT_IF" -m comment --comment "$INSTALLER_NAME" -j MASQUERADE >/dev/null 2>&1; then
+    diag_ok "VPN NAT / MASQUERADE"
+  else
+    diag_fail "VPN NAT / MASQUERADE" "Managed POSTROUTING MASQUERADE rule was not found"
+  fi
+
+  if service_is_active "$FW_SERVICE"; then
+    diag_ok "Firewall / NAT service"
+  else
+    diag_fail "Firewall / NAT service" "${FW_SERVICE} is inactive"
+  fi
+
+  check_certificate_health "$SERVER_CERT" "Server certificate"
+  check_certificate_health "$CA_CERT" "CA certificate"
+
+  if [[ ! -e "$CA_KEY" || ! -e "$SERVER_KEY" ]]; then
+    diag_fail "Private key files" "One or more managed private keys are missing"
+  elif [[ ! -r "$CA_KEY" || ! -r "$SERVER_KEY" ]]; then
+    diag_fail "Private key files" "One or more managed private keys are unreadable"
+  else
+    diag_ok "Private key files"
+  fi
+
+  if [[ ! -e "$IPSEC_SECRETS" ]]; then
+    diag_fail "IPsec secrets permissions" "${IPSEC_SECRETS} is missing"
+  elif [[ ! -r "$IPSEC_SECRETS" ]]; then
+    diag_fail "IPsec secrets permissions" "${IPSEC_SECRETS} is unreadable"
+  elif ! secrets_mode=$(stat -c '%a' "$IPSEC_SECRETS" 2>/dev/null); then
+    diag_fail "IPsec secrets permissions" "Unable to read ${IPSEC_SECRETS} permissions"
+  elif [[ "$secrets_mode" != "600" ]]; then
+    diag_warn "IPsec secrets permissions" "${IPSEC_SECRETS} mode is ${secrets_mode}; expected 600"
+  else
+    diag_ok "IPsec secrets permissions"
+  fi
+
+  user_count=$(vpn_user_count)
+  if (( user_count > 0 )); then
+    diag_ok "VPN users" "Configured users: ${user_count}"
+  else
+    diag_warn "VPN users" "No EAP VPN users are configured"
+  fi
+
+  if [[ -n "$OUT_IF" ]] && command_exists ip && ip link show dev "$OUT_IF" >/dev/null 2>&1; then
+    diag_ok "Internet interface" "$OUT_IF"
+  else
+    diag_fail "Internet interface" "Configured interface '${OUT_IF}' does not exist"
+  fi
+
+  if [[ -n "$VPN_SUBNET" ]] && validate_cidr "$VPN_SUBNET"; then
+    diag_ok "VPN subnet" "$VPN_SUBNET"
+  else
+    diag_fail "VPN subnet" "Stored VPN subnet is invalid"
+  fi
+
+  check_proxy_health
+
+  if [[ "$strongswan_active" == "yes" && "$VPN_SESSION_STATUS_AVAILABLE" != "yes" ]]; then
+    diag_warn "Active VPN sessions" "Unable to query current sessions"
+  else
+    online_count=$(configured_online_vpn_user_count)
+    diag_ok "Active VPN sessions" "Online users: ${online_count}"
+  fi
+
+  if (( DIAG_FAILURES > 0 )); then
+    overall="FAILED"
+  elif (( DIAG_WARNINGS > 0 )); then
+    overall="WARNING"
+  else
+    overall="HEALTHY"
+  fi
+
+  printf '\n----------------------------------------\n'
+  printf 'Checks   : %d\n' "$DIAG_CHECKS"
+  printf 'Warnings : %d\n' "$DIAG_WARNINGS"
+  printf 'Failures : %d\n\n' "$DIAG_FAILURES"
+  printf 'Overall status: %s\n' "$overall"
+}
+
+interactive_menu() {
+  local choice=""
+
+  while true; do
+    if [[ -f "$STATE_FILE" ]]; then
+      printf '\n%bIKEv2 installation detected%b\n' "$BOLD" "$RESET"
+      printf '  1) Status\n'
+      printf '  2) Service Control\n'
+      printf '  3) User Management\n'
+      printf '  4) Connected Clients\n'
+      printf '  5) Diagnostics\n'
+      printf '  6) Export Client Profile (.ikev)\n'
+      printf '  7) Upgrade / Configure SOCKS5 Proxy Mode\n'
+      printf '  8) Uninstall\n'
+      printf '  9) Exit\n'
+      read -r -p 'Choose [1-9]: ' choice || true
+
+      case "$choice" in
+        1)
+          status_vpn
+          pause_main_menu
+          ;;
+        2)
+          service_control_menu
+          ;;
+        3)
+          user_management_menu
+          ;;
+        4)
+          show_connected_clients
+          pause_main_menu
+          ;;
+        5)
+          run_diagnostics
+          pause_main_menu
+          ;;
+        6)
+          export_ikev_profile
+          pause_main_menu
+          ;;
+        7)
+          upgrade_vpn
+          pause_main_menu
+          ;;
+        8)
+          update_installer
+          pause_main_menu
+          ;;
+        9)
+          uninstall_vpn
+          pause_main_menu
+          ;;
+        10)
+          printf '\nExiting...\n'
+          exit 0
+          ;;
+        *)
+          warn "Invalid selection."
+          ;;
+      esac
+    else
+      printf '\n%bIKEv2 / StrongSwan Server v6%b\n' "$BOLD" "$RESET"
+      printf '  1) Install\n'
+      printf '  2) Exit\n'
+      read -r -p 'Choose [1-2]: ' choice || true
+
+      case "$choice" in
+        1)
+          install_vpn
+          pause_main_menu
+          ;;
+        2)
+          printf '\nExiting...\n'
+          exit 0
+          ;;
+        *)
+          warn "Invalid selection."
+          ;;
+      esac
+    fi
+  done
+}
+
+usage() {
+  cat <<EOF
+Usage: $0 [install|upgrade|update|status|diagnostics|start|stop|restart|proxy-start|proxy-stop|proxy-restart|start-all|stop-all|uninstall]
+
+Commands:
+  install        Full interactive IKEv2 installation; all previous features are retained.
+  upgrade        Add or update private SOCKS5 Proxy Mode on an existing managed installation.\n  update         Check the latest GitHub Release and safely update this installer only.
+  status         Show VPN, StrongSwan, firewall, and Proxy Mode status.
+  diagnostics    Run read-only health checks for the managed VPN server.
+  start          Start IKEv2 / StrongSwan (and the managed firewall/NAT if needed).
+  stop           Stop IKEv2 / StrongSwan after confirmation.
+  restart        Restart IKEv2 / StrongSwan after confirmation when active.
+  proxy-start    Start the private SOCKS5 Proxy Mode service.
+  proxy-stop     Stop the private SOCKS5 Proxy Mode service.
+  proxy-restart  Restart the private SOCKS5 Proxy Mode service.
+  start-all      Start firewall/NAT, IKEv2, and configured Proxy Mode.
+  stop-all       Stop Proxy Mode, IKEv2, and firewall/NAT after confirmation.
+  uninstall      Remove managed configuration and restore previous files/services.
+
+The upgrade command does not regenerate certificates, rewrite users, replace ipsec.conf,
+restart StrongSwan, or modify the original full-tunnel NAT/firewall service.
+
+Run without arguments to open the interactive menu.
+EOF
+}
+
+main() {
+  require_root
+  check_ubuntu
+
+  case "${1:-}" in
+    install) install_vpn ;;
+    upgrade) upgrade_vpn ;;
+    update) update_installer ;;
+    status) status_vpn ;;
+    diagnostics) run_diagnostics ;;
+    start) start_ikev2_service ;;
+    stop) stop_ikev2_service ;;
+    restart) restart_ikev2_service ;;
+    proxy-start) start_proxy_service ;;
+    proxy-stop) stop_proxy_service ;;
+    proxy-restart) restart_proxy_service ;;
+    start-all) start_all_vpn_services ;;
+    stop-all) stop_all_vpn_services ;;
+    uninstall) uninstall_vpn ;;
+    -h|--help) usage ;;
+    "") interactive_menu ;;
+    *) usage; exit 2 ;;
+  esac
+}
+
+main "$@"

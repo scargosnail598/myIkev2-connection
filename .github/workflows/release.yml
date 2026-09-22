@@ -86,7 +86,8 @@ jobs:
           set -Eeuo pipefail
           rm -rf dist
           mkdir -p dist
-          cp "${{ needs.validate.outputs.server }}" "dist/"
+          cp "${{ needs.validate.outputs.server }}" \
+            "dist/ikev2-strongswan-ubuntu-v${{ needs.validate.outputs.version }}.sh"
           cp "${{ needs.validate.outputs.windows }}" "dist/"
           cp "${{ needs.validate.outputs.linux }}" "dist/"
 

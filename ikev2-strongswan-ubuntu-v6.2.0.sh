@@ -787,7 +787,7 @@ conn ikev2-eap
     fragmentation=yes
     mobike=yes
     compress=no
-    dpdaction=clear
+    dpdaction=restart
     dpddelay=30s
     rekey=no
     reauth=no
@@ -2277,6 +2277,31 @@ restart_ikev2_service() {
   fi
 }
 
+apply_reconnect_policy() {
+  require_managed_installation
+
+  [[ -f "$IPSEC_CONF" ]] || die "Managed StrongSwan configuration was not found."
+
+  if grep -Eq '^[[:space:]]*dpdaction=restart[[:space:]]*$' "$IPSEC_CONF"; then
+    info "StrongSwan automatic stale-session recovery is already enabled."
+  else
+    if [[ ! -e "${BACKUP_DIR}/ipsec.conf.before-reconnect" ]]; then
+      backup_file "$IPSEC_CONF" "ipsec.conf.before-reconnect"
+    fi
+    sed -i -E 's/^[[:space:]]*dpdaction=.*/    dpdaction=restart/' "$IPSEC_CONF"
+    grep -Eq '^[[:space:]]*dpdaction=restart[[:space:]]*$' "$IPSEC_CONF" || \
+      die "Could not enable StrongSwan automatic stale-session recovery."
+    log "Enabled StrongSwan automatic stale-session recovery."
+  fi
+
+  if command_exists ipsec && ipsec rereadall >/dev/null 2>&1; then
+    log "StrongSwan configuration reloaded."
+  else
+    warn "StrongSwan configuration could not be reloaded automatically."
+    warn "Run: sudo systemctl restart ${STRONGSWAN_SERVICE}"
+  fi
+}
+
 proxy_mode_available() {
   [[ "${PROXY_ENABLED:-no}" == "yes" && -f "$PROXY_SERVICE_FILE" ]]
 }
@@ -2863,11 +2888,12 @@ interactive_menu() {
 
 usage() {
   cat <<EOF
-Usage: $0 [install|upgrade|update|status|diagnostics|start|stop|restart|proxy-start|proxy-stop|proxy-restart|start-all|stop-all|uninstall]
+Usage: $0 [install|upgrade|reconnect|update|status|diagnostics|start|stop|restart|proxy-start|proxy-stop|proxy-restart|start-all|stop-all|uninstall]
 
 Commands:
   install        Full interactive IKEv2 installation; all previous features are retained.
-  upgrade        Add or update private SOCKS5 Proxy Mode on an existing managed installation.\n  update         Check the latest GitHub Release and safely update this installer only.
+  upgrade        Add or update private SOCKS5 Proxy Mode on an existing managed installation.\n  reconnect      Enable DPD-based stale-session recovery without changing certificates or users.
+  update         Check the latest GitHub Release and safely update this installer only.
   status         Show VPN, StrongSwan, firewall, and Proxy Mode status.
   diagnostics    Run read-only health checks for the managed VPN server.
   start          Start IKEv2 / StrongSwan (and the managed firewall/NAT if needed).
@@ -2894,6 +2920,7 @@ main() {
   case "${1:-}" in
     install) install_vpn ;;
     upgrade) upgrade_vpn ;;
+    reconnect) apply_reconnect_policy ;;
     update) update_installer ;;
     status) status_vpn ;;
     diagnostics) run_diagnostics ;;

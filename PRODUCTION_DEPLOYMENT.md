@@ -241,7 +241,7 @@ jobs:
             "sudo '$INSTALL_DIR/ikev2-strongswan-ubuntu-v6.2.0.sh' status"
 ```
 
-This workflow uploads and verifies the installer. It does not automatically run `install`, `upgrade`, `uninstall`, or certificate rotation. Those operations should require a deliberate production procedure.
+This workflow uploads the installer, applies the DPD-based reconnect policy, and verifies the installation. It does not automatically run `install`, `upgrade`, `uninstall`, or certificate rotation. Those operations should require a deliberate production procedure.
 
 ## 8. Recommended Deployment Policy
 

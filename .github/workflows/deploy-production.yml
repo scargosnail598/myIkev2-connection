@@ -73,3 +73,16 @@ jobs:
           ssh_args=(-i "$HOME/.ssh/production_deploy" -p "$PORT")
           ssh "${ssh_args[@]}" "$USER@$HOST" \
             "sudo '$INSTALL_DIR/ikev2-strongswan-ubuntu-v6.2.0.sh' status"
+
+      - name: Apply reconnect policy
+        shell: bash
+        env:
+          HOST: ${{ vars.PRODUCTION_HOST }}
+          PORT: ${{ vars.PRODUCTION_PORT }}
+          USER: ${{ vars.PRODUCTION_USER }}
+          INSTALL_DIR: ${{ vars.PRODUCTION_INSTALL_DIR }}
+        run: |
+          set -Eeuo pipefail
+          ssh_args=(-i "$HOME/.ssh/production_deploy" -p "$PORT")
+          ssh "${ssh_args[@]}" "$USER@$HOST" \
+            "sudo '$INSTALL_DIR/ikev2-strongswan-ubuntu-v6.2.0.sh' reconnect"

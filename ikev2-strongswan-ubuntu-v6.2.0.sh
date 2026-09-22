@@ -2791,10 +2791,11 @@ interactive_menu() {
       printf '  4) Connected Clients\n'
       printf '  5) Diagnostics\n'
       printf '  6) Export Client Profile (.ikev)\n'
-      printf '  7) Upgrade / Configure SOCKS5 Proxy Mode\n'
-      printf '  8) Uninstall\n'
-      printf '  9) Exit\n'
-      read -r -p 'Choose [1-9]: ' choice || true
+      printf '  7) SOCKS5 Proxy Mode\n'
+      printf '  8) Update Installer\n'
+      printf '  9) Uninstall\n'
+      printf '  10) Exit\n'
+      read -r -p 'Choose [1-10]: ' choice || true
 
       case "$choice" in
         1)

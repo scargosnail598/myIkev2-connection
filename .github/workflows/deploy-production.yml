@@ -52,7 +52,7 @@ jobs:
           ssh_args=(-i "$HOME/.ssh/production_deploy" -p "$PORT")
           ssh "${ssh_args[@]}" "$USER@$HOST" \
             "sudo install -d -m 0755 '$INSTALL_DIR'"
-          scp "${ssh_args[@]}" \
+          scp -i "$HOME/.ssh/production_deploy" -P "$PORT" \
             ikev2-strongswan-ubuntu-v6.2.0.sh \
             "$USER@$HOST:/tmp/ikev2-strongswan-ubuntu-v6.2.0.sh"
           ssh "${ssh_args[@]}" "$USER@$HOST" \

@@ -61,10 +61,11 @@ jobs:
         run: |
           $files = Get-ChildItem -File -Filter "ikev2-windows-client-*.ps1"
           if ($files.Count -ne 1) { throw "Expected one Windows client script." }
+          $tokens = $null
           $errors = $null
           [System.Management.Automation.Language.Parser]::ParseFile(
             $files[0].FullName,
-            [ref]$null,
+            [ref]$tokens,
             [ref]$errors
           ) | Out-Null
           if ($errors.Count -gt 0) {

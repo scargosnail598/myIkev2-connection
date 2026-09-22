@@ -6,7 +6,7 @@ IFS=$'\n\t'
 # Uses StrongSwan, EAP-MSCHAPv2, a private CA, and IPv4 full-tunnel NAT.
 
 INSTALLER_NAME="ikev2-easy-installer"
-CURRENT_INSTALLER_VERSION="6.2.2-en"
+CURRENT_INSTALLER_VERSION="6.2.3-en"
 INSTALLER_VERSION="$CURRENT_INSTALLER_VERSION"
 
 STATE_DIR="/var/lib/${INSTALLER_NAME}"
@@ -525,7 +525,7 @@ latest_release_version() {
 
 update_installer() {
   require_root
-  local current latest tmp_dir artifact sums expected actual current_path backup_path tmp_artifact
+  local current latest tmp_dir artifact sums expected actual current_path backup_path tmp_artifact new_installer_version escaped_installer_version
   current="$(installer_semver)"
   latest="$(latest_release_version)"
 
@@ -581,6 +581,10 @@ update_installer() {
 
   install -m 0755 "$tmp_artifact" "${current_path}.new"
   mv -f "${current_path}.new" "$current_path"
+  new_installer_version="${latest}${CURRENT_INSTALLER_VERSION#"$current"}"
+  printf -v escaped_installer_version '%q' "$new_installer_version"
+  sed -i -E "s/^INSTALLER_VERSION=.*/INSTALLER_VERSION=${escaped_installer_version}/" "$STATE_FILE"
+  grep -q '^INSTALLER_VERSION=' "$STATE_FILE" || die "Installer updated, but the managed state version could not be recorded."
   trap - RETURN
 
   log "Installer updated successfully: v${current} -> v${latest}"

@@ -1,6 +1,6 @@
 # IKEv2 VPN — Ubuntu StrongSwan Server + Native Clients
 
-A complete IKEv2 VPN setup built around StrongSwan, EAP-MSCHAPv2 authentication, a private CA, and native Windows, Linux, and Android clients. Windows supports two traffic modes:
+A complete IKEv2 VPN setup built around StrongSwan, EAP-MSCHAPv2 authentication, a private CA, and native Windows and Linux clients. Windows supports two traffic modes:
 
 - **Full Tunnel** — all IPv4 traffic goes through the VPN.
 - **Proxy Mode** — only the private SOCKS5 proxy endpoint goes through IKEv2; all other Windows traffic stays direct.
@@ -13,42 +13,13 @@ The Linux client currently operates as a full-tunnel client.
 
 | Component | File | Version / Target |
 |---|---|---|
-| Server | `ikev2-strongswan-ubuntu-v6.1.1.sh` | v6.1.1-en / Ubuntu 22.04 & 24.04 |
+| Server | `ikev2-strongswan-ubuntu-v6.2.0.sh` | v6.2.0 / Ubuntu 22.04 & 24.04 |
 | Windows client | `ikev2-windows-client-v6.1.ps1` | v6.1.0 / PowerShell 5.1+ |
 | Linux client | `ikev2-linux-client-v1.6.sh` | v1.6.0 / Ubuntu 22.04 & 24.04 |
-| Android client | [`android-client/`](android-client/) | v1.1.0 / Android 11+ (API 30+) |
 
 The server installer manages StrongSwan packages, certificates, users, routing, DNS, NAT, firewall rules, status, uninstall, and the optional private SOCKS5 Proxy Mode.
 
 The Windows utility supports both Full Tunnel and Proxy Mode without requiring separate VPN profiles.
-
-The **Android Client v1.1.0** is a native Android IKEv2 client for Android 11+
-(API 30+). It provisions a single IPv4 full-tunnel profile through Android's
-platform VPN stack:
-
-```text
-Android App
-    ↓
-VpnManager / Ikev2VpnProfile
-    ↓
-Android platform IKEv2/IPsec stack
-    ↓
-strongSwan server
-```
-
-It uses EAP-MSCHAPv2 and validates the server with the imported private CA. It
-does not implement IKEv2, intercept traffic, or use `VpnService`. Android v1.1
-supports portable `.ikev` v1 import, manual profile provisioning,
-connect/disconnect, basic status, and diagnostics;
-it does not support Proxy Mode, split tunneling, multiple profiles, or automatic
-connection.
-
-For portable onboarding, the app needs only `username.ikev` and the VPN
-password entered during provisioning; the profile embeds the public CA. Manual
-setup remains available with the server address, username, password, and
-`ca-cert.cer`. **Never transfer a server or CA private key to Android.** See
-the [Android build and release guide](android-client/README.md) and
-[release acceptance matrix](android-client/RELEASE_TESTING.md).
 
 ---
 
@@ -78,19 +49,19 @@ The installer creates its own local firewall and NAT rules, but it cannot modify
 Make the installer executable:
 
 ```bash
-chmod +x ikev2-strongswan-ubuntu-v6.1.1.sh
+chmod +x ikev2-strongswan-ubuntu-v6.2.0.sh
 ```
 
 Run the installer:
 
 ```bash
-sudo ./ikev2-strongswan-ubuntu-v6.1.1.sh install
+sudo ./ikev2-strongswan-ubuntu-v6.2.0.sh install
 ```
 
 Or run it without arguments:
 
 ```bash
-sudo ./ikev2-strongswan-ubuntu-v6.1.1.sh
+sudo ./ikev2-strongswan-ubuntu-v6.2.0.sh
 ```
 
 On a fresh server choose:
@@ -258,8 +229,8 @@ client-credentials.txt
 The server can export a configured user as the project's portable `.ikev`
 VPN profile format. Version 1 is a JSON document identified by
 `format = ikev-profile` and `version = 1`. It is designed for later import
-by the Windows, Linux, and Android clients. Linux v1.6, Windows v6.1, and
-Android v1.1 all import this same frozen format.
+by the Windows and Linux clients. Linux v1.6 and Windows v6.1 import this same
+frozen format.
 
 The profile embeds the public CA certificate as single-line Base64-encoded DER
 and includes its OpenSSL SHA-256 fingerprint. VPN passwords, private keys, and
@@ -325,17 +296,17 @@ If Proxy Mode is enabled, `client-info.txt` also contains the private SOCKS5 end
 
 If an older installation was created by this installer family, you do **not** need to uninstall and reinstall the VPN.
 
-Copy `ikev2-strongswan-ubuntu-v6.1.1.sh` to the server and run:
+Copy `ikev2-strongswan-ubuntu-v6.2.0.sh` to the server and run:
 
 ```bash
-chmod +x ikev2-strongswan-ubuntu-v6.1.1.sh
-sudo ./ikev2-strongswan-ubuntu-v6.1.1.sh upgrade
+chmod +x ikev2-strongswan-ubuntu-v6.2.0.sh
+sudo ./ikev2-strongswan-ubuntu-v6.2.0.sh upgrade
 ```
 
 Or run:
 
 ```bash
-sudo ./ikev2-strongswan-ubuntu-v6.1.1.sh
+sudo ./ikev2-strongswan-ubuntu-v6.2.0.sh
 ```
 
 When an existing managed installation is detected, the menu is:
@@ -401,7 +372,7 @@ StrongSwan  : unchanged / not restarted by this upgrade
 Run:
 
 ```bash
-sudo ./ikev2-strongswan-ubuntu-v6.1.1.sh status
+sudo ./ikev2-strongswan-ubuntu-v6.2.0.sh status
 ```
 
 Run the read-only server health check from the installed-system menu or with:
@@ -961,7 +932,7 @@ The expected route is:
 Then check the server:
 
 ```bash
-sudo ./ikev2-strongswan-ubuntu-v6.1.1.sh status
+sudo ./ikev2-strongswan-ubuntu-v6.2.0.sh status
 ```
 
 Check the proxy service:
@@ -1044,7 +1015,7 @@ Unrelated StrongSwan configuration is not removed.
 Run:
 
 ```bash
-sudo ./ikev2-strongswan-ubuntu-v6.1.1.sh uninstall
+sudo ./ikev2-strongswan-ubuntu-v6.2.0.sh uninstall
 ```
 
 Or open the interactive menu and choose:
@@ -1085,8 +1056,8 @@ Packages installed by the installer are removed only when the installer's safe p
 ## Server
 
 ```bash
-chmod +x ikev2-strongswan-ubuntu-v6.1.1.sh
-sudo ./ikev2-strongswan-ubuntu-v6.1.1.sh install
+chmod +x ikev2-strongswan-ubuntu-v6.2.0.sh
+sudo ./ikev2-strongswan-ubuntu-v6.2.0.sh install
 ```
 
 Enable the private SOCKS5 Proxy Mode when prompted if you plan to use Windows Proxy Mode.
@@ -1148,8 +1119,8 @@ sudo ./ikev2-linux-client-v1.6.sh
 ## Server
 
 ```bash
-chmod +x ikev2-strongswan-ubuntu-v6.1.1.sh
-sudo ./ikev2-strongswan-ubuntu-v6.1.1.sh upgrade
+chmod +x ikev2-strongswan-ubuntu-v6.2.0.sh
+sudo ./ikev2-strongswan-ubuntu-v6.2.0.sh upgrade
 ```
 
 Accept the defaults unless you need custom values:
@@ -1162,7 +1133,7 @@ Proxy Port : 1080
 Verify:
 
 ```bash
-sudo ./ikev2-strongswan-ubuntu-v6.1.1.sh status
+sudo ./ikev2-strongswan-ubuntu-v6.2.0.sh status
 sudo systemctl status ikev2-vpn-proxy
 sudo ss -lntp | grep 1080
 ```

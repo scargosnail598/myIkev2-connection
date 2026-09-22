@@ -1,0 +1,75 @@
+name: Deploy Production Server Installer
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy server installer
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate installer locally
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          file="ikev2-strongswan-ubuntu-v6.2.0.sh"
+          bash -n "$file"
+
+      - name: Configure SSH
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.PRODUCTION_SSH_PRIVATE_KEY }}
+          KNOWN_HOSTS: ${{ secrets.PRODUCTION_KNOWN_HOSTS }}
+        run: |
+          set -Eeuo pipefail
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/production_deploy"
+          chmod 600 "$HOME/.ssh/production_deploy"
+          printf '%s\n' "$KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 644 "$HOME/.ssh/known_hosts"
+
+      - name: Upload installer
+        shell: bash
+        env:
+          HOST: ${{ vars.PRODUCTION_HOST }}
+          PORT: ${{ vars.PRODUCTION_PORT }}
+          USER: ${{ vars.PRODUCTION_USER }}
+          INSTALL_DIR: ${{ vars.PRODUCTION_INSTALL_DIR }}
+        run: |
+          set -Eeuo pipefail
+          ssh_args=(-i "$HOME/.ssh/production_deploy" -p "$PORT")
+          ssh "${ssh_args[@]}" "$USER@$HOST" \
+            "sudo install -d -m 0755 '$INSTALL_DIR'"
+          scp "${ssh_args[@]}" \
+            ikev2-strongswan-ubuntu-v6.2.0.sh \
+            "$USER@$HOST:/tmp/ikev2-strongswan-ubuntu-v6.2.0.sh"
+          ssh "${ssh_args[@]}" "$USER@$HOST" \
+            "bash -n /tmp/ikev2-strongswan-ubuntu-v6.2.0.sh && \
+             sudo install -m 0755 /tmp/ikev2-strongswan-ubuntu-v6.2.0.sh \
+             '$INSTALL_DIR/ikev2-strongswan-ubuntu-v6.2.0.sh' && \
+             rm -f /tmp/ikev2-strongswan-ubuntu-v6.2.0.sh"
+
+      - name: Verify deployed installer
+        shell: bash
+        env:
+          HOST: ${{ vars.PRODUCTION_HOST }}
+          PORT: ${{ vars.PRODUCTION_PORT }}
+          USER: ${{ vars.PRODUCTION_USER }}
+          INSTALL_DIR: ${{ vars.PRODUCTION_INSTALL_DIR }}
+        run: |
+          set -Eeuo pipefail
+          ssh_args=(-i "$HOME/.ssh/production_deploy" -p "$PORT")
+          ssh "${ssh_args[@]}" "$USER@$HOST" \
+            "sudo '$INSTALL_DIR/ikev2-strongswan-ubuntu-v6.2.0.sh' status"

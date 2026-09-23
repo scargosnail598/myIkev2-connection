@@ -148,6 +148,36 @@ ask_value() {
   printf -v "$output_var" '%s' "$value"
 }
 
+validate_email() {
+  local value="$1"
+  [[ "$value" =~ ^[^[:space:]@]+@[^[:space:]@.]+(\.[^[:space:]@.]+)+$ ]]
+}
+
+collect_certbot_email() {
+  local email
+
+  while true; do
+    printf '\n%bLet\x27s Encrypt contact email%b\n' "$BOLD" "$RESET"
+    printf '  Used for certificate expiry and security notifications. Leave empty only if you accept missing renewal and security notices.\n'
+    read -r -p '  Email (empty = no email): ' email || true
+
+    if [[ -z "$email" ]]; then
+      warn "Without an email address, Let\x27s Encrypt cannot send expiry or security notifications."
+      if ask_yes_no "Continue without a Let\x27s Encrypt email address?" N; then
+        CERTBOT_EMAIL=""
+        return 0
+      fi
+      continue
+    fi
+
+    if validate_email "$email"; then
+      CERTBOT_EMAIL="$email"
+      return 0
+    fi
+    warn "Enter a plausible email address, or leave it empty and explicitly confirm no email."
+  done
+}
+
 is_ipv4() {
   local ip="$1"
   local a b c d extra
@@ -395,6 +425,9 @@ write_state() {
     printf 'DNS_SERVERS=%q\n' "$DNS_SERVERS"
     printf 'CA_NAME=%q\n' "$CA_NAME"
     printf 'CERTIFICATE_MODE=%q\n' "${CERTIFICATE_MODE:-private-ca}"
+    printf 'CERTBOT_DOMAIN=%q\n' "${CERTBOT_DOMAIN:-}"
+    printf 'CERTBOT_LINEAGE_CREATED=%q\n' "${CERTBOT_LINEAGE_CREATED:-no}"
+    printf 'CERTBOT_EMAIL=%q\n' "${CERTBOT_EMAIL:-}"
     printf 'CERTBOT_RELOAD_HOOK_EXISTED=%q\n' "${CERTBOT_RELOAD_HOOK_EXISTED:-no}"
     printf 'ALLOW_STOCK_WINDOWS=%q\n' "$ALLOW_STOCK_WINDOWS"
     printf 'CLIENT_DIR=%q\n' "$CLIENT_DIR"
@@ -435,6 +468,12 @@ write_state() {
     printf 'DANTE_PACKAGE_WAS_INSTALLED=%q\n' "$DANTE_PACKAGE_WAS_INSTALLED"
   } > "$STATE_FILE"
   chmod 600 "$STATE_FILE"
+}
+
+initialize_certbot_state_defaults() {
+  CERTBOT_LINEAGE_CREATED="${CERTBOT_LINEAGE_CREATED:-no}"
+  CERTBOT_DOMAIN="${CERTBOT_DOMAIN:-}"
+  CERTBOT_EMAIL="${CERTBOT_EMAIL:-}"
 }
 
 initialize_proxy_state_defaults() {
@@ -664,6 +703,7 @@ collect_users() {
 record_preinstall_state() {
   mkdir -p "$BACKUP_DIR"
   chmod 700 "$STATE_DIR" "$BACKUP_DIR"
+  initialize_certbot_state_defaults
 
   if [[ "${CERTIFICATE_MODE:-private-ca}" == "public-trust" ]]; then
     REQUESTED_PACKAGES+=(certbot)
@@ -740,6 +780,27 @@ install_packages() {
     die "The EAP-MSCHAPv2 plugin file was not found after package installation."
 }
 
+certbot_lineage_exists() {
+  local domain="${1:-$SERVER_ID}" certificates
+  [[ -e "/etc/letsencrypt/live/$domain" || -L "/etc/letsencrypt/live/$domain" ]] && return 0
+  command_exists certbot || return 1
+  certbot certificates --cert-name "$domain" >/dev/null 2>&1 && return 0
+  certificates=$(certbot certificates 2>/dev/null) || return 1
+  awk -v domain="$domain" '$1 == "Domains:" { for (index = 2; index <= NF; index++) if ($index == domain) found = 1 } END { exit !found }' <<<"$certificates"
+}
+
+check_certbot_standalone_port() {
+  local listeners ipv4_listeners ipv6_listeners
+  command_exists ss || die "The ss command is required to verify that TCP/80 is available for Let's Encrypt standalone validation."
+
+  listeners=$(ss -H -ltnp 'sport = :80' 2>/dev/null || true)
+  [[ -z "$listeners" ]] && return 0
+
+  ipv4_listeners=$(awk '$4 !~ /^\[/ && $4 !~ /::/' <<<"$listeners")
+  ipv6_listeners=$(awk '$4 ~ /^\[/' <<<"$listeners")
+  die "TCP/80 is already in use. Let's Encrypt standalone HTTP-01 validation requires TCP/80 to be available. IPv4 listeners: ${ipv4_listeners:-none}; IPv6 listeners: ${ipv6_listeners:-none}. Review the listening process/service shown above and stop or reconfigure it before retrying."
+}
+
 create_certificates() {
   log "Preparing the VPN server certificate..."
 
@@ -748,11 +809,18 @@ create_certificates() {
 
   if [[ "$CERTIFICATE_MODE" == "public-trust" ]]; then
     [[ ! "$SERVER_ID" =~ ^[0-9.]+$ ]] || die "Let's Encrypt requires a DNS name, not an IPv4 address."
+    if certbot_lineage_exists; then
+      die "A Certbot certificate lineage already exists for ${SERVER_ID}. Refusing to claim or delete an existing lineage; decide whether to reuse it explicitly or choose another certificate name before retrying."
+    fi
+    check_certbot_standalone_port
     log "Requesting a Let's Encrypt certificate for ${SERVER_ID}..."
     certbot certonly --standalone --non-interactive --agree-tos \
-      --register-unsafely-without-email -d "$SERVER_ID"
+      --email "$CERTBOT_EMAIL" -d "$SERVER_ID"
     [[ -r "/etc/letsencrypt/live/${SERVER_ID}/fullchain.pem" ]] || die "Let's Encrypt certificate was not created."
     [[ -r "/etc/letsencrypt/live/${SERVER_ID}/privkey.pem" ]] || die "Let's Encrypt private key was not created."
+    CERTBOT_LINEAGE_CREATED="yes"
+    CERTBOT_DOMAIN="$SERVER_ID"
+    write_state
     ln -sfn "/etc/letsencrypt/live/${SERVER_ID}/fullchain.pem" "$SERVER_CERT"
     ln -sfn "/etc/letsencrypt/live/${SERVER_ID}/privkey.pem" "$SERVER_KEY"
     install -d -m 755 "$(dirname "$CERTBOT_RELOAD_HOOK")"
@@ -1269,6 +1337,7 @@ upgrade_vpn() {
   source "$STATE_FILE"
   local previous_version="${INSTALLER_VERSION:-unknown}"
   INSTALLER_VERSION="$CURRENT_INSTALLER_VERSION"
+  initialize_certbot_state_defaults
   initialize_proxy_state_defaults
   record_proxy_baseline
 
@@ -1446,6 +1515,7 @@ install_vpn() {
     CERTIFICATE_MODE="public-trust"
     CA_NAME=""
     [[ ! "$SERVER_ID" =~ ^[0-9.]+$ ]] || die "Let''s Encrypt requires a DNS name, not an IPv4 address."
+    collect_certbot_email
   else
     CERTIFICATE_MODE="private-ca"
     while true; do
@@ -1604,10 +1674,30 @@ restore_service_state() {
   fi
 }
 
+delete_owned_certbot_lineage() {
+  [[ "${CERTBOT_LINEAGE_CREATED:-no}" == "yes" ]] || return 0
+  [[ -n "${CERTBOT_DOMAIN:-}" ]] || {
+    warn "The managed state says a Certbot lineage was created, but no domain was recorded; leaving Certbot data untouched."
+    return 0
+  }
+
+  if ! command_exists certbot; then
+    warn "Certbot is not available, so the owned lineage for ${CERTBOT_DOMAIN} could not be removed."
+    return 0
+  fi
+
+  if certbot_lineage_exists "$CERTBOT_DOMAIN"; then
+    log "Removing the installer-owned Let's Encrypt lineage..."
+    certbot delete --cert-name "$CERTBOT_DOMAIN" --non-interactive || \
+      warn "The installer-owned Certbot lineage for ${CERTBOT_DOMAIN} could not be removed."
+  fi
+}
+
 uninstall_vpn() {
   [[ -f "$STATE_FILE" ]] || die "No installation managed by this script was found."
   # shellcheck disable=SC1090
   source "$STATE_FILE"
+  initialize_certbot_state_defaults
   initialize_proxy_state_defaults
 
   printf '\n%bUninstall IKEv2 VPN%b\n' "$BOLD" "$RESET"
@@ -1646,6 +1736,7 @@ uninstall_vpn() {
   else
     rm -f "$CERTBOT_RELOAD_HOOK"
   fi
+  delete_owned_certbot_lineage
 
   if [[ "$PROXY_BASELINE_RECORDED" == "yes" ]]; then
     restore_file "$PROXY_CONF" "proxy-danted.conf" "${PROXY_CONF_EXISTED:-no}"
@@ -1683,6 +1774,7 @@ require_managed_installation() {
   [[ -f "$STATE_FILE" ]] || die "No installation managed by this script was found."
   # shellcheck disable=SC1090
   source "$STATE_FILE"
+  initialize_certbot_state_defaults
   initialize_proxy_state_defaults
 }
 

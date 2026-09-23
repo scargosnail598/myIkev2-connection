@@ -13,7 +13,7 @@ The Linux client currently operates as a full-tunnel client.
 
 | Component | File | Version / Target |
 |---|---|---|
-| Server | `ikev2-strongswan-ubuntu.sh` | v6.3.0 / Ubuntu 22.04 & 24.04 |
+| Server | `ikev2-strongswan-ubuntu.sh` | v6.3.1 / Ubuntu 22.04 & 24.04 |
 | Windows client | `ikev2-windows-client-v6.1.ps1` | v6.1.0 / PowerShell 5.1+ |
 | Linux client | `ikev2-linux-client-v1.6.sh` | v1.6.0 / Ubuntu 22.04 & 24.04 |
 

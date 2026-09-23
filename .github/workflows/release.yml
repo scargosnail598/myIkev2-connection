@@ -14,7 +14,6 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       server: ${{ steps.version.outputs.server }}
-      windows: ${{ steps.version.outputs.windows }}
       linux: ${{ steps.version.outputs.linux }}
     steps:
       - name: Checkout
@@ -32,11 +31,9 @@ jobs:
           [[ "$tag" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
 
           mapfile -t server_files < <(find . -maxdepth 1 -type f -name 'ikev2-strongswan-ubuntu.sh' -print | sort)
-          mapfile -t windows_files < <(find . -maxdepth 1 -type f -name 'ikev2-windows-client-*.ps1' -print | sort)
           mapfile -t linux_files < <(find . -maxdepth 1 -type f -name 'ikev2-linux-client-*.sh' -print | sort)
 
           [[ ${#server_files[@]} -eq 1 ]] || { echo "Expected one server script"; exit 1; }
-          [[ ${#windows_files[@]} -eq 1 ]] || { echo "Expected one Windows client"; exit 1; }
           [[ ${#linux_files[@]} -eq 1 ]] || { echo "Expected one Linux client"; exit 1; }
 
           server="${server_files[0]}"
@@ -53,7 +50,6 @@ jobs:
 
           echo "version=$tag" >> "$GITHUB_OUTPUT"
           echo "server=$server" >> "$GITHUB_OUTPUT"
-          echo "windows=${windows_files[0]}" >> "$GITHUB_OUTPUT"
           echo "linux=${linux_files[0]}" >> "$GITHUB_OUTPUT"
 
   release:
@@ -71,7 +67,6 @@ jobs:
           mkdir -p dist
           cp "${{ needs.validate.outputs.server }}" \
             "dist/ikev2-strongswan-ubuntu-v${{ needs.validate.outputs.version }}.sh"
-          cp "${{ needs.validate.outputs.windows }}" "dist/"
           cp "${{ needs.validate.outputs.linux }}" "dist/"
 
           (

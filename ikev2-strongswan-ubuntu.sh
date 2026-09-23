@@ -2053,22 +2053,23 @@ traffic_stats_for_vpn_ip() {
     /^src / {
       source = $2
       destination = $4
+      direction = ""
       matches = (source == vpn_ip "/32" || destination == vpn_ip "/32" ||
                  source == vpn_ip || destination == vpn_ip)
     }
 
-    /^[[:space:]]*dir (in|out)/ {
+    /^[[:space:]]*(dir|socket) (in|out)/ {
       direction = $2
     }
 
     /bytes/ && matches {
       counter = $0
-      if (counter ~ /[0-9]+[[:space:]]+bytes/) {
-        sub(/^.*:[[:space:]]*/, "", counter)
-        sub(/[[:space:]]+bytes.*$/, "", counter)
-      } else if (counter ~ /bytes[[:space:]]+[0-9]+/) {
-        sub(/^.*bytes[[:space:]]*/, "", counter)
-        sub(/[[:space:]].*$/, "", counter)
+      if (match(counter, /[0-9]+[[:space:]]*\(?bytes/)) {
+        counter = substr(counter, RSTART, RLENGTH)
+        sub(/[[:space:]]*\(?bytes$/, "", counter)
+      } else if (match(counter, /bytes[[:space:]]+[0-9]+/)) {
+        counter = substr(counter, RSTART, RLENGTH)
+        sub(/^bytes[[:space:]]+/, "", counter)
       } else {
         next
       }

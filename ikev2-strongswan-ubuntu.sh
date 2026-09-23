@@ -21,6 +21,9 @@ FW_SCRIPT="/usr/local/sbin/ikev2-vpn-firewall"
 FW_SERVICE_FILE="/etc/systemd/system/ikev2-vpn-firewall.service"
 FW_SERVICE="ikev2-vpn-firewall.service"
 STRONGSWAN_SERVICE="strongswan-starter.service"
+CONNECTION_LOG_SCRIPT="/usr/local/sbin/${INSTALLER_NAME}-connection-log"
+CONNECTION_LOG_SERVICE_FILE="/etc/systemd/system/${INSTALLER_NAME}-connection-log.service"
+CONNECTION_LOG_SERVICE="${INSTALLER_NAME}-connection-log.service"
 
 # v6 private SOCKS5 Proxy Mode. The listener is bound only to a dedicated
 # private address reachable through the IKEv2 tunnel, never to the public IP.
@@ -85,6 +88,49 @@ show_logs() {
 
   printf '%bLast 100 installer log entries%b (%s)\n' "$BOLD" "$RESET" "$LOG_FILE"
   tail -n 100 "$LOG_FILE"
+}
+
+configure_connection_logging() {
+  [[ -f "$STATE_FILE" ]] || return 0
+
+  cat > "$CONNECTION_LOG_SCRIPT" <<EOF
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+LOG_FILE="${LOG_FILE}"
+connect_pattern="authentication of '([^']+)' with EAP successful"
+
+journalctl -f -n 0 -u "${STRONGSWAN_SERVICE}" -o short-iso-precise --no-pager |
+while IFS= read -r line; do
+  if [[ "\$line" =~ \$connect_pattern ]]; then
+    printf '%s [EVENT] VPN user connected: %s\n' "\$(date '+%Y-%m-%dT%H:%M:%S%z')" "\${BASH_REMATCH[1]}" >> "\$LOG_FILE"
+  elif [[ "\$line" =~ IKE_SA\ ikev2-eap\[[0-9]+\].*established ]]; then
+    printf '%s [EVENT] IKEv2 session established: %s\n' "\$(date '+%Y-%m-%dT%H:%M:%S%z')" "\$line" >> "\$LOG_FILE"
+  elif [[ "\$line" =~ deleting\ IKE_SA\ ikev2-eap\[[0-9]+\] ]]; then
+    printf '%s [EVENT] IKEv2 session disconnected: %s\n' "\$(date '+%Y-%m-%dT%H:%M:%S%z')" "\$line" >> "\$LOG_FILE"
+  fi
+done
+EOF
+  chmod 700 "$CONNECTION_LOG_SCRIPT"
+
+  cat > "$CONNECTION_LOG_SERVICE_FILE" <<EOF
+[Unit]
+Description=Log IKEv2 connection events for ${INSTALLER_NAME}
+After=${STRONGSWAN_SERVICE}
+
+[Service]
+Type=simple
+ExecStart=${CONNECTION_LOG_SCRIPT}
+Restart=always
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  chmod 644 "$CONNECTION_LOG_SERVICE_FILE"
+  systemctl daemon-reload
+  systemctl enable --now "$CONNECTION_LOG_SERVICE" >/dev/null
 }
 
 log()  { write_log INFO "$*"; printf '%b[+]%b %s\n' "$GREEN" "$RESET" "$*"; }
@@ -1622,6 +1668,7 @@ install_vpn() {
   write_firewall_config
   write_client_files
   start_and_verify
+  configure_connection_logging
   if [[ "$PROXY_ENABLED" == "yes" ]]; then
     configure_proxy_mode
     write_state
@@ -1746,6 +1793,7 @@ uninstall_vpn() {
 
   log "Stopping the managed StrongSwan configuration..."
   systemctl stop "$STRONGSWAN_SERVICE" >/dev/null 2>&1 || true
+  systemctl disable --now "$CONNECTION_LOG_SERVICE" >/dev/null 2>&1 || true
 
   log "Restoring files that existed before installation..."
   restore_file "$IPSEC_CONF" "ipsec.conf" "${IPSEC_CONF_EXISTED:-no}"
@@ -1753,6 +1801,7 @@ uninstall_vpn() {
   restore_file "$SYSCTL_FILE" "99-ikev2-vpn.conf" "${SYSCTL_FILE_EXISTED:-no}"
   restore_file "$FW_SCRIPT" "ikev2-vpn-firewall" "${FW_SCRIPT_EXISTED:-no}"
   restore_file "$FW_SERVICE_FILE" "ikev2-vpn-firewall.service" "${FW_SERVICE_FILE_EXISTED:-no}"
+  rm -f "$CONNECTION_LOG_SCRIPT" "$CONNECTION_LOG_SERVICE_FILE"
   restore_file "$CA_KEY" "ca-key.pem" "${CA_KEY_EXISTED:-no}"
   restore_file "$CA_CERT" "ca-cert.pem" "${CA_CERT_EXISTED:-no}"
   restore_file "$SERVER_KEY" "server-key.pem" "${SERVER_KEY_EXISTED:-no}"
@@ -3256,6 +3305,9 @@ main() {
   require_root
   initialize_logging
   check_ubuntu
+  if [[ -f "$STATE_FILE" ]]; then
+    configure_connection_logging
+  fi
 
   case "${1:-}" in
     install) install_vpn ;;

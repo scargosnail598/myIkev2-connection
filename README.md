@@ -26,6 +26,13 @@ Show the last 100 entries with:
 sudo ./ikev2-strongswan-ubuntu.sh logs
 ```
 
+Successful VPN authentication, IKEv2 session establishment, and session
+disconnection events are also copied from the StrongSwan journal into this log.
+On an existing installation, run any installer command once (for example
+`sudo ./ikev2-strongswan-ubuntu.sh status`) to enable the event watcher.
+Only events after the watcher is enabled are added; older events remain in the
+system journal if they have not expired.
+
 To disconnect one user's active VPN session without restarting StrongSwan:
 
 ```bash

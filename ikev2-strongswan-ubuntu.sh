@@ -2086,6 +2086,69 @@ traffic_stats_for_vpn_ip() {
   '
 }
 
+traffic_stats_for_session() {
+  local sa_name="$1"
+  local vpn_ip="$2"
+  local stats
+
+  stats=$(awk -v sa_name="$sa_name" '
+    function read_number(value,    number) {
+      if (match(value, /[0-9]+[[:space:]]*bytes/)) {
+        number = substr(value, RSTART, RLENGTH)
+        sub(/[[:space:]]*bytes$/, "", number)
+        return number
+      }
+      return ""
+    }
+
+    index($0, sa_name ":") == 1 {
+      active = 1
+      next
+    }
+
+    active && $1 ~ /^[^:]+\[[0-9]+\]:$/ && $2 == "ESTABLISHED" {
+      exit
+    }
+
+    active && /bytes_i/ {
+      value = $0
+      sub(/^.*bytes_i[[:space:]]*/, "", value)
+      rx = read_number(value)
+    }
+
+    active && /bytes_o/ {
+      value = $0
+      sub(/^.*bytes_o[[:space:]]*/, "", value)
+      tx = read_number(value)
+    }
+
+    active && /^[[:space:]]*in[[:space:]]+[0-9]+[[:space:]]+bytes/ {
+      value = $0
+      sub(/^[[:space:]]*in[[:space:]]*/, "", value)
+      rx = read_number(value)
+    }
+
+    active && /^[[:space:]]*out[[:space:]]+[0-9]+[[:space:]]+bytes/ {
+      value = $0
+      sub(/^[[:space:]]*out[[:space:]]*/, "", value)
+      tx = read_number(value)
+    }
+
+    END {
+      if (rx != "" && tx != "") {
+        printf "%s\t%s\n", rx, tx
+      }
+    }
+  ' <<< "$VPN_STATUSALL_OUTPUT")
+
+  if [[ "$stats" =~ ^[0-9]+$'\t'[0-9]+$ ]]; then
+    printf '%s\n' "$stats"
+    return 0
+  fi
+
+  traffic_stats_for_vpn_ip "$vpn_ip"
+}
+
 format_bytes() {
   local bytes="$1"
 
@@ -2143,7 +2206,7 @@ snapshot_vpn_traffic() {
 
   for session in "${CONNECTED_VPN_SESSIONS[@]}"; do
     IFS=$'\t' read -r username vpn_ip public_ip duration sa_name <<< "$session"
-    IFS=$'\t' read -r rx_bytes tx_bytes <<< "$(traffic_stats_for_vpn_ip "$vpn_ip")"
+    IFS=$'\t' read -r rx_bytes tx_bytes <<< "$(traffic_stats_for_session "$sa_name" "$vpn_ip")"
     [[ "$rx_bytes" =~ ^[0-9]+$ && "$tx_bytes" =~ ^[0-9]+$ ]] || continue
 
     old_rx="${previous_rx[$sa_name]:-0}"
@@ -2208,7 +2271,7 @@ show_connected_clients() {
     "User" "VPN IP" "RX" "TX" "Session Total" "Saved Total" "Public IP" "Connected"
   for session in "${CONNECTED_VPN_SESSIONS[@]}"; do
     IFS=$'\t' read -r username vpn_ip public_ip duration sa_name <<< "$session"
-    IFS=$'\t' read -r rx_bytes tx_bytes <<< "$(traffic_stats_for_vpn_ip "$vpn_ip")"
+    IFS=$'\t' read -r rx_bytes tx_bytes <<< "$(traffic_stats_for_session "$sa_name" "$vpn_ip")"
     IFS=$'\t' read -r saved_rx saved_tx <<< "$(saved_traffic_for_user "$username")"
     if [[ "$rx_bytes" == "NA" || "$tx_bytes" == "NA" ]]; then
       rx_display="N/A"

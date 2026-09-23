@@ -85,7 +85,6 @@ jobs:
             "channel": "stable",
             "artifacts": {
               "server": "ikev2-strongswan-ubuntu-v${{ needs.validate.outputs.version }}.sh",
-              "windows": "$(basename "${{ needs.validate.outputs.windows }}")",
               "linux": "$(basename "${{ needs.validate.outputs.linux }}")",
               "checksums": "SHA256SUMS"
             }

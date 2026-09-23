@@ -24,6 +24,11 @@ STRONGSWAN_SERVICE="strongswan-starter.service"
 CONNECTION_LOG_SCRIPT="/usr/local/sbin/${INSTALLER_NAME}-connection-log"
 CONNECTION_LOG_SERVICE_FILE="/etc/systemd/system/${INSTALLER_NAME}-connection-log.service"
 CONNECTION_LOG_SERVICE="${INSTALLER_NAME}-connection-log.service"
+TRAFFIC_STATE_FILE="${STATE_DIR}/traffic.tsv"
+TRAFFIC_SNAPSHOT_SERVICE_FILE="/etc/systemd/system/${INSTALLER_NAME}-traffic-snapshot.service"
+TRAFFIC_SNAPSHOT_TIMER_FILE="/etc/systemd/system/${INSTALLER_NAME}-traffic-snapshot.timer"
+TRAFFIC_SNAPSHOT_SERVICE="${INSTALLER_NAME}-traffic-snapshot.service"
+TRAFFIC_SNAPSHOT_TIMER="${INSTALLER_NAME}-traffic-snapshot.timer"
 
 # v6 private SOCKS5 Proxy Mode. The listener is bound only to a dedicated
 # private address reachable through the IKEv2 tunnel, never to the public IP.
@@ -131,6 +136,33 @@ EOF
   chmod 644 "$CONNECTION_LOG_SERVICE_FILE"
   systemctl daemon-reload
   systemctl enable --now "$CONNECTION_LOG_SERVICE" >/dev/null
+
+  local installer_script
+  installer_script=$(readlink -f -- "$0")
+  cat > "$TRAFFIC_SNAPSHOT_SERVICE_FILE" <<EOF
+[Unit]
+Description=Persist IKEv2 per-user traffic counters
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash ${installer_script} traffic-snapshot
+User=root
+EOF
+  cat > "$TRAFFIC_SNAPSHOT_TIMER_FILE" <<EOF
+[Unit]
+Description=Persist IKEv2 per-user traffic counters every 30 seconds
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=30s
+Unit=${TRAFFIC_SNAPSHOT_SERVICE}
+
+[Install]
+WantedBy=timers.target
+EOF
+  chmod 644 "$TRAFFIC_SNAPSHOT_SERVICE_FILE" "$TRAFFIC_SNAPSHOT_TIMER_FILE"
+  systemctl daemon-reload
+  systemctl enable --now "$TRAFFIC_SNAPSHOT_TIMER" >/dev/null
 }
 
 log()  { write_log INFO "$*"; printf '%b[+]%b %s\n' "$GREEN" "$RESET" "$*"; }
@@ -1794,6 +1826,7 @@ uninstall_vpn() {
   log "Stopping the managed StrongSwan configuration..."
   systemctl stop "$STRONGSWAN_SERVICE" >/dev/null 2>&1 || true
   systemctl disable --now "$CONNECTION_LOG_SERVICE" >/dev/null 2>&1 || true
+  systemctl disable --now "$TRAFFIC_SNAPSHOT_TIMER" >/dev/null 2>&1 || true
 
   log "Restoring files that existed before installation..."
   restore_file "$IPSEC_CONF" "ipsec.conf" "${IPSEC_CONF_EXISTED:-no}"
@@ -1802,6 +1835,7 @@ uninstall_vpn() {
   restore_file "$FW_SCRIPT" "ikev2-vpn-firewall" "${FW_SCRIPT_EXISTED:-no}"
   restore_file "$FW_SERVICE_FILE" "ikev2-vpn-firewall.service" "${FW_SERVICE_FILE_EXISTED:-no}"
   rm -f "$CONNECTION_LOG_SCRIPT" "$CONNECTION_LOG_SERVICE_FILE"
+  rm -f "$TRAFFIC_SNAPSHOT_SERVICE_FILE" "$TRAFFIC_SNAPSHOT_TIMER_FILE" "$TRAFFIC_STATE_FILE"
   restore_file "$CA_KEY" "ca-key.pem" "${CA_KEY_EXISTED:-no}"
   restore_file "$CA_CERT" "ca-cert.pem" "${CA_CERT_EXISTED:-no}"
   restore_file "$SERVER_KEY" "server-key.pem" "${SERVER_KEY_EXISTED:-no}"
@@ -2079,6 +2113,67 @@ format_bytes() {
   }'
 }
 
+snapshot_vpn_traffic() {
+  local session username vpn_ip public_ip duration sa_name rx_bytes tx_bytes
+  local old_rx old_tx delta_rx delta_tx temp_file
+  declare -A total_rx total_tx previous_rx previous_tx
+
+  require_managed_installation
+  service_is_active "$STRONGSWAN_SERVICE" || return 0
+  refresh_online_vpn_users yes
+  [[ "$VPN_SESSION_STATUS_AVAILABLE" == "yes" ]] || return 0
+
+  if [[ -r "$TRAFFIC_STATE_FILE" ]]; then
+    while IFS=$'\t' read -r record_type record_key record_user record_rx; do
+      case "$record_type" in
+        TOTAL)
+          [[ "$record_key" =~ ^[A-Za-z0-9._@-]+$ ]] || continue
+          total_rx["$record_key"]="${record_user:-0}"
+          total_tx["$record_key"]="${record_rx:-0}"
+          ;;
+        SESSION)
+          [[ -n "$record_key" ]] || continue
+          previous_rx["$record_key"]="${record_user:-0}"
+          previous_tx["$record_key"]="${record_rx:-0}"
+          ;;
+      esac
+    done < "$TRAFFIC_STATE_FILE"
+  fi
+
+  for session in "${CONNECTED_VPN_SESSIONS[@]}"; do
+    IFS=$'\t' read -r username vpn_ip public_ip duration sa_name <<< "$session"
+    IFS=$'\t' read -r rx_bytes tx_bytes <<< "$(traffic_stats_for_vpn_ip "$vpn_ip")"
+    [[ "$rx_bytes" =~ ^[0-9]+$ && "$tx_bytes" =~ ^[0-9]+$ ]] || continue
+
+    old_rx="${previous_rx[$sa_name]:-0}"
+    old_tx="${previous_tx[$sa_name]:-0}"
+    if (( rx_bytes >= old_rx )); then delta_rx=$((rx_bytes - old_rx)); else delta_rx=$rx_bytes; fi
+    if (( tx_bytes >= old_tx )); then delta_tx=$((tx_bytes - old_tx)); else delta_tx=$tx_bytes; fi
+    total_rx["$username"]=$(( ${total_rx[$username]:-0} + delta_rx ))
+    total_tx["$username"]=$(( ${total_tx[$username]:-0} + delta_tx ))
+    previous_rx["$sa_name"]="$rx_bytes"
+    previous_tx["$sa_name"]="$tx_bytes"
+  done
+
+  temp_file=$(mktemp "${TRAFFIC_STATE_FILE}.tmp.XXXXXX") || return 0
+  {
+    local user sa
+    for user in "${!total_rx[@]}"; do
+      printf 'TOTAL\t%s\t%s\t%s\n' "$user" "${total_rx[$user]}" "${total_tx[$user]:-0}"
+    done
+    for sa in "${!previous_rx[@]}"; do
+      printf 'SESSION\t%s\t%s\t%s\n' "$sa" "${previous_rx[$sa]}" "${previous_tx[$sa]:-0}"
+    done
+  } > "$temp_file"
+  chmod 600 "$temp_file"
+  mv -f -- "$temp_file" "$TRAFFIC_STATE_FILE"
+}
+
+saved_traffic_for_user() {
+  local username="$1"
+  awk -F '\t' -v username="$username" '$1 == "TOTAL" && $2 == username {print $3 "\t" $4; found=1} END {if (!found) print "0\t0"}' "$TRAFFIC_STATE_FILE" 2>/dev/null
+}
+
 show_connected_clients() {
   local session username vpn_ip public_ip duration sa_name
   local rx_bytes tx_bytes total_bytes rx_display tx_display total_display
@@ -2106,11 +2201,14 @@ show_connected_clients() {
     return 0
   fi
 
-  printf '  %-24s %-15s %-15s %-12s %-12s %-12s %s\n' \
-    "User" "VPN IP" "RX" "TX" "Total" "Public IP" "Connected"
+  snapshot_vpn_traffic
+
+  printf '  %-24s %-15s %-15s %-12s %-12s %-15s %-12s %s\n' \
+    "User" "VPN IP" "RX" "TX" "Session Total" "Saved Total" "Public IP" "Connected"
   for session in "${CONNECTED_VPN_SESSIONS[@]}"; do
     IFS=$'\t' read -r username vpn_ip public_ip duration sa_name <<< "$session"
     IFS=$'\t' read -r rx_bytes tx_bytes <<< "$(traffic_stats_for_vpn_ip "$vpn_ip")"
+    IFS=$'\t' read -r saved_rx saved_tx <<< "$(saved_traffic_for_user "$username")"
     if [[ "$rx_bytes" == "NA" || "$tx_bytes" == "NA" ]]; then
       rx_display="N/A"
       tx_display="N/A"
@@ -2121,8 +2219,10 @@ show_connected_clients() {
       tx_display=$(format_bytes "$tx_bytes")
       total_display=$(format_bytes "$total_bytes")
     fi
-    printf '  %-24s %-15s %-15s %-12s %-12s %-12s %s\n' \
-      "$username" "$vpn_ip" "$rx_display" "$tx_display" "$total_display" "$public_ip" "$duration"
+    saved_total=$((saved_rx + saved_tx))
+    printf '  %-24s %-15s %-15s %-12s %-12s %-15s %-12s %s\n' \
+      "$username" "$vpn_ip" "$rx_display" "$tx_display" "$total_display" \
+      "$(format_bytes "$saved_total")" "$public_ip" "$duration"
   done
 
   printf '\nConnected sessions: %d\n' "${#CONNECTED_VPN_SESSIONS[@]}"
@@ -3413,6 +3513,7 @@ main() {
     update) update_installer ;;
     status) status_vpn ;;
     logs) show_logs ;;
+    traffic-snapshot) snapshot_vpn_traffic ;;
     disconnect) disconnect_vpn_user "${2:-}" ;;
     diagnostics) run_diagnostics ;;
     start) start_ikev2_service ;;

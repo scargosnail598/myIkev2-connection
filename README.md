@@ -48,6 +48,11 @@ counters and represent traffic for the current VPN session; they reset when
 the session is removed. If XFRM counters are unavailable, the view displays
 `N/A`.
 
+Per-user cumulative totals are persisted in
+`/var/lib/ikev2-easy-installer/traffic.tsv`. A systemd timer named
+`ikev2-easy-installer-traffic-snapshot.timer` saves active-session counters
+every 30 seconds, so totals survive VPN service and server restarts.
+
 The Windows utility supports both Full Tunnel and Proxy Mode without requiring separate VPN profiles.
 
 ---

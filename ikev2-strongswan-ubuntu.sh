@@ -1828,7 +1828,7 @@ parse_connected_vpn_sessions() {
   awk '
     function emit_session() {
       if (username != "") {
-        printf "%s\t%s\t%s\t%s\n", username, vpn_ip, public_ip, duration
+        printf "%s\t%s\t%s\t%s\t%s\n", username, vpn_ip, public_ip, duration, sa_name
       }
     }
 
@@ -1841,6 +1841,8 @@ parse_connected_vpn_sessions() {
       }
 
       identity = $0
+      sa_name = $1
+      sub(/:$/, "", sa_name)
       sub(/^.*\[/, "", identity)
       sub(/\].*$/, "", identity)
       if (identity !~ /^[A-Za-z0-9._@-]+$/ || length(identity) > 64) {
@@ -1946,7 +1948,7 @@ configured_online_vpn_user_count() {
 }
 
 show_connected_clients() {
-  local session username vpn_ip public_ip duration
+  local session username vpn_ip public_ip duration sa_name
 
   require_managed_installation
 
@@ -1973,12 +1975,66 @@ show_connected_clients() {
 
   printf '  %-24s %-15s %-39s %s\n' "User" "VPN IP" "Public IP" "Connected"
   for session in "${CONNECTED_VPN_SESSIONS[@]}"; do
-    IFS=$'\t' read -r username vpn_ip public_ip duration <<< "$session"
+    IFS=$'\t' read -r username vpn_ip public_ip duration sa_name <<< "$session"
     printf '  %-24s %-15s %-39s %s\n' "$username" "$vpn_ip" "$public_ip" "$duration"
   done
 
   printf '\nConnected sessions: %d\n' "${#CONNECTED_VPN_SESSIONS[@]}"
   printf 'Connected users   : %d\n' "${#ONLINE_VPN_USERS[@]}"
+}
+
+disconnect_vpn_user() {
+  local requested_username="${1:-}"
+  local session username vpn_ip public_ip duration sa_name
+  local disconnected=0
+
+  require_managed_installation
+
+  if ! service_is_active "$STRONGSWAN_SERVICE"; then
+    info "StrongSwan is currently stopped. No active VPN sessions can be disconnected."
+    return 0
+  fi
+
+  refresh_online_vpn_users
+  if [[ "$VPN_SESSION_STATUS_AVAILABLE" != "yes" ]]; then
+    warn "Unable to query current StrongSwan sessions."
+    return 0
+  fi
+
+  if [[ -n "$requested_username" ]]; then
+    [[ "$requested_username" =~ ^[A-Za-z0-9._@-]+$ && ${#requested_username} -le 64 ]] || \
+      die "Invalid VPN username."
+    vpn_user_exists "$requested_username" || die "VPN user '${requested_username}' does not exist."
+    SELECTED_VPN_USER="$requested_username"
+  else
+    select_vpn_user || {
+      info "Disconnect canceled."
+      return 0
+    }
+  fi
+
+  warn "This will disconnect all active VPN sessions for '${SELECTED_VPN_USER}'."
+  ask_yes_no "Continue?" N || {
+    info "Disconnect canceled."
+    return 0
+  }
+
+  for session in "${CONNECTED_VPN_SESSIONS[@]}"; do
+    IFS=$'\t' read -r username vpn_ip public_ip duration sa_name <<< "$session"
+    [[ "$username" == "$SELECTED_VPN_USER" ]] || continue
+    if ipsec down "$sa_name" >/dev/null 2>&1; then
+      log "Disconnected VPN session for '${SELECTED_VPN_USER}' (${sa_name})."
+      ((disconnected += 1))
+    else
+      warn "Could not disconnect VPN session ${sa_name} for '${SELECTED_VPN_USER}'."
+    fi
+  done
+
+  if (( disconnected == 0 )); then
+    info "VPN user '${SELECTED_VPN_USER}' has no active session."
+  else
+    log "Disconnected ${disconnected} VPN session(s) for '${SELECTED_VPN_USER}'."
+  fi
 }
 
 select_vpn_user() {
@@ -2677,15 +2733,17 @@ user_management_menu() {
     printf '  2) Add User\n'
     printf '  3) Change Password\n'
     printf '  4) Remove User\n'
-    printf '  5) Back\n'
-    read -r -p 'Choose [1-5]: ' choice || true
+    printf '  5) Disconnect User\n'
+    printf '  6) Back\n'
+    read -r -p 'Choose [1-6]: ' choice || true
 
     case "$choice" in
       1) list_vpn_users ;;
       2) add_vpn_user ;;
       3) change_vpn_user_password ;;
       4) remove_vpn_user ;;
-      5) return 0 ;;
+      5) disconnect_vpn_user ;;
+      6) return 0 ;;
       *) warn "Invalid selection." ;;
     esac
   done
@@ -3167,7 +3225,7 @@ interactive_menu() {
 
 usage() {
   cat <<EOF
-Usage: $0 [install|upgrade|reconnect|update|status|logs|diagnostics|start|stop|restart|proxy-start|proxy-stop|proxy-restart|start-all|stop-all|uninstall]
+Usage: $0 [install|upgrade|reconnect|update|status|logs|disconnect|diagnostics|start|stop|restart|proxy-start|proxy-stop|proxy-restart|start-all|stop-all|uninstall]
 
 Commands:
   install        Full interactive IKEv2 installation; all previous features are retained.
@@ -3175,6 +3233,7 @@ Commands:
   update         Check the latest GitHub Release and safely update this installer only.
   status         Show VPN, StrongSwan, firewall, and Proxy Mode status.
   logs           Show the last 100 installer log entries.
+  disconnect     Disconnect a selected VPN user, or: disconnect <username>.
   diagnostics    Run read-only health checks for the managed VPN server.
   start          Start IKEv2 / StrongSwan (and the managed firewall/NAT if needed).
   stop           Stop IKEv2 / StrongSwan after confirmation.
@@ -3205,6 +3264,7 @@ main() {
     update) update_installer ;;
     status) status_vpn ;;
     logs) show_logs ;;
+    disconnect) disconnect_vpn_user "${2:-}" ;;
     diagnostics) run_diagnostics ;;
     start) start_ikev2_service ;;
     stop) stop_ikev2_service ;;

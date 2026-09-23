@@ -26,6 +26,15 @@ Show the last 100 entries with:
 sudo ./ikev2-strongswan-ubuntu.sh logs
 ```
 
+To disconnect one user's active VPN session without restarting StrongSwan:
+
+```bash
+sudo ./ikev2-strongswan-ubuntu.sh disconnect username
+```
+
+Without a username, the installer opens a user-selection prompt. If the user
+has multiple active sessions, all of that user's sessions are disconnected.
+
 The Windows utility supports both Full Tunnel and Proxy Mode without requiring separate VPN profiles.
 
 ---

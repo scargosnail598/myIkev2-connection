@@ -42,6 +42,12 @@ sudo ./ikev2-strongswan-ubuntu.sh disconnect username
 Without a username, the installer opens a user-selection prompt. If the user
 has multiple active sessions, all of that user's sessions are disconnected.
 
+The `Connected VPN Clients` view also shows each active user's received (RX),
+sent (TX), and total traffic. These values are read from the Linux XFRM
+counters and represent traffic for the current VPN session; they reset when
+the session is removed. If XFRM counters are unavailable, the view displays
+`N/A`.
+
 The Windows utility supports both Full Tunnel and Proxy Mode without requiring separate VPN profiles.
 
 ---

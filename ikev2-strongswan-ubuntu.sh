@@ -1996,8 +1996,92 @@ configured_online_vpn_user_count() {
   printf '%d\n' "$count"
 }
 
+traffic_stats_for_vpn_ip() {
+  local vpn_ip="$1"
+
+  if ! command_exists ip || [[ ! "$vpn_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    printf 'NA\tNA\n'
+    return 0
+  fi
+
+  ip -s xfrm policy 2>/dev/null | awk -v vpn_ip="$vpn_ip" '
+    function reset_policy() {
+      direction = ""
+      matches = 0
+    }
+
+    BEGIN {
+      reset_policy()
+      rx = 0
+      tx = 0
+    }
+
+    /^src / {
+      source = $2
+      destination = $4
+      matches = (source == vpn_ip "/32" || destination == vpn_ip "/32" ||
+                 source == vpn_ip || destination == vpn_ip)
+    }
+
+    /^[[:space:]]*dir (in|out)/ {
+      direction = $2
+    }
+
+    /bytes/ && matches {
+      counter = $0
+      if (counter ~ /[0-9]+[[:space:]]+bytes/) {
+        sub(/^.*:[[:space:]]*/, "", counter)
+        sub(/[[:space:]]+bytes.*$/, "", counter)
+      } else if (counter ~ /bytes[[:space:]]+[0-9]+/) {
+        sub(/^.*bytes[[:space:]]*/, "", counter)
+        sub(/[[:space:]].*$/, "", counter)
+      } else {
+        next
+      }
+      if (direction == "in") {
+        rx += counter
+      } else if (direction == "out") {
+        tx += counter
+      }
+    }
+
+    END {
+      printf "%s\t%s\n", rx, tx
+    }
+  '
+}
+
+format_bytes() {
+  local bytes="$1"
+
+  if [[ "$bytes" == "NA" ]]; then
+    printf 'N/A\n'
+    return 0
+  fi
+
+  awk -v bytes="$bytes" 'BEGIN {
+    units[0] = "B"
+    units[1] = "KiB"
+    units[2] = "MiB"
+    units[3] = "GiB"
+    units[4] = "TiB"
+    unit = 0
+    value = bytes
+    while (value >= 1024 && unit < 4) {
+      value /= 1024
+      unit++
+    }
+    if (unit == 0) {
+      printf "%.0f %s", value, units[unit]
+    } else {
+      printf "%.2f %s", value, units[unit]
+    }
+  }'
+}
+
 show_connected_clients() {
   local session username vpn_ip public_ip duration sa_name
+  local rx_bytes tx_bytes total_bytes rx_display tx_display total_display
 
   require_managed_installation
 
@@ -2022,10 +2106,23 @@ show_connected_clients() {
     return 0
   fi
 
-  printf '  %-24s %-15s %-39s %s\n' "User" "VPN IP" "Public IP" "Connected"
+  printf '  %-24s %-15s %-15s %-12s %-12s %-12s %s\n' \
+    "User" "VPN IP" "RX" "TX" "Total" "Public IP" "Connected"
   for session in "${CONNECTED_VPN_SESSIONS[@]}"; do
     IFS=$'\t' read -r username vpn_ip public_ip duration sa_name <<< "$session"
-    printf '  %-24s %-15s %-39s %s\n' "$username" "$vpn_ip" "$public_ip" "$duration"
+    IFS=$'\t' read -r rx_bytes tx_bytes <<< "$(traffic_stats_for_vpn_ip "$vpn_ip")"
+    if [[ "$rx_bytes" == "NA" || "$tx_bytes" == "NA" ]]; then
+      rx_display="N/A"
+      tx_display="N/A"
+      total_display="N/A"
+    else
+      total_bytes=$((rx_bytes + tx_bytes))
+      rx_display=$(format_bytes "$rx_bytes")
+      tx_display=$(format_bytes "$tx_bytes")
+      total_display=$(format_bytes "$total_bytes")
+    fi
+    printf '  %-24s %-15s %-15s %-12s %-12s %-12s %s\n' \
+      "$username" "$vpn_ip" "$rx_display" "$tx_display" "$total_display" "$public_ip" "$duration"
   done
 
   printf '\nConnected sessions: %d\n' "${#CONNECTED_VPN_SESSIONS[@]}"

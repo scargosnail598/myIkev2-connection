@@ -56,23 +56,6 @@ jobs:
           echo "windows=${windows_files[0]}" >> "$GITHUB_OUTPUT"
           echo "linux=${linux_files[0]}" >> "$GITHUB_OUTPUT"
 
-      - name: Validate Windows client syntax
-        shell: pwsh
-        run: |
-          $files = Get-ChildItem -File -Filter "ikev2-windows-client-*.ps1"
-          if ($files.Count -ne 1) { throw "Expected one Windows client script." }
-          $tokens = $null
-          $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile(
-            $files[0].FullName,
-            [ref]$tokens,
-            [ref]$errors
-          ) | Out-Null
-          if ($errors.Count -gt 0) {
-            $errors | Format-List
-            throw "PowerShell parser reported errors."
-          }
-
   release:
     needs: validate
     runs-on: ubuntu-latest

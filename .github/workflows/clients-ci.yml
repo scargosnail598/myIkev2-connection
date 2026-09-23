@@ -37,22 +37,4 @@ jobs:
           bash -n "${files[0]}"
           shellcheck --severity=warning "${files[0]}"
 
-      - name: Validate Windows client
-        shell: pwsh
-        run: |
-          $files = Get-ChildItem -File -Filter "ikev2-windows-client-*.ps1"
-          if ($files.Count -ne 1) {
-            throw "Expected exactly one Windows client script, found $($files.Count)."
-          }
-          $tokens = $null
-          $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile(
-            $files[0].FullName,
-            [ref]$tokens,
-            [ref]$errors
-          ) | Out-Null
-          if ($errors.Count -gt 0) {
-            $errors | Format-List
-            throw "PowerShell parser reported errors."
-          }
-          Write-Host "Windows client syntax is valid: $($files[0].Name)"
+

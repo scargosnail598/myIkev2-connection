@@ -19,6 +19,13 @@ The Linux client currently operates as a full-tunnel client.
 
 The server installer manages StrongSwan packages, certificates, users, routing, DNS, NAT, firewall rules, status, uninstall, and the optional private SOCKS5 Proxy Mode.
 
+Installer activity is recorded in the root-readable log file `/var/log/ikev2-easy-installer.log`.
+Show the last 100 entries with:
+
+```bash
+sudo ./ikev2-strongswan-ubuntu.sh logs
+```
+
 The Windows utility supports both Full Tunnel and Proxy Mode without requiring separate VPN profiles.
 
 ---

@@ -12,6 +12,7 @@ INSTALLER_VERSION="$CURRENT_INSTALLER_VERSION"
 STATE_DIR="/var/lib/${INSTALLER_NAME}"
 BACKUP_DIR="${STATE_DIR}/backups"
 STATE_FILE="${STATE_DIR}/state.env"
+LOG_FILE="/var/log/${INSTALLER_NAME}.log"
 
 IPSEC_CONF="/etc/ipsec.conf"
 IPSEC_SECRETS="/etc/ipsec.secrets"
@@ -62,10 +63,34 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 RESET='\033[0m'
 
-log()  { printf '%b[+]%b %s\n' "$GREEN" "$RESET" "$*"; }
-info() { printf '%b[i]%b %s\n' "$CYAN" "$RESET" "$*"; }
-warn() { printf '%b[!]%b %s\n' "$YELLOW" "$RESET" "$*" >&2; }
-die()  { printf '%b[x]%b %s\n' "$RED" "$RESET" "$*" >&2; exit 1; }
+write_log() {
+  local level="$1"
+  shift
+  printf '%s [%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$level" "$*" >> "$LOG_FILE" 2>/dev/null || true
+}
+
+initialize_logging() {
+  touch "$LOG_FILE" 2>/dev/null &&
+    chown root:root "$LOG_FILE" 2>/dev/null &&
+    chmod 600 "$LOG_FILE" 2>/dev/null || {
+    printf '%b[!]%b Unable to initialize log file: %s\n' "$YELLOW" "$RESET" "$LOG_FILE" >&2
+  }
+}
+
+show_logs() {
+  if [[ ! -r "$LOG_FILE" ]]; then
+    printf 'No installer log is available at %s\n' "$LOG_FILE"
+    return 0
+  fi
+
+  printf '%bLast 100 installer log entries%b (%s)\n' "$BOLD" "$RESET" "$LOG_FILE"
+  tail -n 100 "$LOG_FILE"
+}
+
+log()  { write_log INFO "$*"; printf '%b[+]%b %s\n' "$GREEN" "$RESET" "$*"; }
+info() { write_log INFO "$*"; printf '%b[i]%b %s\n' "$CYAN" "$RESET" "$*"; }
+warn() { write_log WARN "$*"; printf '%b[!]%b %s\n' "$YELLOW" "$RESET" "$*" >&2; }
+die()  { write_log ERROR "$*"; printf '%b[x]%b %s\n' "$RED" "$RESET" "$*" >&2; exit 1; }
 
 pause_main_menu() {
   printf '\n'
@@ -74,6 +99,7 @@ pause_main_menu() {
 
 on_error() {
   local line="$1"
+  write_log ERROR "Installer stopped because of an error near line ${line}."
   printf '\n%b[x]%b The installer stopped because of an error near line %s.\n' "$RED" "$RESET" "$line" >&2
   if [[ -f "$STATE_FILE" ]]; then
     printf 'A managed state file exists. After reviewing the error, you can run: %s uninstall\n' "$0" >&2
@@ -3061,12 +3087,13 @@ interactive_menu() {
       printf '  3) User Management\n'
       printf '  4) Connected Clients\n'
       printf '  5) Diagnostics\n'
-      printf '  6) Export Client Profile (.ikev)\n'
-      printf '  7) SOCKS5 Proxy Mode\n'
-      printf '  8) Update Installer\n'
-      printf '  9) Uninstall\n'
-      printf '  10) Exit\n'
-      read -r -p 'Choose [1-10]: ' choice || true
+      printf '  6) Show Last 100 Log Entries\n'
+      printf '  7) Export Client Profile (.ikev)\n'
+      printf '  8) SOCKS5 Proxy Mode\n'
+      printf '  9) Update Installer\n'
+      printf '  10) Uninstall\n'
+      printf '  11) Exit\n'
+      read -r -p 'Choose [1-11]: ' choice || true
 
       case "$choice" in
         1)
@@ -3088,22 +3115,26 @@ interactive_menu() {
           pause_main_menu
           ;;
         6)
-          export_ikev_profile
+          show_logs
           pause_main_menu
           ;;
         7)
-          upgrade_vpn
+          export_ikev_profile
           pause_main_menu
           ;;
         8)
-          update_installer
+          upgrade_vpn
           pause_main_menu
           ;;
         9)
-          uninstall_vpn
+          update_installer
           pause_main_menu
           ;;
         10)
+          uninstall_vpn
+          pause_main_menu
+          ;;
+        11)
           printf '\nExiting...\n'
           exit 0
           ;;
@@ -3136,13 +3167,14 @@ interactive_menu() {
 
 usage() {
   cat <<EOF
-Usage: $0 [install|upgrade|reconnect|update|status|diagnostics|start|stop|restart|proxy-start|proxy-stop|proxy-restart|start-all|stop-all|uninstall]
+Usage: $0 [install|upgrade|reconnect|update|status|logs|diagnostics|start|stop|restart|proxy-start|proxy-stop|proxy-restart|start-all|stop-all|uninstall]
 
 Commands:
   install        Full interactive IKEv2 installation; all previous features are retained.
   upgrade        Add or update private SOCKS5 Proxy Mode on an existing managed installation.\n  reconnect      Enable DPD-based stale-session recovery without changing certificates or users.
   update         Check the latest GitHub Release and safely update this installer only.
   status         Show VPN, StrongSwan, firewall, and Proxy Mode status.
+  logs           Show the last 100 installer log entries.
   diagnostics    Run read-only health checks for the managed VPN server.
   start          Start IKEv2 / StrongSwan (and the managed firewall/NAT if needed).
   stop           Stop IKEv2 / StrongSwan after confirmation.
@@ -3163,6 +3195,7 @@ EOF
 
 main() {
   require_root
+  initialize_logging
   check_ubuntu
 
   case "${1:-}" in
@@ -3171,6 +3204,7 @@ main() {
     reconnect) apply_reconnect_policy ;;
     update) update_installer ;;
     status) status_vpn ;;
+    logs) show_logs ;;
     diagnostics) run_diagnostics ;;
     start) start_ikev2_service ;;
     stop) stop_ikev2_service ;;

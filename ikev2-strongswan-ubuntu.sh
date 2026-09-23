@@ -2789,6 +2789,76 @@ check_certificate_health() {
   fi
 }
 
+check_public_trust_certificate_health() {
+  local domain="${CERTBOT_DOMAIN:-$SERVER_ID}"
+  local resolved_cert resolved_key expected_cert expected_key
+  local certificate_public_key key_public_key
+
+  check_certificate_health "$SERVER_CERT" "Server certificate"
+
+  if [[ ! -e "$SERVER_KEY" ]]; then
+    diag_fail "Server private key" "${SERVER_KEY} is missing"
+  elif [[ ! -r "$SERVER_KEY" ]]; then
+    diag_fail "Server private key" "${SERVER_KEY} is unreadable"
+  elif ! openssl pkey -in "$SERVER_KEY" -noout >/dev/null 2>&1; then
+    diag_fail "Server private key" "OpenSSL could not parse ${SERVER_KEY}"
+  else
+    diag_ok "Server private key"
+  fi
+
+  if [[ ! -L "$SERVER_CERT" || ! -L "$SERVER_KEY" ]]; then
+    diag_fail "Let's Encrypt certificate symlinks" "Server certificate and key must be symlinks to the Let's Encrypt live lineage"
+  else
+    expected_cert="/etc/letsencrypt/live/${domain}/fullchain.pem"
+    expected_key="/etc/letsencrypt/live/${domain}/privkey.pem"
+    resolved_cert=$(readlink -f -- "$SERVER_CERT" 2>/dev/null || true)
+    resolved_key=$(readlink -f -- "$SERVER_KEY" 2>/dev/null || true)
+    expected_cert=$(readlink -f -- "$expected_cert" 2>/dev/null || true)
+    expected_key=$(readlink -f -- "$expected_key" 2>/dev/null || true)
+    if [[ -z "$resolved_cert" || -z "$resolved_key" || \
+          "$resolved_cert" != "$expected_cert" || "$resolved_key" != "$expected_key" || \
+          ! -r "$SERVER_CERT" || ! -r "$SERVER_KEY" ]]; then
+      diag_fail "Let's Encrypt certificate symlinks" "Server certificate or key symlink is broken, unreadable, or points outside the expected lineage"
+    else
+      diag_ok "Let's Encrypt certificate symlinks"
+    fi
+  fi
+
+  if [[ -z "$domain" ]] || ! certbot_lineage_exists "$domain"; then
+    diag_fail "Let's Encrypt certificate lineage" "Expected Certbot lineage for ${domain:-the configured server identity} was not found"
+  else
+    diag_ok "Let's Encrypt certificate lineage" "Lineage exists for ${domain}"
+  fi
+
+  if [[ -z "$domain" || ! -r "/etc/letsencrypt/renewal/${domain}.conf" ]]; then
+    diag_fail "Let's Encrypt renewal configuration" "Renewal configuration for ${domain:-the configured server identity} is missing or unreadable"
+  else
+    diag_ok "Let's Encrypt renewal configuration"
+  fi
+
+  if [[ -r "$SERVER_CERT" ]]; then
+    if openssl x509 -in "$SERVER_CERT" -noout -checkhost "$SERVER_ID" >/dev/null 2>&1; then
+      diag_ok "Certificate identity" "Matches ${SERVER_ID}"
+    else
+      diag_fail "Certificate identity" "Certificate does not match ${SERVER_ID}"
+    fi
+
+    if openssl x509 -in "$SERVER_CERT" -purpose 2>/dev/null | grep -q 'SSL server : Yes'; then
+      diag_ok "Certificate server usage" "Certificate is valid for server authentication"
+    else
+      diag_fail "Certificate server usage" "Certificate is not marked for server authentication"
+    fi
+
+    certificate_public_key=$(openssl x509 -in "$SERVER_CERT" -pubkey -noout 2>/dev/null || true)
+    key_public_key=$(openssl pkey -in "$SERVER_KEY" -pubout 2>/dev/null || true)
+    if [[ -n "$certificate_public_key" && "$certificate_public_key" == "$key_public_key" ]]; then
+      diag_ok "Certificate and key match"
+    else
+      diag_fail "Certificate and key match" "The server certificate does not match the configured private key"
+    fi
+  fi
+}
+
 check_proxy_health() {
   local listeners
 
@@ -2834,6 +2904,7 @@ run_diagnostics() {
   elif [[ ! -r "$STATE_FILE" ]]; then
     diag_fail "Managed installation state" "Managed state file is missing or unreadable"
   elif source "$STATE_FILE"; then
+    initialize_certbot_state_defaults
     initialize_proxy_state_defaults
     DIAG_STATE_LOADED="yes"
     diag_ok "Managed installation state"
@@ -3663,6 +3734,7 @@ run_diagnostics() {
   elif [[ ! -r "$STATE_FILE" ]]; then
     diag_fail "Managed installation state" "Managed state file is missing or unreadable"
   elif source "$STATE_FILE"; then
+    initialize_certbot_state_defaults
     initialize_proxy_state_defaults
     DIAG_STATE_LOADED="yes"
     diag_ok "Managed installation state"
@@ -3736,15 +3808,19 @@ run_diagnostics() {
     diag_fail "Firewall / NAT service" "${FW_SERVICE} is inactive"
   fi
 
-  check_certificate_health "$SERVER_CERT" "Server certificate"
-  check_certificate_health "$CA_CERT" "CA certificate"
-
-  if [[ ! -e "$CA_KEY" || ! -e "$SERVER_KEY" ]]; then
-    diag_fail "Private key files" "One or more managed private keys are missing"
-  elif [[ ! -r "$CA_KEY" || ! -r "$SERVER_KEY" ]]; then
-    diag_fail "Private key files" "One or more managed private keys are unreadable"
+  if [[ "${CERTIFICATE_MODE:-private-ca}" == "public-trust" ]]; then
+    check_public_trust_certificate_health
   else
-    diag_ok "Private key files"
+    check_certificate_health "$SERVER_CERT" "Server certificate"
+    check_certificate_health "$CA_CERT" "CA certificate"
+
+    if [[ ! -e "$CA_KEY" || ! -e "$SERVER_KEY" ]]; then
+      diag_fail "Private key files" "One or more managed private keys are missing"
+    elif [[ ! -r "$CA_KEY" || ! -r "$SERVER_KEY" ]]; then
+      diag_fail "Private key files" "One or more managed private keys are unreadable"
+    else
+      diag_ok "Private key files"
+    fi
   fi
 
   if [[ ! -e "$IPSEC_SECRETS" ]]; then
@@ -4483,6 +4559,7 @@ run_diagnostics() {
   elif [[ ! -r "$STATE_FILE" ]]; then
     diag_fail "Managed installation state" "Managed state file is missing or unreadable"
   elif source "$STATE_FILE"; then
+    initialize_certbot_state_defaults
     initialize_proxy_state_defaults
     DIAG_STATE_LOADED="yes"
     diag_ok "Managed installation state"
@@ -4556,15 +4633,19 @@ run_diagnostics() {
     diag_fail "Firewall / NAT service" "${FW_SERVICE} is inactive"
   fi
 
-  check_certificate_health "$SERVER_CERT" "Server certificate"
-  check_certificate_health "$CA_CERT" "CA certificate"
-
-  if [[ ! -e "$CA_KEY" || ! -e "$SERVER_KEY" ]]; then
-    diag_fail "Private key files" "One or more managed private keys are missing"
-  elif [[ ! -r "$CA_KEY" || ! -r "$SERVER_KEY" ]]; then
-    diag_fail "Private key files" "One or more managed private keys are unreadable"
+  if [[ "${CERTIFICATE_MODE:-private-ca}" == "public-trust" ]]; then
+    check_public_trust_certificate_health
   else
-    diag_ok "Private key files"
+    check_certificate_health "$SERVER_CERT" "Server certificate"
+    check_certificate_health "$CA_CERT" "CA certificate"
+
+    if [[ ! -e "$CA_KEY" || ! -e "$SERVER_KEY" ]]; then
+      diag_fail "Private key files" "One or more managed private keys are missing"
+    elif [[ ! -r "$CA_KEY" || ! -r "$SERVER_KEY" ]]; then
+      diag_fail "Private key files" "One or more managed private keys are unreadable"
+    else
+      diag_ok "Private key files"
+    fi
   fi
 
   if [[ ! -e "$IPSEC_SECRETS" ]]; then
@@ -5303,6 +5384,7 @@ run_diagnostics() {
   elif [[ ! -r "$STATE_FILE" ]]; then
     diag_fail "Managed installation state" "Managed state file is missing or unreadable"
   elif source "$STATE_FILE"; then
+    initialize_certbot_state_defaults
     initialize_proxy_state_defaults
     DIAG_STATE_LOADED="yes"
     diag_ok "Managed installation state"
@@ -5376,15 +5458,19 @@ run_diagnostics() {
     diag_fail "Firewall / NAT service" "${FW_SERVICE} is inactive"
   fi
 
-  check_certificate_health "$SERVER_CERT" "Server certificate"
-  check_certificate_health "$CA_CERT" "CA certificate"
-
-  if [[ ! -e "$CA_KEY" || ! -e "$SERVER_KEY" ]]; then
-    diag_fail "Private key files" "One or more managed private keys are missing"
-  elif [[ ! -r "$CA_KEY" || ! -r "$SERVER_KEY" ]]; then
-    diag_fail "Private key files" "One or more managed private keys are unreadable"
+  if [[ "${CERTIFICATE_MODE:-private-ca}" == "public-trust" ]]; then
+    check_public_trust_certificate_health
   else
-    diag_ok "Private key files"
+    check_certificate_health "$SERVER_CERT" "Server certificate"
+    check_certificate_health "$CA_CERT" "CA certificate"
+
+    if [[ ! -e "$CA_KEY" || ! -e "$SERVER_KEY" ]]; then
+      diag_fail "Private key files" "One or more managed private keys are missing"
+    elif [[ ! -r "$CA_KEY" || ! -r "$SERVER_KEY" ]]; then
+      diag_fail "Private key files" "One or more managed private keys are unreadable"
+    else
+      diag_ok "Private key files"
+    fi
   fi
 
   if [[ ! -e "$IPSEC_SECRETS" ]]; then

@@ -2112,14 +2112,26 @@ traffic_stats_for_session() {
 
     active && /bytes_i/ {
       value = $0
-      sub(/^.*bytes_i[[:space:]]*/, "", value)
-      rx = read_number(value)
+      if (match(value, /[0-9]+[[:space:]]+bytes_i/)) {
+        counter = substr(value, RSTART, RLENGTH)
+        sub(/[[:space:]]+bytes_i$/, "", counter)
+        rx = counter
+      } else {
+        sub(/^.*bytes_i[[:space:]]*/, "", value)
+        rx = read_number(value)
+      }
     }
 
     active && /bytes_o/ {
       value = $0
-      sub(/^.*bytes_o[[:space:]]*/, "", value)
-      tx = read_number(value)
+      if (match(value, /[0-9]+[[:space:]]+bytes_o/)) {
+        counter = substr(value, RSTART, RLENGTH)
+        sub(/[[:space:]]+bytes_o$/, "", counter)
+        tx = counter
+      } else {
+        sub(/^.*bytes_o[[:space:]]*/, "", value)
+        tx = read_number(value)
+      }
     }
 
     active && /^[[:space:]]*in[[:space:]]+[0-9]+[[:space:]]+bytes/ {

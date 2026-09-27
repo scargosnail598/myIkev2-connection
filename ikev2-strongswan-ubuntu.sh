@@ -2101,7 +2101,12 @@ traffic_stats_for_session() {
       return ""
     }
 
-    index($0, sa_name ":") == 1 {
+    {
+      line = $0
+      sub(/^[[:space:]]+/, "", line)
+    }
+
+    index(line, sa_name ":") == 1 {
       active = 1
       next
     }

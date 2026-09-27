@@ -2258,56 +2258,88 @@ saved_traffic_for_user() {
 show_connected_clients() {
   local session username vpn_ip public_ip duration sa_name
   local rx_bytes tx_bytes total_bytes rx_display tx_display total_display
+  local saved_rx saved_tx saved_total traffic_status service_active
+  local -a configured_users=()
 
   require_managed_installation
 
   printf '\n%bConnected VPN Clients%b\n' "$BOLD" "$RESET"
   printf '=====================\n\n'
 
-  if ! service_is_active "$STRONGSWAN_SERVICE"; then
-    printf 'StrongSwan is currently stopped.\n\n'
-    printf 'Connected users: 0\n'
-    return 0
-  fi
-
-  refresh_online_vpn_users yes
-  if [[ "$VPN_SESSION_STATUS_AVAILABLE" != "yes" ]]; then
-    warn "Unable to query current StrongSwan sessions."
-    return 0
-  fi
-
-  if (( ${#CONNECTED_VPN_SESSIONS[@]} == 0 )); then
-    printf 'No VPN clients are currently connected.\n\n'
-    printf 'Connected users: 0\n'
-    return 0
-  fi
-
-  snapshot_vpn_traffic
-
-  printf '  %-24s %-15s %-15s %-12s %-12s %-15s %-12s %s\n' \
-    "User" "VPN IP" "RX" "TX" "Session Total" "Saved Total" "Public IP" "Connected"
-  for session in "${CONNECTED_VPN_SESSIONS[@]}"; do
-    IFS=$'\t' read -r username vpn_ip public_ip duration sa_name <<< "$session"
-    IFS=$'\t' read -r rx_bytes tx_bytes <<< "$(traffic_stats_for_session "$sa_name" "$vpn_ip")"
-    IFS=$'\t' read -r saved_rx saved_tx <<< "$(saved_traffic_for_user "$username")"
-    if [[ "$rx_bytes" == "NA" || "$tx_bytes" == "NA" ]]; then
-      rx_display="N/A"
-      tx_display="N/A"
-      total_display="N/A"
-    else
-      total_bytes=$((rx_bytes + tx_bytes))
-      rx_display=$(format_bytes "$rx_bytes")
-      tx_display=$(format_bytes "$tx_bytes")
-      total_display=$(format_bytes "$total_bytes")
+  if service_is_active "$STRONGSWAN_SERVICE"; then
+    service_active="yes"
+    refresh_online_vpn_users yes
+    if [[ "$VPN_SESSION_STATUS_AVAILABLE" != "yes" ]]; then
+      warn "Unable to query current StrongSwan sessions."
     fi
-    saved_total=$((saved_rx + saved_tx))
-    printf '  %-24s %-15s %-15s %-12s %-12s %-15s %-12s %s\n' \
-      "$username" "$vpn_ip" "$rx_display" "$tx_display" "$total_display" \
-      "$(format_bytes "$saved_total")" "$public_ip" "$duration"
-  done
+  else
+    service_active="no"
+    VPN_SESSION_STATUS_AVAILABLE="yes"
+    ONLINE_VPN_USERS=()
+    CONNECTED_VPN_SESSIONS=()
+    printf 'StrongSwan is currently stopped.\n\n'
+  fi
 
-  printf '\nConnected sessions: %d\n' "${#CONNECTED_VPN_SESSIONS[@]}"
-  printf 'Connected users   : %d\n' "${#ONLINE_VPN_USERS[@]}"
+  if [[ "$VPN_SESSION_STATUS_AVAILABLE" == "yes" ]] && (( ${#CONNECTED_VPN_SESSIONS[@]} == 0 )); then
+    printf 'No VPN clients are currently connected.\n\n'
+  fi
+
+  if [[ "$service_active" == "yes" && "$VPN_SESSION_STATUS_AVAILABLE" == "yes" ]] && (( ${#CONNECTED_VPN_SESSIONS[@]} > 0 )); then
+    snapshot_vpn_traffic
+
+    printf '  %-24s %-15s %-15s %-12s %-12s %-15s %-12s %s\n' \
+      "User" "VPN IP" "RX" "TX" "Session Total" "Saved Total" "Public IP" "Connected"
+    for session in "${CONNECTED_VPN_SESSIONS[@]}"; do
+      IFS=$'\t' read -r username vpn_ip public_ip duration sa_name <<< "$session"
+      IFS=$'\t' read -r rx_bytes tx_bytes <<< "$(traffic_stats_for_session "$sa_name" "$vpn_ip")"
+      IFS=$'\t' read -r saved_rx saved_tx <<< "$(saved_traffic_for_user "$username")"
+      if [[ "$rx_bytes" == "NA" || "$tx_bytes" == "NA" ]]; then
+        rx_display="N/A"
+        tx_display="N/A"
+        total_display="N/A"
+      else
+        total_bytes=$((rx_bytes + tx_bytes))
+        rx_display=$(format_bytes "$rx_bytes")
+        tx_display=$(format_bytes "$tx_bytes")
+        total_display=$(format_bytes "$total_bytes")
+      fi
+      saved_total=$((saved_rx + saved_tx))
+      printf '  %-24s %-15s %-15s %-12s %-12s %-15s %-12s %s\n' \
+        "$username" "$vpn_ip" "$rx_display" "$tx_display" "$total_display" \
+        "$(format_bytes "$saved_total")" "$public_ip" "$duration"
+    done
+  fi
+
+  mapfile -t configured_users < <(get_vpn_users)
+  printf '\n%bConfigured User Traffic Totals%b\n' "$BOLD" "$RESET"
+  printf '=============================\n\n'
+  if (( ${#configured_users[@]} == 0 )); then
+    printf 'No VPN users are currently configured.\n'
+  else
+    printf '  %-24s %-10s %-15s %-15s %s\n' "User" "Status" "RX Total" "TX Total" "Combined Total"
+    for username in "${configured_users[@]}"; do
+      IFS=$'\t' read -r saved_rx saved_tx <<< "$(saved_traffic_for_user "$username")"
+      saved_total=$((saved_rx + saved_tx))
+      if [[ "$VPN_SESSION_STATUS_AVAILABLE" != "yes" ]]; then
+        traffic_status="Unknown"
+      elif vpn_user_is_online "$username"; then
+        traffic_status="Online"
+      else
+        traffic_status="Offline"
+      fi
+      printf '  %-24s %-10s %-15s %-15s %s\n' \
+        "$username" "$traffic_status" "$(format_bytes "$saved_rx")" \
+        "$(format_bytes "$saved_tx")" "$(format_bytes "$saved_total")"
+    done
+  fi
+
+  if [[ "$VPN_SESSION_STATUS_AVAILABLE" == "yes" ]]; then
+    printf '\nConnected sessions: %d\n' "${#CONNECTED_VPN_SESSIONS[@]}"
+    printf 'Connected users   : %d\n' "${#ONLINE_VPN_USERS[@]}"
+  else
+    printf '\nConnected sessions: Unknown\n'
+    printf 'Connected users   : Unknown\n'
+  fi
 }
 
 disconnect_vpn_user() {

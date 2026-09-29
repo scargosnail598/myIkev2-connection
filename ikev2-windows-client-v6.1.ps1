@@ -1,8 +1,14 @@
 #requires -Version 5.1
 
+param(
+    [switch]$AutoReconnectWatch,
+    [string]$ProfileName,
+    [switch]$AllUser
+)
+
 $ErrorActionPreference = "Stop"
 
-$APP_VERSION = "6.1.0"
+$APP_VERSION = "6.2.0"
 $DEFAULT_PROXY_HOST = "10.254.254.1"
 $DEFAULT_PROXY_PORT = 1080
 $STATE_ROOT = Join-Path $env:ProgramData "IKEv2-Windows-VPN-Utility"
@@ -1080,6 +1086,144 @@ function Get-PhonebookPath {
     return Join-Path $env:AppData "Microsoft\Network\Connections\Pbk\rasphone.pbk"
 }
 
+function Get-AutoReconnectTaskName {
+    param($Profile)
+
+    $scope = if ($Profile.AllUser) { "all-users" } else { "current-user" }
+    $identity = "$scope`n$($Profile.Name)"
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $hash = [BitConverter]::ToString(
+            $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($identity))
+        ).Replace("-", "").Substring(0, 16)
+    }
+    finally {
+        $sha.Dispose()
+    }
+
+    return "IKEv2-AutoReconnect-$hash"
+}
+
+function Get-AutoReconnectVpn {
+    param($Profile)
+
+    if ($Profile.AllUser) {
+        return Get-VpnConnection `
+            -Name $Profile.Name `
+            -AllUserConnection `
+            -ErrorAction SilentlyContinue
+    }
+
+    return Get-VpnConnection `
+        -Name $Profile.Name `
+        -ErrorAction SilentlyContinue
+}
+
+function Write-AutoReconnectLog {
+    param([string]$Message)
+
+    $logDirectory = Join-Path $STATE_ROOT "auto-reconnect"
+    New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
+    $logPath = Join-Path $logDirectory "watcher.log"
+    Add-Content -LiteralPath $logPath -Value "$(Get-Date -Format s) $Message"
+}
+
+function Invoke-AutoReconnectWatch {
+    $profile = [PSCustomObject]@{
+        Name    = $ProfileName
+        AllUser = [bool]$AllUser
+    }
+
+    while ($true) {
+        $current = Get-AutoReconnectVpn -Profile $profile
+        if (-not $current) {
+            Write-AutoReconnectLog "Profile '$ProfileName' no longer exists; watcher stopped."
+            return
+        }
+
+        if ($current.ConnectionStatus -ne "Connected") {
+            $phonebook = Get-PhonebookPath -AllUser $profile.AllUser
+            & "$env:SystemRoot\System32\rasdial.exe" `
+                $ProfileName `
+                "/phonebook:$phonebook" *> $null
+            $rasExitCode = $LASTEXITCODE
+            Start-Sleep -Seconds 2
+
+            $current = Get-AutoReconnectVpn -Profile $profile
+            if ($current -and $current.ConnectionStatus -eq "Connected") {
+                Write-AutoReconnectLog "Connected profile '$ProfileName'."
+            }
+            else {
+                Write-AutoReconnectLog "Reconnect attempt failed for '$ProfileName' (rasdial exit $rasExitCode)."
+            }
+        }
+
+        Start-Sleep -Seconds 20
+    }
+}
+
+function Set-AutoReconnect {
+    param($Profile)
+
+    if (-not $Profile) {
+        return
+    }
+
+    $taskName = Get-AutoReconnectTaskName -Profile $Profile
+    $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+
+    if ($existingTask) {
+        Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+        Write-Info "Auto-reconnect disabled for '$($Profile.Name)'."
+        return
+    }
+
+    New-Item -ItemType Directory -Path $STATE_ROOT -Force | Out-Null
+    $watchScriptPath = Join-Path $STATE_ROOT "ikev2-windows-client.ps1"
+    Copy-Item -LiteralPath $PSCommandPath -Destination $watchScriptPath -Force
+    $scriptPath = $watchScriptPath.Replace("'", "''")
+    $escapedName = $Profile.Name.Replace("'", "''")
+    $watchCommand = "& '$scriptPath' -AutoReconnectWatch -ProfileName '$escapedName'"
+    if ($Profile.AllUser) {
+        $watchCommand += " -AllUser"
+    }
+    $encodedCommand = [Convert]::ToBase64String(
+        [Text.Encoding]::Unicode.GetBytes($watchCommand)
+    )
+    $powershellPath = Join-Path $PSHOME "powershell.exe"
+    $action = New-ScheduledTaskAction `
+        -Execute $powershellPath `
+        -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -EncodedCommand $encodedCommand"
+    $trigger = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
+    $principal = New-ScheduledTaskPrincipal `
+        -UserId "$env:USERDOMAIN\$env:USERNAME" `
+        -LogonType Interactive `
+        -RunLevel Highest
+    $settings = New-ScheduledTaskSettingsSet `
+        -ExecutionTimeLimit ([TimeSpan]::Zero) `
+        -StartWhenAvailable `
+        -RestartCount 999 `
+        -RestartInterval (New-TimeSpan -Minutes 1)
+
+    Register-ScheduledTask `
+        -TaskName $taskName `
+        -Action $action `
+        -Trigger $trigger `
+        -Principal $principal `
+        -Settings $settings `
+        -Description "Reconnect the IKEv2 profile when its connection drops." | Out-Null
+    Start-ScheduledTask -TaskName $taskName
+    Write-Info "Auto-reconnect enabled for '$($Profile.Name)' at user logon. Windows must have saved VPN credentials."
+}
+
+function Configure-AutoReconnect {
+    $profile = Select-Ikev2Profile -Action "configure auto-reconnect"
+    if ($profile) {
+        Set-AutoReconnect -Profile $profile
+    }
+}
+
 function Show-VpnProfileStatus {
     param($Profile)
 
@@ -1574,6 +1718,13 @@ function Disconnect-VpnProfile {
         return
     }
 
+    $taskName = Get-AutoReconnectTaskName -Profile $Profile
+    if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
+        Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+        Write-Info "Auto-reconnect stopped for '$($Profile.Name)'."
+    }
+
     if ($Profile.AllUser) {
         $current = Get-VpnConnection `
             -Name $Profile.Name `
@@ -1690,6 +1841,14 @@ function Check-RequiredCommands {
 
 Ensure-Administrator
 
+if ($AutoReconnectWatch) {
+    if ([string]::IsNullOrWhiteSpace($ProfileName)) {
+        throw "Auto-reconnect profile name is required."
+    }
+    Invoke-AutoReconnectWatch
+    exit 0
+}
+
 try {
     Check-RequiredCommands
 }
@@ -1735,11 +1894,12 @@ while ($true) {
     Write-Host "3) Status"
     Write-Host "4) Connect"
     Write-Host "5) Disconnect"
-    Write-Host "6) Traffic Mode (Full Tunnel / Proxy Mode)"
-    Write-Host "7) Exit"
+    Write-Host "6) Auto-reconnect (toggle)"
+    Write-Host "7) Traffic Mode (Full Tunnel / Proxy Mode)"
+    Write-Host "8) Exit"
     Write-Host ""
 
-    $choice = (Read-Host "Choose an option [1-7]").Trim()
+    $choice = (Read-Host "Choose an option [1-8]").Trim()
 
     switch ($choice) {
         "1" {
@@ -1782,11 +1942,16 @@ while ($true) {
         }
 
         "6" {
-            Configure-TrafficMode
+            Configure-AutoReconnect
             Pause-Menu
         }
 
         "7" {
+            Configure-TrafficMode
+            Pause-Menu
+        }
+
+        "8" {
             Write-Host ""
             Write-Host "Exiting..." -ForegroundColor Gray
             exit 0

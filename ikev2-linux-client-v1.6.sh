@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 APP_NAME="IKEv2 Linux VPN Utility"
-APP_VERSION="1.6.0"
+APP_VERSION="1.7.0"
 STATE_DIR="/etc/ikev2-client-utility"
 META_DIR="$STATE_DIR/profiles"
 CONF_DIR="/etc/ipsec.d/ikev2-client-profiles"
@@ -13,6 +13,7 @@ SYSTEM_INSTALL_DIR="/opt/ikev2-client"
 SYSTEM_SCRIPT="$SYSTEM_INSTALL_DIR/ikev2-client.sh"
 SYSTEM_CERT="$SYSTEM_INSTALL_DIR/ca-cert.cer"
 SYSTEM_COMMAND="/usr/local/bin/ikev2"
+AUTORECONNECT_UNIT_PREFIX="ikev2-client-autoreconnect-"
 DNS_STATE_DIR="$STATE_DIR/dns-state"
 DNS_GLOBAL_BACKUP="$STATE_DIR/resolv.conf.pre-vpn"
 DNS_OWNER_FILE="$STATE_DIR/resolv.conf.owner"
@@ -1347,6 +1348,8 @@ connect_selected() {
 disconnect_selected() {
     select_profile "disconnect" || return
 
+    disable_autoreconnect "$META_ID"
+
     if ! is_connected "$META_ID"; then
         remove_dns_for_profile "$META_ID"
         info "VPN profile '$META_NAME' is already disconnected."
@@ -1362,6 +1365,78 @@ disconnect_selected() {
         if ! is_connected "$META_ID"; then
             remove_dns_for_profile "$META_ID"
         fi
+    fi
+}
+
+autoreconnect_unit_name() {
+    printf '%s%s.service' "$AUTORECONNECT_UNIT_PREFIX" "$1"
+}
+
+autoreconnect_watch() {
+    local id="$1"
+    local metadata
+
+    metadata="$(metadata_path "$id")"
+    [[ -f "$metadata" ]] || die "Auto-reconnect profile no longer exists."
+
+    while [[ -f "$metadata" ]]; do
+        if ! is_connected "$id"; then
+            read_metadata "$metadata"
+            info "Auto-reconnect: attempting to connect '$META_NAME'."
+            connect_profile_by_id "$id" "$META_NAME" || true
+        fi
+        sleep 15
+    done
+}
+
+enable_autoreconnect() {
+    local id="$1"
+    local unit unit_path
+
+    unit="$(autoreconnect_unit_name "$id")"
+    unit_path="/etc/systemd/system/$unit"
+    install -d -m 0755 "$SYSTEM_INSTALL_DIR"
+    install -m 0755 "$(readlink -f -- "${BASH_SOURCE[0]}")" "$SYSTEM_SCRIPT"
+    cat > "$unit_path" <<EOF
+[Unit]
+Description=IKEv2 auto-reconnect for profile $id
+After=network-online.target strongswan-starter.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=$SYSTEM_SCRIPT --autoreconnect-watch $id
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload
+    systemctl enable --now "$unit"
+    info "Auto-reconnect enabled for '$META_NAME' and will start at boot."
+}
+
+disable_autoreconnect() {
+    local id="$1"
+    local unit
+
+    unit="$(autoreconnect_unit_name "$id")"
+    systemctl disable --now "$unit" >/dev/null 2>&1 || true
+    rm -f "/etc/systemd/system/$unit"
+    systemctl daemon-reload
+}
+
+toggle_autoreconnect() {
+    select_profile "configure auto-reconnect" || return
+    local unit
+    unit="$(autoreconnect_unit_name "$META_ID")"
+
+    if systemctl is-enabled --quiet "$unit" 2>/dev/null; then
+        disable_autoreconnect "$META_ID"
+        info "Auto-reconnect disabled for '$META_NAME'."
+    else
+        enable_autoreconnect "$META_ID"
     fi
 }
 
@@ -1396,6 +1471,8 @@ remove_selected_profile() {
     printf '\n'
     read -r -p "Remove VPN profile '$META_NAME'? [y/N]: " answer
     [[ "$answer" =~ ^[Yy]([Ee][Ss])?$ ]] || return
+
+    disable_autoreconnect "$META_ID"
 
     if is_connected "$META_ID"; then
         ipsec down "$META_ID" >/dev/null 2>&1 || true
@@ -1476,6 +1553,15 @@ uninstall_utility() {
     }
 
     step "Disconnecting managed VPN profiles..."
+
+    local unit_file
+    shopt -s nullglob
+    for unit_file in "/etc/systemd/system/${AUTORECONNECT_UNIT_PREFIX}"*.service; do
+        systemctl disable --now "${unit_file##*/}" >/dev/null 2>&1 || true
+        rm -f "$unit_file"
+    done
+    shopt -u nullglob
+    systemctl daemon-reload
 
     local -a meta_files=()
     local meta_file
@@ -1584,11 +1670,12 @@ main_menu() {
         printf '3) List / Status\n'
         printf '4) Connect\n'
         printf '5) Disconnect\n'
-        printf '6) Remove Profile\n'
-        printf '7) Uninstall Utility\n'
-        printf '8) Exit\n\n'
+        printf '6) Auto-reconnect (toggle)\n'
+        printf '7) Remove Profile\n'
+        printf '8) Uninstall Utility\n'
+        printf '9) Exit\n\n'
 
-        read -r -p "Choose an option [1-8]: " choice
+        read -r -p "Choose an option [1-9]: " choice
 
         case "$choice" in
             1) install_update_profile; pause_menu ;;
@@ -1604,9 +1691,10 @@ main_menu() {
                 ;;
             4) connect_selected; pause_menu ;;
             5) disconnect_selected; pause_menu ;;
-            6) remove_selected_profile; pause_menu ;;
-            7) uninstall_utility; pause_menu ;;
-            8) printf '\nExiting...\n'; exit 0 ;;
+            6) toggle_autoreconnect; pause_menu ;;
+            7) remove_selected_profile; pause_menu ;;
+            8) uninstall_utility; pause_menu ;;
+            9) printf '\nExiting...\n'; exit 0 ;;
             *) warn "Invalid option."; sleep 1 ;;
         esac
     done
@@ -1615,6 +1703,13 @@ main_menu() {
 require_root "$@"
 detect_ubuntu
 ensure_directories
+
+if [[ "${1:-}" == "--autoreconnect-watch" ]]; then
+    [[ $# -eq 2 && "$2" =~ ^ikev2c_[a-f0-9]{12}$ ]] || die "Invalid auto-reconnect profile ID."
+    autoreconnect_watch "$2"
+    exit 0
+fi
+
 cleanup_stale_dns_override
 
 if command -v ipsec >/dev/null 2>&1; then

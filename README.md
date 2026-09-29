@@ -14,8 +14,8 @@ The Linux client currently operates as a full-tunnel client.
 | Component | File | Version / Target |
 |---|---|---|
 | Server | `ikev2-strongswan-ubuntu.sh` | v6.3.2 / Ubuntu 22.04 & 24.04 |
-| Windows client | `ikev2-windows-client-v6.1.ps1` | v6.2.0 / PowerShell 5.1+ |
-| Linux client | `ikev2-linux-client-v1.6.sh` | v1.7.0 / Ubuntu 22.04 & 24.04 |
+| Windows client | `ikev2-windows-client-v6.1.ps1` | v6.3.0 / PowerShell 5.1+ |
+| Linux client | `ikev2-linux-client-v1.6.sh` | v1.8.0 / Ubuntu 22.04 & 24.04 |
 
 The server installer manages StrongSwan packages, certificates, users, routing, DNS, NAT, firewall rules, status, uninstall, and the optional private SOCKS5 Proxy Mode.
 
@@ -555,7 +555,7 @@ username.ikev
 
 ---
 
-# 8. Windows client v6.2
+# 8. Windows client v6.3
 
 ## Requirements
 
@@ -574,7 +574,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\ikev2-windows-client-v
 ```
 
 A sibling `ca-cert.cer` is still validated and trusted at startup when present.
-When no local `.cer` exists, v6.2 starts normally and displays:
+When no local `.cer` exists, v6.3 starts normally and displays:
 
 ```text
 Trusted CA : no local CA loaded
@@ -588,7 +588,7 @@ embedded CA's name as utility status.
 The menu is:
 
 ```text
-IKEv2 Windows VPN Utility v6.2.0
+IKEv2 Windows VPN Utility v6.3.0
 ===============================
 
 1) Install / Update IKEv2 VPN
@@ -597,9 +597,15 @@ IKEv2 Windows VPN Utility v6.2.0
 4) Connect
 5) Disconnect
 6) Auto-reconnect (toggle)
-7) Traffic Mode (Full Tunnel / Proxy Mode)
-8) Exit
+7) Update Client
+8) Traffic Mode (Full Tunnel / Proxy Mode)
+9) Exit
 ```
+
+Choose **Update Client** to download the latest Windows script from the
+project's GitHub `main` branch. The updater validates PowerShell syntax,
+refuses older versions, and replaces the running script and any
+auto-reconnect copy. Restart the utility after updating.
 
 Choose **Auto-reconnect** and select a profile to enable or disable its
 scheduled task. It retries while the Windows user is logged in and starts
@@ -783,10 +789,10 @@ The Linux client is designed for Ubuntu 22.04 and 24.04.
 Current Linux client version:
 
 ```text
-1.7.0
+1.8.0
 ```
 
-Linux uses **Full Tunnel IPv4**. Version 1.7 can display advertised SOCKS5
+Linux uses **Full Tunnel IPv4**. Version 1.8 can display advertised SOCKS5
 Proxy Mode metadata during import, but it does not configure or use the proxy,
 add proxy routes, or enable split tunneling.
 
@@ -802,7 +808,7 @@ Menu:
 ```text
 IKEv2 Linux VPN Utility
 =======================
-Version: 1.7.0
+Version: 1.8.0
 
 1) Install / Update IKEv2 VPN
 2) Import .ikev Profile
@@ -812,13 +818,19 @@ Version: 1.7.0
 6) Auto-reconnect (toggle)
 7) Remove Profile
 8) Uninstall Utility
-9) Exit
+9) Update Client
+10) Exit
 ```
 
 Choose **Auto-reconnect** and select a profile to enable or disable its
 systemd service. An enabled profile is retried every 15 seconds and the service
 starts at boot. Manual **Disconnect**, profile removal, and utility uninstall
 stop and remove the service.
+
+Choose **Update Client** to download the latest Linux script from the project's
+GitHub `main` branch. The updater validates Bash syntax, refuses older versions,
+and updates both the running script and the installed copy used by
+auto-reconnect. Restart the utility after updating.
 
 ## Manual setup
 
@@ -846,7 +858,7 @@ integration, and reloads StrongSwan.
 
 ## Import a portable `.ikev` profile
 
-The easier v1.7 workflow is:
+The easier v1.8 workflow is:
 
 1. Export `username.ikev` on the VPN server.
 2. Copy the `.ikev` file to Ubuntu.
@@ -858,7 +870,7 @@ The easier v1.7 workflow is:
 7. Confirm trust and enter the VPN password.
 8. Connect.
 
-Linux v1.7 supports `.ikev` schema version 1 only. It parses JSON with
+Linux v1.8 supports `.ikev` schema version 1 only. It parses JSON with
 Python 3's standard-library `json` module, verifies the embedded DER CA and
 SHA-256 fingerprint, and then uses the same StrongSwan profile, secrets, DNS,
 reload, and connection architecture as manual setup.
@@ -868,7 +880,7 @@ importer asks for the password using hidden input and stores it only through
 the existing root-only StrongSwan secrets mechanism. The original `.ikev`
 file and embedded Base64 data are not copied into managed runtime state.
 
-Linux v1.7 uses one managed VPN CA at a time. A profile using the existing CA
+Linux v1.8 uses one managed VPN CA at a time. A profile using the existing CA
 reuses it. A different CA is rejected while managed profiles exist because
 silently replacing trust could break them.
 

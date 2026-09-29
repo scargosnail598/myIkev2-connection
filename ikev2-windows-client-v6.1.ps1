@@ -8,7 +8,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$APP_VERSION = "6.2.0"
+$APP_VERSION = "6.3.0"
 $DEFAULT_PROXY_HOST = "10.254.254.1"
 $DEFAULT_PROXY_PORT = 1080
 $STATE_ROOT = Join-Path $env:ProgramData "IKEv2-Windows-VPN-Utility"
@@ -1819,6 +1819,66 @@ function Disconnect-VpnProfile {
     Show-VpnProfileStatus -Profile $Profile
 }
 
+function Update-ClientScript {
+    $updateUrl = "https://raw.githubusercontent.com/scargosnail598/myIkev2-connection/main/ikev2-windows-client-v6.1.ps1"
+    $downloadPath = Join-Path $env:TEMP ("ikev2-windows-update-{0}.ps1" -f [guid]::NewGuid())
+
+    try {
+        Invoke-WebRequest -Uri $updateUrl -OutFile $downloadPath -UseBasicParsing -ErrorAction Stop
+        $downloadedScript = Get-Content -LiteralPath $downloadPath -Raw -ErrorAction Stop
+        $versionMatch = [regex]::Match($downloadedScript, '(?m)^\$APP_VERSION\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"\s*$')
+        if (-not $versionMatch.Success) {
+            throw "The downloaded Windows client has no valid version declaration."
+        }
+
+        $remoteVersion = [version]$versionMatch.Groups[1].Value
+        $currentVersion = [version]$APP_VERSION
+        if ($remoteVersion -eq $currentVersion) {
+            Write-Info "Windows client is already up to date (v$APP_VERSION)."
+            return
+        }
+        if ($remoteVersion -lt $currentVersion) {
+            throw "The upstream client version ($remoteVersion) is older than v$APP_VERSION; refusing to downgrade."
+        }
+
+        $tokens = $null
+        $parseErrors = $null
+        [System.Management.Automation.Language.Parser]::ParseFile(
+            $downloadPath,
+            [ref]$tokens,
+            [ref]$parseErrors
+        ) | Out-Null
+        if ($parseErrors.Count -gt 0) {
+            throw "The downloaded Windows client has PowerShell syntax errors."
+        }
+
+        $watchScriptPath = Join-Path $STATE_ROOT "ikev2-windows-client.ps1"
+        $targets = @($PSCommandPath, $watchScriptPath) | Select-Object -Unique
+        foreach ($target in $targets) {
+            if (-not (Test-Path -LiteralPath $target -PathType Leaf)) {
+                continue
+            }
+
+            $stagingPath = "$target.update.$PID"
+            try {
+                Copy-Item -LiteralPath $downloadPath -Destination $stagingPath -Force
+                Move-Item -LiteralPath $stagingPath -Destination $target -Force
+            }
+            finally {
+                Remove-Item -LiteralPath $stagingPath -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        Write-Info "Windows client updated to v$remoteVersion. Restart the utility to use it."
+    }
+    catch {
+        Write-Warn "Client update failed: $($_.Exception.Message)"
+    }
+    finally {
+        Remove-Item -LiteralPath $downloadPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Check-RequiredCommands {
     $requiredCommands = @(
         "Add-VpnConnection",
@@ -1895,27 +1955,23 @@ while ($true) {
     Write-Host "4) Connect"
     Write-Host "5) Disconnect"
     Write-Host "6) Auto-reconnect (toggle)"
-    Write-Host "7) Traffic Mode (Full Tunnel / Proxy Mode)"
-    Write-Host "8) Exit"
+    Write-Host "7) Update Client"
+    Write-Host "8) Traffic Mode (Full Tunnel / Proxy Mode)"
+    Write-Host "9) Exit"
     Write-Host ""
 
-    $choice = (Read-Host "Choose an option [1-8]").Trim()
+    $choice = (Read-Host "Choose an option [1-9]").Trim()
 
     switch ($choice) {
         "1" {
             Install-OrUpdateVpn
-            if ($manualCaFile) {
-                $script:caInfo = Ensure-CaTrusted -CertificateFile $manualCaFile
-            }
-            else {
-                $script:caInfo = [PSCustomObject]@{
-                    File = $null
-                    Name = "public system trust"
-                    Subject = $null
-                    Thumbprint = $null
-                }
-                Write-Info "No custom CA found; Windows will use the public system trust store."
+            Pause-Menu
+        }
+
+        "2" {
             Import-IkevProfile
+            Pause-Menu
+        }
 
         "3" {
             $profile = Select-Ikev2Profile -Action "view"
@@ -1947,11 +2003,16 @@ while ($true) {
         }
 
         "7" {
-            Configure-TrafficMode
+            Update-ClientScript
             Pause-Menu
         }
 
         "8" {
+            Configure-TrafficMode
+            Pause-Menu
+        }
+
+        "9" {
             Write-Host ""
             Write-Host "Exiting..." -ForegroundColor Gray
             exit 0

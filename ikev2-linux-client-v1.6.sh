@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 APP_NAME="IKEv2 Linux VPN Utility"
-APP_VERSION="1.7.0"
+APP_VERSION="1.8.0"
 STATE_DIR="/etc/ikev2-client-utility"
 META_DIR="$STATE_DIR/profiles"
 CONF_DIR="/etc/ipsec.d/ikev2-client-profiles"
@@ -1659,6 +1659,69 @@ show_all_status() {
     done
 }
 
+update_client_script() {
+    local update_url="https://raw.githubusercontent.com/scargosnail598/myIkev2-connection/main/ikev2-linux-client-v1.6.sh"
+    local downloaded current_path remote_version latest_version target staging
+    local -a targets=()
+
+    downloaded="$(mktemp)"
+    if command -v curl >/dev/null 2>&1; then
+        curl --fail --location --silent --show-error --connect-timeout 10 --max-time 120 \
+            "$update_url" --output "$downloaded" || {
+            rm -f "$downloaded"
+            die "Failed to download the latest Linux client. Check your Internet connection."
+        }
+    elif command -v wget >/dev/null 2>&1; then
+        wget --quiet --timeout=120 --output-document="$downloaded" "$update_url" || {
+            rm -f "$downloaded"
+            die "Failed to download the latest Linux client. Check your Internet connection."
+        }
+    else
+        rm -f "$downloaded"
+        die "Install curl or wget to update the Linux client."
+    fi
+
+    if [[ ! -s "$downloaded" ]] || ! bash -n "$downloaded"; then
+        rm -f "$downloaded"
+        die "The downloaded Linux client is empty or has invalid Bash syntax."
+    fi
+
+    remote_version="$(sed -n 's/^APP_VERSION="\([0-9][0-9.]*\)"$/\1/p' "$downloaded" | head -n 1)"
+    if [[ ! "$remote_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        rm -f "$downloaded"
+        die "Could not read a valid version from the downloaded Linux client."
+    fi
+
+    current_path="$(readlink -f -- "${BASH_SOURCE[0]}")"
+    if [[ "$remote_version" == "$APP_VERSION" ]]; then
+        rm -f "$downloaded"
+        info "Linux client is already up to date (v$APP_VERSION)."
+        return
+    fi
+
+    latest_version="$(printf '%s\n%s\n' "$APP_VERSION" "$remote_version" | sort -V | tail -n 1)"
+    if [[ "$latest_version" != "$remote_version" ]]; then
+        rm -f "$downloaded"
+        die "The upstream client version ($remote_version) is older than v$APP_VERSION; refusing to downgrade."
+    fi
+
+    targets+=("$current_path")
+    if [[ -f "$SYSTEM_SCRIPT" ]] && [[ "$(readlink -f -- "$SYSTEM_SCRIPT")" != "$current_path" ]]; then
+        targets+=("$SYSTEM_SCRIPT")
+    fi
+
+    for target in "${targets[@]}"; do
+        staging="$(mktemp "${target}.update.XXXXXX")"
+        if ! install -m 0755 "$downloaded" "$staging" || ! mv -f -- "$staging" "$target"; then
+            rm -f "$staging" "$downloaded"
+            die "Failed to replace Linux client at $target."
+        fi
+    done
+
+    rm -f "$downloaded"
+    info "Linux client updated to v$remote_version. Restart the utility to use it."
+}
+
 main_menu() {
     while true; do
         clear
@@ -1673,9 +1736,10 @@ main_menu() {
         printf '6) Auto-reconnect (toggle)\n'
         printf '7) Remove Profile\n'
         printf '8) Uninstall Utility\n'
-        printf '9) Exit\n\n'
+        printf '9) Update Client\n'
+        printf '10) Exit\n\n'
 
-        read -r -p "Choose an option [1-9]: " choice
+        read -r -p "Choose an option [1-10]: " choice
 
         case "$choice" in
             1) install_update_profile; pause_menu ;;
@@ -1694,7 +1758,8 @@ main_menu() {
             6) toggle_autoreconnect; pause_menu ;;
             7) remove_selected_profile; pause_menu ;;
             8) uninstall_utility; pause_menu ;;
-            9) printf '\nExiting...\n'; exit 0 ;;
+            9) update_client_script; pause_menu ;;
+            10) printf '\nExiting...\n'; exit 0 ;;
             *) warn "Invalid option."; sleep 1 ;;
         esac
     done

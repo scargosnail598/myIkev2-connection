@@ -1108,15 +1108,15 @@ function Get-AutoReconnectVpn {
     param($Profile)
 
     if ($Profile.AllUser) {
-        return Get-VpnConnection `
+        return (Get-VpnConnection `
             -Name $Profile.Name `
             -AllUserConnection `
-            -ErrorAction SilentlyContinue
+            -ErrorAction SilentlyContinue)
     }
 
-    return Get-VpnConnection `
+    return (Get-VpnConnection `
         -Name $Profile.Name `
-        -ErrorAction SilentlyContinue
+        -ErrorAction SilentlyContinue)
 }
 
 function Write-AutoReconnectLog {

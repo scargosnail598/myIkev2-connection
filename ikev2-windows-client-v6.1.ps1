@@ -29,6 +29,12 @@ function Write-Warn {
     Write-Host "[!] $Message" -ForegroundColor Yellow
 }
 
+function Show-About {
+    Write-Host ""
+    Write-Host "IKEv2 Windows VPN Utility v$APP_VERSION creates and manages native Windows IKEv2 profiles with secure IPsec settings, Full Tunnel or Proxy Mode routing, and optional automatic reconnection." -ForegroundColor Gray
+    Write-Host ""
+}
+
 function Pause-Menu {
     Write-Host ""
     Read-Host "Press Enter to continue"
@@ -1956,11 +1962,12 @@ while ($true) {
     Write-Host "5) Disconnect"
     Write-Host "6) Auto-reconnect (toggle)"
     Write-Host "7) Update Client"
-    Write-Host "8) Traffic Mode (Full Tunnel / Proxy Mode)"
-    Write-Host "9) Exit"
+    Write-Host "8) About"
+    Write-Host "9) Traffic Mode (Full Tunnel / Proxy Mode)"
+    Write-Host "10) Exit"
     Write-Host ""
 
-    $choice = (Read-Host "Choose an option [1-9]").Trim()
+    $choice = (Read-Host "Choose an option [1-10]").Trim()
 
     switch ($choice) {
         "1" {
@@ -2008,11 +2015,16 @@ while ($true) {
         }
 
         "8" {
-            Configure-TrafficMode
+            Show-About
             Pause-Menu
         }
 
         "9" {
+            Configure-TrafficMode
+            Pause-Menu
+        }
+
+        "10" {
             Write-Host ""
             Write-Host "Exiting..." -ForegroundColor Gray
             exit 0

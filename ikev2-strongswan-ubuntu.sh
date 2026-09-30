@@ -175,6 +175,10 @@ pause_main_menu() {
   read -r -p 'Press Enter to return to the main menu...' _ || true
 }
 
+show_about() {
+  printf '\nIKEv2 StrongSwan Server v%s manages VPN installation, certificates, users, firewall, routing, DNS, client profiles, and optional SOCKS5 Proxy Mode on Ubuntu.\n\n' "$CURRENT_INSTALLER_VERSION"
+}
+
 on_error() {
   local line="$1"
   write_log ERROR "Installer stopped because of an error near line ${line}."
@@ -3509,8 +3513,9 @@ interactive_menu() {
       printf '  8) SOCKS5 Proxy Mode\n'
       printf '  9) Update Installer\n'
       printf '  10) Uninstall\n'
-      printf '  11) Exit\n'
-      read -r -p 'Choose [1-11]: ' choice || true
+      printf '  11) About\n'
+      printf '  12) Exit\n'
+      read -r -p 'Choose [1-12]: ' choice || true
 
       case "$choice" in
         1)
@@ -3552,6 +3557,10 @@ interactive_menu() {
           pause_main_menu
           ;;
         11)
+          show_about
+          pause_main_menu
+          ;;
+        12)
           printf '\nExiting...\n'
           exit 0
           ;;
@@ -3560,10 +3569,11 @@ interactive_menu() {
           ;;
       esac
     else
-      printf '\n%bIKEv2 / StrongSwan Server v6%b\n' "$BOLD" "$RESET"
+      printf '\n%bIKEv2 / StrongSwan Server v%s%b\n' "$BOLD" "$CURRENT_INSTALLER_VERSION" "$RESET"
       printf '  1) Install\n'
       printf '  2) Exit\n'
-      read -r -p 'Choose [1-2]: ' choice || true
+      printf '  3) About\n'
+      read -r -p 'Choose [1-3]: ' choice || true
 
       case "$choice" in
         1)
@@ -3573,6 +3583,10 @@ interactive_menu() {
         2)
           printf '\nExiting...\n'
           exit 0
+          ;;
+        3)
+          show_about
+          pause_main_menu
           ;;
         *)
           warn "Invalid selection."

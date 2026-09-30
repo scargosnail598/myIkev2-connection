@@ -35,6 +35,10 @@ step() { printf '[+] %s\n' "$*"; }
 warn() { printf '[!] %s\n' "$*" >&2; }
 die() { warn "$*"; exit 1; }
 
+show_about() {
+    printf '\nIKEv2 Linux VPN Utility v%s configures and manages Ubuntu StrongSwan client profiles with EAP authentication, full-tunnel routing, and VPN-aware DNS handling.\n\n' "$APP_VERSION"
+}
+
 pause_menu() {
     printf '\n'
     read -r -p "Press Enter to continue" _
@@ -1737,9 +1741,10 @@ main_menu() {
         printf '7) Remove Profile\n'
         printf '8) Uninstall Utility\n'
         printf '9) Update Client\n'
-        printf '10) Exit\n\n'
+        printf '10) About\n'
+        printf '11) Exit\n\n'
 
-        read -r -p "Choose an option [1-10]: " choice
+        read -r -p "Choose an option [1-11]: " choice
 
         case "$choice" in
             1) install_update_profile; pause_menu ;;
@@ -1759,7 +1764,8 @@ main_menu() {
             7) remove_selected_profile; pause_menu ;;
             8) uninstall_utility; pause_menu ;;
             9) update_client_script; pause_menu ;;
-            10) printf '\nExiting...\n'; exit 0 ;;
+            10) show_about; pause_menu ;;
+            11) printf '\nExiting...\n'; exit 0 ;;
             *) warn "Invalid option."; sleep 1 ;;
         esac
     done

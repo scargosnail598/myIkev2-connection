@@ -101,6 +101,9 @@ Or run it without arguments:
 sudo ./ikev2-strongswan-ubuntu.sh
 ```
 
+The interactive menu includes **About**, which briefly describes the server
+installer and displays its version.
+
 On a fresh server choose:
 
 ```text
@@ -598,8 +601,9 @@ IKEv2 Windows VPN Utility v6.3.0
 5) Disconnect
 6) Auto-reconnect (toggle)
 7) Update Client
-8) Traffic Mode (Full Tunnel / Proxy Mode)
-9) Exit
+8) About
+9) Traffic Mode (Full Tunnel / Proxy Mode)
+10) Exit
 ```
 
 Choose **Update Client** to download the latest Windows script from the
@@ -819,7 +823,8 @@ Version: 1.8.0
 7) Remove Profile
 8) Uninstall Utility
 9) Update Client
-10) Exit
+10) About
+11) Exit
 ```
 
 Choose **Auto-reconnect** and select a profile to enable or disable its

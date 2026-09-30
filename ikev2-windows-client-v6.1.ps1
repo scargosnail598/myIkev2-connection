@@ -8,7 +8,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$APP_VERSION = "6.3.0"
+$APP_VERSION = "6.4.0"
 $DEFAULT_PROXY_HOST = "10.254.254.1"
 $DEFAULT_PROXY_PORT = 1080
 $STATE_ROOT = Join-Path $env:ProgramData "IKEv2-Windows-VPN-Utility"
@@ -31,7 +31,7 @@ function Write-Warn {
 
 function Show-About {
     Write-Host ""
-    Write-Host "IKEv2 Windows VPN Utility v$APP_VERSION creates and manages native Windows IKEv2 profiles with secure IPsec settings, Full Tunnel or Proxy Mode routing, and optional automatic reconnection." -ForegroundColor Gray
+    Write-Host "IKEv2 Windows VPN Utility v$APP_VERSION creates and manages native Windows IKEv2 profiles with secure IPsec settings, IPv4 and server-negotiated IPv6 Full Tunnel or Proxy Mode routing, and optional automatic reconnection." -ForegroundColor Gray
     Write-Host ""
 }
 
@@ -305,43 +305,51 @@ function Read-IkevProfile {
     if ($mode -cne "full-tunnel") {
         throw "Unsupported connection mode: $mode."
     }
+    $ipv6Enabled = $false
+    $ipv6Property = $connection.PSObject.Properties["ipv6"]
+    if ($null -ne $ipv6Property) {
+        if ($ipv6Property.Value -isnot [bool]) {
+            throw "The .ikev IPv6 setting is invalid."
+        }
+        $ipv6Enabled = [bool]$ipv6Property.Value
+    }
 
     $serverProfile = Get-RequiredIkevString -Object $profile -Name "server_profile"
     if ($serverProfile -cne "secure" -and $serverProfile -cne "stock-windows-compatible") {
         throw "Unsupported server profile: $serverProfile."
     }
 
-    $ca = Get-RequiredIkevProperty -Object $profile -Name "ca_certificate"
-    $caEncoding = Get-RequiredIkevString -Object $ca -Name "encoding"
-    if ($caEncoding -cne "der-base64") {
-        throw "Unsupported CA certificate encoding: $caEncoding."
+    $certificateTrust = $profile.certificate_trust
+    if ($null -eq $certificateTrust -or [string]::IsNullOrWhiteSpace([string]$certificateTrust)) {
+        $certificateTrust = "private-ca"
     }
-    $caData = Get-RequiredIkevString -Object $ca -Name "data"
-    $caSha256 = Get-RequiredIkevString -Object $ca -Name "sha256"
-    if ($caSha256 -notmatch '^(?:[0-9A-F]{2}:){31}[0-9A-F]{2}$') {
-        throw "The embedded CA certificate fingerprint is invalid."
+    if ($certificateTrust -isnot [string] -or
+        ($certificateTrust -cne "private-ca" -and $certificateTrust -cne "public")) {
+        throw "Unsupported certificate trust mode: $certificateTrust."
     }
-            $certificateTrust = $profile.certificate_trust
-            if ([string]::IsNullOrWhiteSpace($certificateTrust)) {
-                $certificateTrust = "private-ca"
-            }
-            if ($certificateTrust -cne "private-ca" -and $certificateTrust -cne "public") {
-                throw "Unsupported certificate trust mode: $certificateTrust."
-            }
 
-            $caData = $null
-            $caSha256 = $null
-            if ($certificateTrust -cne "public") {
-                $ca = Get-RequiredIkevProperty -Object $profile -Name "ca_certificate"
-                $caEncoding = Get-RequiredIkevString -Object $ca -Name "encoding"
-                if ($caEncoding -cne "der-base64") {
-                    throw "Unsupported CA certificate encoding: $caEncoding."
-                }
-                $caData = Get-RequiredIkevString -Object $ca -Name "data"
-                $caSha256 = Get-RequiredIkevString -Object $ca -Name "sha256"
-                if ($caSha256 -notmatch '^(?:[0-9A-F]{2}:){31}[0-9A-F]{2}$') {
-                    throw "The embedded CA certificate fingerprint is invalid."
-                }
+    $caData = $null
+    $caSha256 = $null
+    if ($certificateTrust -eq "private-ca") {
+        $ca = Get-RequiredIkevProperty -Object $profile -Name "ca_certificate"
+        $caEncoding = Get-RequiredIkevString -Object $ca -Name "encoding"
+        if ($caEncoding -cne "der-base64") {
+            throw "Unsupported CA certificate encoding: $caEncoding."
+        }
+        $caData = Get-RequiredIkevString -Object $ca -Name "data"
+        $caSha256 = Get-RequiredIkevString -Object $ca -Name "sha256"
+        if ($caSha256 -notmatch '^(?:[0-9A-F]{2}:){31}[0-9A-F]{2}$') {
+            throw "The embedded CA certificate fingerprint is invalid."
+        }
+    }
+
+    $proxy = Get-RequiredIkevProperty -Object $profile -Name "proxy"
+    $proxyEnabled = Get-RequiredIkevProperty -Object $proxy -Name "enabled"
+    if ($proxyEnabled -isnot [bool]) {
+        throw "The .ikev proxy metadata is invalid."
+    }
+    $proxyType = $null
+    $proxyHost = $null
     $proxyPort = $null
     if ($proxyEnabled) {
         $proxyType = Get-RequiredIkevString -Object $proxy -Name "type"
@@ -371,6 +379,8 @@ function Read-IkevProfile {
         Authentication = $authentication
         ConnectionMode = $mode
         ServerProfile = $serverProfile
+        CertificateTrust = $certificateTrust
+        Ipv6Enabled   = $ipv6Enabled
         CaData        = $caData
         CaSha256      = if ($caSha256) { $caSha256.ToUpperInvariant() } else { $null }
         ProxyEnabled  = [bool]$proxyEnabled
@@ -542,12 +552,12 @@ function Prompt-ImportedTrafficMode {
     Write-Host "============"
     Write-Host ""
     Write-Host "1) Full Tunnel"
-    Write-Host "   Route all IPv4 traffic through the VPN."
+    Write-Host "   Route all IPv4 traffic, and IPv6 when offered by the server, through the VPN."
     Write-Host ""
     Write-Host "2) Proxy Mode"
     Write-Host "   Route only $($Profile.ProxyHost)/32 through the VPN."
     Write-Host "   SOCKS5 endpoint: $($Profile.ProxyHost):$($Profile.ProxyPort)"
-    Write-Host "   All other Windows traffic stays DIRECT."
+    Write-Host "   All other IPv4 and IPv6 traffic stays DIRECT."
     Write-Host ""
 
     while ($true) {
@@ -789,7 +799,7 @@ function Prompt-TrafficMode {
     Write-Host "============"
     Write-Host ""
     Write-Host "1) Full Tunnel"
-    Write-Host "   Route all IPv4 traffic through the VPN."
+    Write-Host "   Route all IPv4 traffic, and IPv6 when offered by the server, through the VPN."
     Write-Host ""
     Write-Host "2) Proxy Mode"
     Write-Host "   Route only the private SOCKS5 endpoint through IKEv2."
@@ -871,7 +881,7 @@ function Apply-TrafficMode {
 
         Write-Host ""
         Write-Host "Full Tunnel mode enabled." -ForegroundColor Green
-        Write-Info "All IPv4 traffic will use the VPN while connected."
+        Write-Info "All IPv4 traffic, and IPv6 when offered by the server, will use the VPN while connected."
         return $true
     }
 
@@ -897,7 +907,7 @@ function Apply-TrafficMode {
         Write-Host "  SOCKS5 host : $($ModeSelection.ProxyHost)"
         Write-Host "  SOCKS5 port : $($ModeSelection.ProxyPort)"
         Write-Host "  VPN route   : $($ModeSelection.ProxyHost)/32 only"
-        Write-Host "  Other traffic: DIRECT"
+        Write-Host "  Other IPv4/IPv6 traffic: DIRECT"
         Write-Host ""
         Write-Info "Configure only the applications that should use the VPN to use this SOCKS5 endpoint."
         Write-Info "For SOCKS-capable applications, enable remote/proxy DNS when available to avoid DNS leaks."
@@ -1514,7 +1524,8 @@ function Import-IkevProfile {
         Write-Host "Remote ID   : $($importedProfile.RemoteId)"
         Write-Host "Username    : $($importedProfile.Username)"
         Write-Host "Auth        : EAP-MSCHAPv2"
-        Write-Host "Mode        : Full tunnel"
+        $ipv6Summary = if ($importedProfile.Ipv6Enabled) { "IPv4 + IPv6 advertised" } else { "IPv4 (IPv6 not advertised)" }
+        Write-Host "Mode        : Full tunnel ($ipv6Summary)"
         if ($importedProfile.CertificateTrust -eq "public") {
             Write-Host "Trust       : Public system trust"
         }

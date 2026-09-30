@@ -24,6 +24,11 @@ Configure the provider firewall or security group with:
 
 Do not expose the SOCKS5 proxy port publicly. The installer keeps Proxy Mode VPN-only.
 
+If IPv6 VPN support is enabled in the installer, also allow inbound **IPv6 UDP
+500 and 4500** in the provider firewall. The server must have a working IPv6
+default route on its selected Internet interface; the installer uses NAT66 for
+client egress.
+
 Verify that SSH is listening on the expected port before closing the current session:
 
 ```bash

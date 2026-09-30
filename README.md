@@ -2,10 +2,10 @@
 
 A complete IKEv2 VPN setup built around StrongSwan, EAP-MSCHAPv2 authentication, a private CA, and native Windows and Linux clients. Windows supports two traffic modes:
 
-- **Full Tunnel** — all IPv4 traffic goes through the VPN.
-- **Proxy Mode** — only the private SOCKS5 proxy endpoint goes through IKEv2; all other Windows traffic stays direct.
+- **Full Tunnel** — all IPv4 traffic and, when enabled on the server, IPv6 traffic go through the VPN.
+- **Proxy Mode** — only the private IPv4 SOCKS5 proxy endpoint goes through IKEv2; other Windows traffic, including IPv6, stays direct.
 
-The Linux client currently operates as a full-tunnel client.
+The Linux client supports IPv4 full tunnel and optional IPv6 full tunnel.
 
 ---
 
@@ -13,9 +13,9 @@ The Linux client currently operates as a full-tunnel client.
 
 | Component | File | Version / Target |
 |---|---|---|
-| Server | `ikev2-strongswan-ubuntu.sh` | v6.3.2 / Ubuntu 22.04 & 24.04 |
-| Windows client | `ikev2-windows-client-v6.1.ps1` | v6.3.0 / PowerShell 5.1+ |
-| Linux client | `ikev2-linux-client-v1.6.sh` | v1.8.0 / Ubuntu 22.04 & 24.04 |
+| Server | `ikev2-strongswan-ubuntu.sh` | v6.4.0 / Ubuntu 22.04 & 24.04 |
+| Windows client | `ikev2-windows-client-v6.1.ps1` | v6.4.0 / PowerShell 5.1+ |
+| Linux client | `ikev2-linux-client-v1.6.sh` | v1.9.0 / Ubuntu 22.04 & 24.04 |
 
 The server installer manages StrongSwan packages, certificates, users, routing, DNS, NAT, firewall rules, status, uninstall, and the optional private SOCKS5 Proxy Mode.
 
@@ -69,6 +69,11 @@ You need:
 - a public IPv4 address or public DNS hostname
 - Internet access for package installation
 - inbound UDP **500** and **4500** allowed
+
+IPv6 VPN support is optional. To enable it, the server needs working IPv6
+Internet connectivity and the provider firewall must allow inbound IPv6 UDP
+ports **500** and **4500**. The installer uses a private ULA client pool and
+NAT66 for outbound IPv6 traffic.
 
 If the server is behind a cloud firewall or security group, allow:
 
@@ -145,6 +150,22 @@ Default example:
 ```
 
 Use a dedicated RFC1918 subnet that does not overlap the server LAN, existing routes, or common client-side networks.
+
+### Optional IPv6 full tunnel
+
+During installation, answer **Yes** to enable IPv6 VPN support. The installer
+creates a random ULA `/64`, enables IPv6 forwarding, and adds managed IPv6
+firewall and NAT66 rules. It requires an IPv6 default route on the selected
+Internet interface; if that route uses Router Advertisements, the installer
+preserves RA reception while forwarding is enabled and restores the previous
+setting on uninstall. Keep this option disabled if the host or provider does
+not supply working IPv6 connectivity.
+
+Exported `.ikev` profiles advertise whether the server offers IPv6. The Linux
+client uses that setting on import; manual Linux profile creation asks whether
+to request IPv6. Windows Full Tunnel uses IPv6 when the server negotiates it.
+Windows Proxy Mode routes only the IPv4 SOCKS5 endpoint, so other IPv6 traffic
+remains direct by design.
 
 ### DNS servers
 
@@ -678,10 +699,11 @@ StrongSwan's `rightid` setting. Profiles where they differ are rejected.
 
 Full Tunnel is the default for manual setup and portable import. The created
 All-Users IKEv2/EAP profile has split tunneling disabled, so all IPv4 traffic
-uses the VPN while connected.
+uses the VPN while connected. IPv6 also uses the VPN when the server has IPv6
+enabled and negotiates the IPv6 traffic selector.
 
 ```text
-Windows IPv4 traffic -> IKEv2 -> VPN Server -> Internet
+Windows IPv4/IPv6 traffic -> IKEv2 -> VPN Server -> Internet
 ```
 
 If an imported profile advertises `proxy.enabled = false`, Full Tunnel is
@@ -793,10 +815,13 @@ The Linux client is designed for Ubuntu 22.04 and 24.04.
 Current Linux client version:
 
 ```text
-1.8.0
+1.9.0
 ```
 
-Linux uses **Full Tunnel IPv4**. Version 1.8 can display advertised SOCKS5
+Linux uses **Full Tunnel IPv4**, with optional IPv6 when the server supports it.
+Imported profiles read the server's `connection.ipv6` setting. Manual profile
+creation asks whether to request IPv6, which must also be enabled on the server.
+Version 1.9 can display advertised SOCKS5
 Proxy Mode metadata during import, but it does not configure or use the proxy,
 add proxy routes, or enable split tunneling.
 

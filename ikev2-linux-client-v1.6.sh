@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 APP_NAME="IKEv2 Linux VPN Utility"
-APP_VERSION="1.8.0"
+APP_VERSION="1.9.0"
 STATE_DIR="/etc/ikev2-client-utility"
 META_DIR="$STATE_DIR/profiles"
 CONF_DIR="/etc/ipsec.d/ikev2-client-profiles"
@@ -36,7 +36,7 @@ warn() { printf '[!] %s\n' "$*" >&2; }
 die() { warn "$*"; exit 1; }
 
 show_about() {
-    printf '\nIKEv2 Linux VPN Utility v%s configures and manages Ubuntu StrongSwan client profiles with EAP authentication, full-tunnel routing, and VPN-aware DNS handling.\n\n' "$APP_VERSION"
+    printf '\nIKEv2 Linux VPN Utility v%s configures and manages Ubuntu StrongSwan client profiles with EAP authentication, optional IPv6 full-tunnel routing, and VPN-aware DNS handling.\n\n' "$APP_VERSION"
 }
 
 pause_menu() {
@@ -381,8 +381,12 @@ escape_ipsec_value() {
 }
 
 write_strongswan_profile() {
-    local id="$1" name="$2" server="$3" remote_id="$4" username="$5" password="$6"
-    local q_user q_server q_remote_id password_hex
+    local id="$1" name="$2" server="$3" remote_id="$4" username="$5" password="$6" ipv6_enabled="${7:-no}"
+    local q_user q_server q_remote_id password_hex right_subnets="0.0.0.0/0"
+
+    if [[ "$ipv6_enabled" == "yes" ]]; then
+        right_subnets+=",::/0"
+    fi
 
     q_user="$(escape_ipsec_value "$username")"
     q_server="$(escape_ipsec_value "$server")"
@@ -404,7 +408,7 @@ conn $id
     right=$q_server
     rightid=$q_remote_id
     rightauth=pubkey
-    rightsubnet=0.0.0.0/0
+    rightsubnet=$right_subnets
     ike=aes256-sha256-modp2048!
     esp=aes256-sha256!
     fragmentation=yes
@@ -736,6 +740,9 @@ if not isinstance(connection, dict):
 mode = string_field(connection, "mode")
 if mode != "full-tunnel":
     fail("MODE", mode)
+ipv6_enabled = connection.get("ipv6", False)
+if not isinstance(ipv6_enabled, bool):
+    fail("SCHEMA", "connection.ipv6")
 
 certificate_trust = profile.get("certificate_trust", "private-ca")
 if certificate_trust not in ("private-ca", "public"):
@@ -782,6 +789,7 @@ for value in (
     certificate_trust,
     ca_sha256,
     server_profile,
+    "true" if ipv6_enabled else "false",
     "true" if proxy_enabled else "false",
     proxy_type,
     proxy_host,
@@ -832,7 +840,7 @@ PY
     fi
 
     mapfile -t values <<< "$parser_output"
-    if [[ ${#values[@]} -ne 11 ]]; then
+    if [[ ${#values[@]} -ne 13 ]]; then
         warn "This is not a supported IKEv profile."
         return 1
     fi
@@ -844,9 +852,10 @@ PY
     IKEV_CA_DATA="${values[4]}"
     IKEV_CERTIFICATE_TRUST="${values[5]}"
     IKEV_CA_SHA256="${values[6]}"
-    IKEV_PROXY_ENABLED="${values[8]}"
-    IKEV_PROXY_HOST="${values[10]}"
-    IKEV_PROXY_PORT="${values[11]}"
+    IKEV_IPV6_ENABLED="${values[8]}"
+    IKEV_PROXY_ENABLED="${values[9]}"
+    IKEV_PROXY_HOST="${values[11]}"
+    IKEV_PROXY_PORT="${values[12]}"
 
     if ! validate_profile_name "$IKEV_NAME"; then
         warn "The .ikev profile name is invalid."
@@ -1125,7 +1134,8 @@ import_ikev_profile() (
     fi
 
     write_strongswan_profile \
-        "$id" "$IKEV_NAME" "$IKEV_SERVER" "$IKEV_REMOTE_ID" "$IKEV_USERNAME" "$password"
+        "$id" "$IKEV_NAME" "$IKEV_SERVER" "$IKEV_REMOTE_ID" "$IKEV_USERNAME" "$password" \
+        "$( [[ "$IKEV_IPV6_ENABLED" == "true" ]] && echo yes || echo no )"
     unset password
 
     restart_or_reload_strongswan
@@ -1154,7 +1164,7 @@ import_ikev_profile() (
     printf 'Profile : %s\n' "$IKEV_NAME"
     printf 'Server  : %s\n' "$IKEV_SERVER"
     printf 'User    : %s\n' "$IKEV_USERNAME"
-    printf 'Mode    : Full tunnel\n\n'
+    printf 'Mode    : Full tunnel%s\n\n' "$( [[ "$IKEV_IPV6_ENABLED" == "true" ]] && echo ' IPv4 + IPv6' || echo ' IPv4' )"
 
     cleanup_ikev_import_temp
     trap - EXIT
@@ -1177,7 +1187,7 @@ install_update_profile() {
     printf '\nInstall / Update IKEv2 VPN\n'
     printf '==========================\n\n'
 
-    local name server username password id
+    local name server username password id ipv6_enabled="no"
     while true; do
         read -r -p "VPN profile name [IKEv2 VPN]: " name
         name="${name:-IKEv2 VPN}"
@@ -1204,6 +1214,10 @@ install_update_profile() {
         warn "Password cannot be empty."
     done
 
+    if ask_yes_no "Enable IPv6 full-tunnel for this profile? (The server must support IPv6.)" N; then
+        ipv6_enabled="yes"
+    fi
+
     id="$(profile_id_from_name "$name")"
 
     if is_connected "$id"; then
@@ -1211,7 +1225,7 @@ install_update_profile() {
         ipsec down "$id" >/dev/null 2>&1 || true
     fi
 
-    write_strongswan_profile "$id" "$name" "$server" "$server" "$username" "$password"
+    write_strongswan_profile "$id" "$name" "$server" "$server" "$username" "$password" "$ipv6_enabled"
     unset password
 
     restart_or_reload_strongswan
@@ -1240,7 +1254,7 @@ install_update_profile() {
     printf '  Profile : %s\n' "$name"
     printf '  Server  : %s\n' "$server"
     printf '  User    : %s\n' "$username"
-    printf '  Mode    : Full tunnel IPv4\n\n'
+    printf '  Mode    : Full tunnel%s\n\n' "$( [[ "$ipv6_enabled" == "yes" ]] && echo ' IPv4 + IPv6' || echo ' IPv4' )"
 
     prompt_system_wide_install
 
@@ -1466,6 +1480,7 @@ show_selected_status() {
         printf 'Virtual IP / routes:\n'
         ip -brief address 2>/dev/null | grep -E '10\.|172\.|192\.168\.' || true
         ip route show table 220 2>/dev/null || true
+        ip -6 route show table 220 2>/dev/null || true
     fi
 }
 

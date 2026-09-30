@@ -6,13 +6,15 @@ IFS=$'\n\t'
 # Uses StrongSwan, EAP-MSCHAPv2, a private CA, and IPv4 full-tunnel NAT.
 
 INSTALLER_NAME="ikev2-easy-installer"
-CURRENT_INSTALLER_VERSION="6.3.2-en"
+CURRENT_INSTALLER_VERSION="6.4.0-en"
 INSTALLER_VERSION="$CURRENT_INSTALLER_VERSION"
 
 STATE_DIR="/var/lib/${INSTALLER_NAME}"
 BACKUP_DIR="${STATE_DIR}/backups"
 STATE_FILE="${STATE_DIR}/state.env"
 LOG_FILE="/var/log/${INSTALLER_NAME}.log"
+IPV6_ENABLED="no"
+VPN_IPV6_SUBNET=""
 
 IPSEC_CONF="/etc/ipsec.conf"
 IPSEC_SECRETS="/etc/ipsec.secrets"
@@ -530,6 +532,8 @@ write_state() {
     printf 'SERVER_ID=%q\n' "$SERVER_ID"
     printf 'OUT_IF=%q\n' "$OUT_IF"
     printf 'VPN_SUBNET=%q\n' "$VPN_SUBNET"
+    printf 'IPV6_ENABLED=%q\n' "${IPV6_ENABLED:-no}"
+    printf 'VPN_IPV6_SUBNET=%q\n' "${VPN_IPV6_SUBNET:-}"
     printf 'DNS_SERVERS=%q\n' "$DNS_SERVERS"
     printf 'CA_NAME=%q\n' "$CA_NAME"
     printf 'CERTIFICATE_MODE=%q\n' "${CERTIFICATE_MODE:-private-ca}"
@@ -551,6 +555,9 @@ write_state() {
     printf 'OLD_ACCEPT_REDIRECTS_DEFAULT=%q\n' "$OLD_ACCEPT_REDIRECTS_DEFAULT"
     printf 'OLD_SEND_REDIRECTS_ALL=%q\n' "$OLD_SEND_REDIRECTS_ALL"
     printf 'OLD_SEND_REDIRECTS_DEFAULT=%q\n' "$OLD_SEND_REDIRECTS_DEFAULT"
+    printf 'OLD_IPV6_FORWARD=%q\n' "$OLD_IPV6_FORWARD"
+    printf 'IPV6_ACCEPT_RA_WAS_CHANGED=%q\n' "${IPV6_ACCEPT_RA_WAS_CHANGED:-no}"
+    printf 'OLD_IPV6_ACCEPT_RA=%q\n' "${OLD_IPV6_ACCEPT_RA:-}"
 
     printf 'IPSEC_CONF_EXISTED=%q\n' "$IPSEC_CONF_EXISTED"
     printf 'IPSEC_SECRETS_EXISTED=%q\n' "$IPSEC_SECRETS_EXISTED"
@@ -597,6 +604,18 @@ initialize_proxy_state_defaults() {
   DANTE_DEFAULT_WAS_ENABLED="${DANTE_DEFAULT_WAS_ENABLED:-no}"
   DANTE_DEFAULT_WAS_ACTIVE="${DANTE_DEFAULT_WAS_ACTIVE:-no}"
   DANTE_PACKAGE_WAS_INSTALLED="${DANTE_PACKAGE_WAS_INSTALLED:-no}"
+}
+
+initialize_ipv6_state_defaults() {
+  IPV6_ENABLED="${IPV6_ENABLED:-no}"
+  VPN_IPV6_SUBNET="${VPN_IPV6_SUBNET:-}"
+  IPV6_ACCEPT_RA_WAS_CHANGED="${IPV6_ACCEPT_RA_WAS_CHANGED:-no}"
+}
+
+generate_ipv6_ula_subnet() {
+  local global_id
+  global_id="$(od -An -N5 -tx1 /dev/urandom | tr -d ' \n')"
+  printf 'fd%s:%s:%s::/64\n' "${global_id:0:2}" "${global_id:2:4}" "${global_id:6:4}"
 }
 
 append_new_package() {
@@ -832,6 +851,13 @@ record_preinstall_state() {
   OLD_ACCEPT_REDIRECTS_DEFAULT=$(sysctl -n net.ipv4.conf.default.accept_redirects 2>/dev/null || echo 1)
   OLD_SEND_REDIRECTS_ALL=$(sysctl -n net.ipv4.conf.all.send_redirects 2>/dev/null || echo 1)
   OLD_SEND_REDIRECTS_DEFAULT=$(sysctl -n net.ipv4.conf.default.send_redirects 2>/dev/null || echo 1)
+  OLD_IPV6_FORWARD=$(sysctl -n net.ipv6.conf.all.forwarding 2>/dev/null || echo 0)
+  OLD_IPV6_ACCEPT_RA=$(sysctl -n "net.ipv6.conf.${OUT_IF}.accept_ra" 2>/dev/null || echo 1)
+  IPV6_ACCEPT_RA_WAS_CHANGED="no"
+  if [[ "${IPV6_ENABLED:-no}" == "yes" ]] &&
+     [[ "$(ip -6 route show default dev "$OUT_IF" 2>/dev/null)" == *"proto ra"* ]]; then
+    IPV6_ACCEPT_RA_WAS_CHANGED="yes"
+  fi
 
   IPSEC_CONF_EXISTED="no"
   IPSEC_SECRETS_EXISTED="no"
@@ -868,6 +894,7 @@ record_preinstall_state() {
   done
 
   initialize_proxy_state_defaults
+  initialize_ipv6_state_defaults
   record_proxy_baseline
   write_state
 }
@@ -975,6 +1002,13 @@ EOF
 write_ipsec_config() {
   local ike_proposals
   local esp_proposals
+  local ipv6_selectors=""
+  local ipv6_pool=""
+
+  if [[ "${IPV6_ENABLED:-no}" == "yes" ]]; then
+    ipv6_selectors=",::/0"
+    ipv6_pool=",${VPN_IPV6_SUBNET}"
+  fi
 
   if [[ "$ALLOW_STOCK_WINDOWS" == "yes" ]]; then
     ike_proposals="aes256-sha256-modp2048,aes128-sha256-modp2048,aes256-sha256-modp1024,aes128-sha256-modp1024"
@@ -1008,13 +1042,13 @@ conn ikev2-eap
     leftauth=pubkey
     leftcert=ikev2-installer-server-cert.pem
     leftsendcert=always
-    leftsubnet=0.0.0.0/0
+    leftsubnet=0.0.0.0/0${ipv6_selectors}
 
     right=%any
     rightid=%any
     rightauth=eap-mschapv2
     eap_identity=%identity
-    rightsourceip=${VPN_SUBNET}
+    rightsourceip=${VPN_SUBNET}${ipv6_pool}
     rightdns=${DNS_SERVERS}
 
     ike=${ike_proposals}
@@ -1039,7 +1073,7 @@ EOF
 }
 
 write_sysctl_config() {
-  log "Enabling IPv4 forwarding for VPN traffic..."
+  log "Enabling IP forwarding for VPN traffic..."
 
   cat > "$SYSCTL_FILE" <<EOF
 # Managed by ${INSTALLER_NAME} ${INSTALLER_VERSION}
@@ -1049,6 +1083,13 @@ net.ipv4.conf.default.accept_redirects = 0
 net.ipv4.conf.all.send_redirects = 0
 net.ipv4.conf.default.send_redirects = 0
 EOF
+
+  if [[ "${IPV6_ENABLED:-no}" == "yes" ]]; then
+    printf 'net.ipv6.conf.all.forwarding = 1\n' >> "$SYSCTL_FILE"
+    if [[ "${IPV6_ACCEPT_RA_WAS_CHANGED:-no}" == "yes" ]]; then
+      printf 'net.ipv6.conf.%s.accept_ra = 2\n' "$OUT_IF" >> "$SYSCTL_FILE"
+    fi
+  fi
 
   sysctl -p "$SYSCTL_FILE" >/dev/null
 }
@@ -1061,7 +1102,10 @@ write_firewall_config() {
 set -Eeuo pipefail
 
 IPTABLES="\$(command -v iptables)"
+IP6TABLES="\$(command -v ip6tables || true)"
 VPN_SUBNET="${VPN_SUBNET}"
+IPV6_ENABLED="${IPV6_ENABLED:-no}"
+VPN_IPV6_SUBNET="${VPN_IPV6_SUBNET:-}"
 OUT_IF="${OUT_IF}"
 TAG="${INSTALLER_NAME}"
 
@@ -1094,12 +1138,50 @@ delete_nat_rule() {
   done
 }
 
+add_ipv6_filter_rule() {
+  local chain="\$1"
+  local position="\$2"
+  shift 2
+  "\$IP6TABLES" -C "\$chain" "\$@" >/dev/null 2>&1 || "\$IP6TABLES" -I "\$chain" "\$position" "\$@"
+}
+
+add_ipv6_nat_rule() {
+  local chain="\$1"
+  shift
+  "\$IP6TABLES" -t nat -C "\$chain" "\$@" >/dev/null 2>&1 || "\$IP6TABLES" -t nat -A "\$chain" "\$@"
+}
+
+delete_ipv6_filter_rule() {
+  local chain="\$1"
+  shift
+  while "\$IP6TABLES" -C "\$chain" "\$@" >/dev/null 2>&1; do
+    "\$IP6TABLES" -D "\$chain" "\$@"
+  done
+}
+
+delete_ipv6_nat_rule() {
+  local chain="\$1"
+  shift
+  while "\$IP6TABLES" -t nat -C "\$chain" "\$@" >/dev/null 2>&1; do
+    "\$IP6TABLES" -t nat -D "\$chain" "\$@"
+  done
+}
+
 start_rules() {
   add_filter_rule INPUT 1 -p udp --dport 500 -m comment --comment "\$TAG" -j ACCEPT
   add_filter_rule INPUT 1 -p udp --dport 4500 -m comment --comment "\$TAG" -j ACCEPT
   add_filter_rule FORWARD 1 -s "\$VPN_SUBNET" -o "\$OUT_IF" -m comment --comment "\$TAG" -j ACCEPT
   add_filter_rule FORWARD 1 -d "\$VPN_SUBNET" -i "\$OUT_IF" -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment "\$TAG" -j ACCEPT
   add_nat_rule POSTROUTING -s "\$VPN_SUBNET" -o "\$OUT_IF" -m comment --comment "\$TAG" -j MASQUERADE
+
+  if [[ "\$IPV6_ENABLED" == "yes" ]]; then
+    [[ -n "\$IP6TABLES" ]] || { echo "ip6tables is required for IPv6 mode." >&2; return 1; }
+    add_ipv6_filter_rule INPUT 1 -p udp --dport 500 -m comment --comment "\$TAG" -j ACCEPT
+    add_ipv6_filter_rule INPUT 1 -p udp --dport 4500 -m comment --comment "\$TAG" -j ACCEPT
+    add_ipv6_filter_rule FORWARD 1 -s "\$VPN_IPV6_SUBNET" -o "\$OUT_IF" -m comment --comment "\$TAG" -j ACCEPT
+    add_ipv6_filter_rule FORWARD 1 -d "\$VPN_IPV6_SUBNET" -i "\$OUT_IF" -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment "\$TAG" -j ACCEPT
+    add_ipv6_nat_rule POSTROUTING -s "\$VPN_IPV6_SUBNET" -o "\$OUT_IF" -m comment --comment "\$TAG" -j MASQUERADE
+  fi
 }
 
 stop_rules() {
@@ -1108,6 +1190,14 @@ stop_rules() {
   delete_filter_rule FORWARD -s "\$VPN_SUBNET" -o "\$OUT_IF" -m comment --comment "\$TAG" -j ACCEPT
   delete_filter_rule FORWARD -d "\$VPN_SUBNET" -i "\$OUT_IF" -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment "\$TAG" -j ACCEPT
   delete_nat_rule POSTROUTING -s "\$VPN_SUBNET" -o "\$OUT_IF" -m comment --comment "\$TAG" -j MASQUERADE
+
+  if [[ "\$IPV6_ENABLED" == "yes" && -n "\$IP6TABLES" ]]; then
+    delete_ipv6_filter_rule INPUT -p udp --dport 500 -m comment --comment "\$TAG" -j ACCEPT
+    delete_ipv6_filter_rule INPUT -p udp --dport 4500 -m comment --comment "\$TAG" -j ACCEPT
+    delete_ipv6_filter_rule FORWARD -s "\$VPN_IPV6_SUBNET" -o "\$OUT_IF" -m comment --comment "\$TAG" -j ACCEPT
+    delete_ipv6_filter_rule FORWARD -d "\$VPN_IPV6_SUBNET" -i "\$OUT_IF" -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment "\$TAG" -j ACCEPT
+    delete_ipv6_nat_rule POSTROUTING -s "\$VPN_IPV6_SUBNET" -o "\$OUT_IF" -m comment --comment "\$TAG" -j MASQUERADE
+  fi
 }
 
 case "\${1:-start}" in
@@ -1558,7 +1648,7 @@ install_vpn() {
   detected_ip=$(interface_ipv4 "$detected_iface")
 
   printf '\n%bIKEv2 / StrongSwan Installer%b\n' "$BOLD" "$RESET"
-  printf 'Ubuntu 22.04 / 24.04, IPv4 full tunnel, EAP-MSCHAPv2\n'
+  printf 'Ubuntu 22.04 / 24.04, IPv4 full tunnel with optional IPv6, EAP-MSCHAPv2\n'
 
   while true; do
     ask_value SERVER_ID \
@@ -1601,6 +1691,20 @@ install_vpn() {
     if ! ask_yes_no "Continue with the overlapping subnet?" N; then
       info "Installation canceled. Choose a different VPN subnet."
       return 0
+    fi
+  fi
+
+  IPV6_ENABLED="no"
+  VPN_IPV6_SUBNET=""
+  if ask_yes_no "Enable IPv6 VPN support (IPv6 full tunnel with NAT66)?" N; then
+    IPV6_ENABLED="yes"
+    VPN_IPV6_SUBNET="$(generate_ipv6_ula_subnet)"
+    if ! ip -6 route show default dev "$OUT_IF" 2>/dev/null | grep -q '^default'; then
+      warn "No IPv6 default route was found on ${OUT_IF}. IPv6 VPN traffic will not reach the Internet until the server has working IPv6 connectivity."
+      if ! ask_yes_no "Continue with IPv6 enabled anyway?" N; then
+        IPV6_ENABLED="no"
+        VPN_IPV6_SUBNET=""
+      fi
     fi
   fi
 
@@ -1670,6 +1774,11 @@ install_vpn() {
   printf '  Server ID          : %s\n' "$SERVER_ID"
   printf '  Internet interface : %s\n' "$OUT_IF"
   printf '  VPN subnet         : %s\n' "$VPN_SUBNET"
+  if [[ "$IPV6_ENABLED" == "yes" ]]; then
+    printf '  IPv6 VPN subnet    : %s (NAT66)\n' "$VPN_IPV6_SUBNET"
+  else
+    printf '  IPv6 VPN           : disabled\n'
+  fi
   printf '  DNS servers        : %s\n' "$DNS_SERVERS"
   printf '  Certificate trust  : %s\n' "$CERTIFICATE_MODE"
   [[ "$CERTIFICATE_MODE" == "private-ca" ]] && printf '  CA name            : %s\n' "$CA_NAME"
@@ -1759,6 +1868,12 @@ restore_sysctl_runtime() {
   sysctl -w "net.ipv4.conf.default.accept_redirects=${OLD_ACCEPT_REDIRECTS_DEFAULT:-1}" >/dev/null || true
   sysctl -w "net.ipv4.conf.all.send_redirects=${OLD_SEND_REDIRECTS_ALL:-1}" >/dev/null || true
   sysctl -w "net.ipv4.conf.default.send_redirects=${OLD_SEND_REDIRECTS_DEFAULT:-1}" >/dev/null || true
+  if [[ "${IPV6_ENABLED:-no}" == "yes" ]]; then
+    sysctl -w "net.ipv6.conf.all.forwarding=${OLD_IPV6_FORWARD:-0}" >/dev/null || true
+    if [[ "${IPV6_ACCEPT_RA_WAS_CHANGED:-no}" == "yes" && -n "${OUT_IF:-}" ]]; then
+      sysctl -w "net.ipv6.conf.${OUT_IF}.accept_ra=${OLD_IPV6_ACCEPT_RA:-1}" >/dev/null || true
+    fi
+  fi
 }
 
 restore_service_state() {
@@ -1808,6 +1923,7 @@ uninstall_vpn() {
   source "$STATE_FILE"
   initialize_certbot_state_defaults
   initialize_proxy_state_defaults
+  initialize_ipv6_state_defaults
 
   printf '\n%bUninstall IKEv2 VPN%b\n' "$BOLD" "$RESET"
   printf '  Server ID  : %s\n' "$SERVER_ID"
@@ -1888,6 +2004,7 @@ require_managed_installation() {
   # shellcheck disable=SC1090
   source "$STATE_FILE"
   initialize_certbot_state_defaults
+  initialize_ipv6_state_defaults
   initialize_proxy_state_defaults
 }
 
@@ -2521,7 +2638,8 @@ export_ikev_profile() {
       printf '  "certificate_trust": "public",\n'
     fi
     printf '  "connection": {\n'
-    printf '    "mode": "full-tunnel"\n'
+    printf '    "mode": "full-tunnel",\n'
+    printf '    "ipv6": %s\n' "$( [[ "${IPV6_ENABLED:-no}" == "yes" ]] && echo true || echo false )"
     printf '  },\n'
     printf '  "server_profile": "%s",\n' "$server_profile"
     printf '  "proxy": {\n'
@@ -3122,6 +3240,7 @@ status_vpn() {
   source "$STATE_FILE"
   local installed_version="${INSTALLER_VERSION:-unknown}"
   initialize_proxy_state_defaults
+  initialize_ipv6_state_defaults
 
   printf '%bIKEv2 installer status%b\n' "$BOLD" "$RESET"
   printf '  Installed version  : %s\n' "$installed_version"
@@ -3129,6 +3248,11 @@ status_vpn() {
   printf '  Server ID          : %s\n' "$SERVER_ID"
   printf '  Internet interface : %s\n' "$OUT_IF"
   printf '  VPN subnet         : %s\n' "$VPN_SUBNET"
+  if [[ "$IPV6_ENABLED" == "yes" ]]; then
+    printf '  IPv6 VPN subnet    : %s (NAT66)\n' "$VPN_IPV6_SUBNET"
+  else
+    printf '  IPv6 VPN           : disabled\n'
+  fi
   printf '  DNS servers        : %s\n' "$DNS_SERVERS"
   printf '  Certificate trust  : %s\n' "${CERTIFICATE_MODE:-private-ca}"
   printf '  Client directory   : %s\n' "$CLIENT_DIR"
@@ -3136,6 +3260,9 @@ status_vpn() {
   printf '  StrongSwan service : %s\n' "$(systemctl is-active "$STRONGSWAN_SERVICE" 2>/dev/null || true)"
   printf '  Firewall service   : %s\n' "$(systemctl is-active "$FW_SERVICE" 2>/dev/null || true)"
   printf '  IPv4 forwarding    : %s\n' "$(sysctl -n net.ipv4.ip_forward 2>/dev/null || echo unknown)"
+  if [[ "$IPV6_ENABLED" == "yes" ]]; then
+    printf '  IPv6 forwarding    : %s\n' "$(sysctl -n net.ipv6.conf.all.forwarding 2>/dev/null || echo unknown)"
+  fi
 
   if [[ "$PROXY_ENABLED" == "yes" ]]; then
     printf '  SOCKS5 Proxy Mode  : enabled\n'
@@ -3388,6 +3515,52 @@ run_diagnostics() {
     diag_ok "IPv4 forwarding"
   else
     diag_fail "IPv4 forwarding" "net.ipv4.ip_forward is not enabled"
+  fi
+
+  if [[ "$IPV6_ENABLED" == "yes" ]]; then
+    if [[ "$VPN_IPV6_SUBNET" =~ ^fd[0-9a-f]{2}:[0-9a-f]{4}:[0-9a-f]{4}::/64$ ]]; then
+      diag_ok "IPv6 VPN subnet" "$VPN_IPV6_SUBNET"
+    else
+      diag_fail "IPv6 VPN subnet" "Stored IPv6 ULA subnet is invalid"
+    fi
+
+    forwarding_value=$(sysctl -n net.ipv6.conf.all.forwarding 2>/dev/null || true)
+    if [[ "$forwarding_value" == "1" ]]; then
+      diag_ok "IPv6 forwarding"
+    else
+      diag_fail "IPv6 forwarding" "net.ipv6.conf.all.forwarding is not enabled"
+    fi
+
+    if ip -6 route show default dev "$OUT_IF" 2>/dev/null | grep -q '^default'; then
+      diag_ok "IPv6 default route" "$OUT_IF"
+    else
+      diag_fail "IPv6 default route" "No IPv6 default route exists on ${OUT_IF}"
+    fi
+
+    if command_exists ip6tables \
+      && ip6tables -C INPUT -p udp --dport 500 -m comment --comment "$INSTALLER_NAME" -j ACCEPT >/dev/null 2>&1 \
+      && ip6tables -C INPUT -p udp --dport 4500 -m comment --comment "$INSTALLER_NAME" -j ACCEPT >/dev/null 2>&1; then
+      diag_ok "IPv6 IKE firewall rules"
+    else
+      diag_fail "IPv6 IKE firewall rules" "Managed IPv6 UDP/500 and UDP/4500 rules are missing"
+    fi
+
+    if command_exists ip6tables \
+      && ip6tables -C FORWARD -s "$VPN_IPV6_SUBNET" -o "$OUT_IF" -m comment --comment "$INSTALLER_NAME" -j ACCEPT >/dev/null 2>&1 \
+      && ip6tables -C FORWARD -d "$VPN_IPV6_SUBNET" -i "$OUT_IF" -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment "$INSTALLER_NAME" -j ACCEPT >/dev/null 2>&1; then
+      diag_ok "IPv6 VPN forwarding rules"
+    else
+      diag_fail "IPv6 VPN forwarding rules" "One or more managed IPv6 FORWARD rules are missing"
+    fi
+
+    if command_exists ip6tables \
+      && ip6tables -t nat -C POSTROUTING -s "$VPN_IPV6_SUBNET" -o "$OUT_IF" -m comment --comment "$INSTALLER_NAME" -j MASQUERADE >/dev/null 2>&1; then
+      diag_ok "IPv6 NAT66 / MASQUERADE"
+    else
+      diag_fail "IPv6 NAT66 / MASQUERADE" "Managed IPv6 POSTROUTING MASQUERADE rule was not found"
+    fi
+  else
+    diag_ok "IPv6 VPN" "Disabled"
   fi
 
   if command_exists iptables && iptables -C INPUT -p udp --dport 500 -m comment --comment "$INSTALLER_NAME" -j ACCEPT >/dev/null 2>&1; then
@@ -4047,6 +4220,7 @@ status_vpn() {
   source "$STATE_FILE"
   local installed_version="${INSTALLER_VERSION:-unknown}"
   initialize_proxy_state_defaults
+  initialize_ipv6_state_defaults
 
   printf '%bIKEv2 installer status%b\n' "$BOLD" "$RESET"
   printf '  Installed version  : %s\n' "$installed_version"
@@ -4054,6 +4228,11 @@ status_vpn() {
   printf '  Server ID          : %s\n' "$SERVER_ID"
   printf '  Internet interface : %s\n' "$OUT_IF"
   printf '  VPN subnet         : %s\n' "$VPN_SUBNET"
+  if [[ "$IPV6_ENABLED" == "yes" ]]; then
+    printf '  IPv6 VPN subnet    : %s (NAT66)\n' "$VPN_IPV6_SUBNET"
+  else
+    printf '  IPv6 VPN           : disabled\n'
+  fi
   printf '  DNS servers        : %s\n' "$DNS_SERVERS"
   printf '  Client directory   : %s\n' "$CLIENT_DIR"
   printf '  Windows profile    : %s\n' "$( [[ "${ALLOW_STOCK_WINDOWS:-no}" == "yes" ]] && echo 'stock-compatible' || echo 'secure' )"
@@ -4192,6 +4371,8 @@ run_diagnostics() {
   DIAG_STATE_LOADED="no"
   OUT_IF=""
   VPN_SUBNET=""
+  IPV6_ENABLED="no"
+  VPN_IPV6_SUBNET=""
   PROXY_ENABLED="no"
   PROXY_IP="$PROXY_DEFAULT_IP"
   PROXY_PORT="$PROXY_DEFAULT_PORT"
@@ -4207,6 +4388,7 @@ run_diagnostics() {
   elif source "$STATE_FILE"; then
     initialize_certbot_state_defaults
     initialize_proxy_state_defaults
+    initialize_ipv6_state_defaults
     DIAG_STATE_LOADED="yes"
     diag_ok "Managed installation state"
   else
@@ -4218,6 +4400,8 @@ run_diagnostics() {
   PROXY_ENABLED="${PROXY_ENABLED:-no}"
   PROXY_IP="${PROXY_IP:-$PROXY_DEFAULT_IP}"
   PROXY_PORT="${PROXY_PORT:-$PROXY_DEFAULT_PORT}"
+  IPV6_ENABLED="${IPV6_ENABLED:-no}"
+  VPN_IPV6_SUBNET="${VPN_IPV6_SUBNET:-}"
 
   if service_is_active "$STRONGSWAN_SERVICE"; then
     strongswan_active="yes"
@@ -4242,6 +4426,52 @@ run_diagnostics() {
     diag_ok "IPv4 forwarding"
   else
     diag_fail "IPv4 forwarding" "net.ipv4.ip_forward is not enabled"
+  fi
+
+  if [[ "$IPV6_ENABLED" == "yes" ]]; then
+    if [[ "$VPN_IPV6_SUBNET" =~ ^fd[0-9a-f]{2}:[0-9a-f]{4}:[0-9a-f]{4}::/64$ ]]; then
+      diag_ok "IPv6 VPN subnet" "$VPN_IPV6_SUBNET"
+    else
+      diag_fail "IPv6 VPN subnet" "Stored IPv6 ULA subnet is invalid"
+    fi
+
+    forwarding_value=$(sysctl -n net.ipv6.conf.all.forwarding 2>/dev/null || true)
+    if [[ "$forwarding_value" == "1" ]]; then
+      diag_ok "IPv6 forwarding"
+    else
+      diag_fail "IPv6 forwarding" "net.ipv6.conf.all.forwarding is not enabled"
+    fi
+
+    if ip -6 route show default dev "$OUT_IF" 2>/dev/null | grep -q '^default'; then
+      diag_ok "IPv6 default route" "$OUT_IF"
+    else
+      diag_fail "IPv6 default route" "No IPv6 default route exists on ${OUT_IF}"
+    fi
+
+    if command_exists ip6tables \
+      && ip6tables -C INPUT -p udp --dport 500 -m comment --comment "$INSTALLER_NAME" -j ACCEPT >/dev/null 2>&1 \
+      && ip6tables -C INPUT -p udp --dport 4500 -m comment --comment "$INSTALLER_NAME" -j ACCEPT >/dev/null 2>&1; then
+      diag_ok "IPv6 IKE firewall rules"
+    else
+      diag_fail "IPv6 IKE firewall rules" "Managed IPv6 UDP/500 and UDP/4500 rules are missing"
+    fi
+
+    if command_exists ip6tables \
+      && ip6tables -C FORWARD -s "$VPN_IPV6_SUBNET" -o "$OUT_IF" -m comment --comment "$INSTALLER_NAME" -j ACCEPT >/dev/null 2>&1 \
+      && ip6tables -C FORWARD -d "$VPN_IPV6_SUBNET" -i "$OUT_IF" -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment "$INSTALLER_NAME" -j ACCEPT >/dev/null 2>&1; then
+      diag_ok "IPv6 VPN forwarding rules"
+    else
+      diag_fail "IPv6 VPN forwarding rules" "One or more managed IPv6 FORWARD rules are missing"
+    fi
+
+    if command_exists ip6tables \
+      && ip6tables -t nat -C POSTROUTING -s "$VPN_IPV6_SUBNET" -o "$OUT_IF" -m comment --comment "$INSTALLER_NAME" -j MASQUERADE >/dev/null 2>&1; then
+      diag_ok "IPv6 NAT66 / MASQUERADE"
+    else
+      diag_fail "IPv6 NAT66 / MASQUERADE" "Managed IPv6 POSTROUTING MASQUERADE rule was not found"
+    fi
+  else
+    diag_ok "IPv6 VPN" "Disabled"
   fi
 
   if command_exists iptables && iptables -C INPUT -p udp --dport 500 -m comment --comment "$INSTALLER_NAME" -j ACCEPT >/dev/null 2>&1; then

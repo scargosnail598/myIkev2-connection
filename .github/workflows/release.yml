@@ -4,11 +4,10 @@ on:
   push:
     tags:
       - "server-v*.*.*"
-      - "linux-v*.*.*"
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing release tag, for example server-v6.4.0 or linux-v1.9.0"
+        description: "Existing server tag; matching Linux and Windows tags must point to the same commit"
         required: true
         type: string
 
@@ -19,9 +18,12 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.version.outputs.version }}
+      server_version: ${{ steps.version.outputs.server_version }}
+      linux_version: ${{ steps.version.outputs.linux_version }}
+      windows_version: ${{ steps.version.outputs.windows_version }}
       server: ${{ steps.version.outputs.server }}
       linux: ${{ steps.version.outputs.linux }}
+      windows: ${{ steps.version.outputs.windows }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -36,62 +38,61 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          git fetch --force --tags origin
           release_tag="${RELEASE_TAG}"
-          git show-ref --tags --verify --quiet "refs/tags/${release_tag}" || {
-            echo "Tag does not exist: ${release_tag}"
+          [[ "$release_tag" =~ ^server-v([0-9]+\.[0-9]+\.[0-9]+)$ ]] || {
+            echo "Expected a server release tag, got: ${release_tag}"
             exit 1
           }
 
-          case "$release_tag" in
-            server-v*)
-              kind="server"
-              tag="${release_tag#server-v}"
-              ;;
-            linux-v*)
-              kind="linux"
-              tag="${release_tag#linux-v}"
-              ;;
-            *)
-              echo "Unsupported release tag: ${release_tag}"
-              exit 1
-              ;;
-          esac
-
-          [[ "$tag" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
-
-          mapfile -t server_files < <(find . -maxdepth 1 -type f -name 'ikev2-strongswan-ubuntu.sh' -print | sort)
-          mapfile -t linux_files < <(find . -maxdepth 1 -type f -name 'ikev2-linux-client.sh' -print | sort)
-
-          [[ ${#server_files[@]} -eq 1 ]] || { echo "Expected one server script"; exit 1; }
-          [[ ${#linux_files[@]} -eq 1 ]] || { echo "Expected one Linux client"; exit 1; }
-
-          server="${server_files[0]}"
-          linux="${linux_files[0]}"
+          server="ikev2-strongswan-ubuntu.sh"
+          linux="ikev2-linux-client.sh"
+          windows="ikev2-windows-client.ps1"
+          [[ -f "$server" && -f "$linux" && -f "$windows" ]] || {
+            echo "Expected all three component scripts in the repository root"
+            exit 1
+          }
 
           server_version=$(sed -nE 's/^CURRENT_INSTALLER_VERSION="([0-9]+\.[0-9]+\.[0-9]+).*"$/\1/p' "$server" | head -n1)
           linux_version=$(sed -nE 's/^APP_VERSION="([0-9]+\.[0-9]+\.[0-9]+)"$/\1/p' "$linux" | head -n1)
+          windows_version=$(sed -nE 's/^\$APP_VERSION = "([0-9]+\.[0-9]+\.[0-9]+)"$/\1/p' "$windows" | head -n1)
+          [[ -n "$server_version" && -n "$linux_version" && -n "$windows_version" ]] || {
+            echo "Could not read all component versions"
+            exit 1
+          }
 
-          if [[ "$kind" == "server" ]]; then
-            [[ "$server_version" == "$tag" ]] || {
-              echo "Tag/version mismatch: tag=$tag script=$server_version"
+          server_tag="server-v${server_version}"
+          linux_tag="linux-v${linux_version}"
+          windows_tag="windows-v${windows_version}"
+          [[ "$release_tag" == "$server_tag" ]] || {
+            echo "Server tag/version mismatch: tag=$release_tag script=$server_version"
+            exit 1
+          }
+
+          release_commit="$(git rev-parse HEAD)"
+          for component_tag in "$server_tag" "$linux_tag" "$windows_tag"; do
+            git show-ref --tags --verify --quiet "refs/tags/${component_tag}" || {
+              echo "Required component tag is missing: ${component_tag}"
               exit 1
             }
-          else
-            [[ "$linux_version" == "$tag" ]] || {
-              echo "Tag/version mismatch: tag=$tag script=$linux_version"
+            tag_commit="$(git rev-parse "${component_tag}^{commit}")"
+            [[ "$tag_commit" == "$release_commit" ]] || {
+              echo "Component tag ${component_tag} does not point to the release commit"
               exit 1
             }
-          fi
+          done
 
           bash -n "$server"
           shellcheck --severity=warning "$server"
           bash -n "$linux"
           shellcheck --severity=warning "$linux"
 
-          echo "version=$tag" >> "$GITHUB_OUTPUT"
-          echo "kind=$kind" >> "$GITHUB_OUTPUT"
+          echo "server_version=$server_version" >> "$GITHUB_OUTPUT"
+          echo "linux_version=$linux_version" >> "$GITHUB_OUTPUT"
+          echo "windows_version=$windows_version" >> "$GITHUB_OUTPUT"
           echo "server=$server" >> "$GITHUB_OUTPUT"
           echo "linux=$linux" >> "$GITHUB_OUTPUT"
+          echo "windows=$windows" >> "$GITHUB_OUTPUT"
         env:
           RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
@@ -105,42 +106,35 @@ jobs:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
       - name: Prepare release bundle
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
         shell: bash
         run: |
           set -Eeuo pipefail
           rm -rf dist
           mkdir -p dist
+          cp "${{ needs.validate.outputs.server }}" \
+            "dist/ikev2-strongswan-ubuntu-v${{ needs.validate.outputs.server_version }}.sh"
+          cp "${{ needs.validate.outputs.linux }}" "dist/"
+          cp "${{ needs.validate.outputs.windows }}" "dist/"
 
-          if [[ "${{ needs.validate.outputs.kind }}" == "server" ]]; then
-            cp "${{ needs.validate.outputs.server }}" \
-              "dist/ikev2-strongswan-ubuntu-v${{ needs.validate.outputs.version }}.sh"
-            cp "${{ needs.validate.outputs.linux }}" "dist/"
-
-            cat > dist/RELEASE.json <<EOF
+          cat > dist/RELEASE.json <<EOF
           {
-            "version": "${{ needs.validate.outputs.version }}",
             "channel": "stable",
+            "release_tag": "${RELEASE_TAG}",
+            "versions": {
+              "server": "${{ needs.validate.outputs.server_version }}",
+              "linux": "${{ needs.validate.outputs.linux_version }}",
+              "windows": "${{ needs.validate.outputs.windows_version }}"
+            },
             "artifacts": {
-              "server": "ikev2-strongswan-ubuntu-v${{ needs.validate.outputs.version }}.sh",
+              "server": "ikev2-strongswan-ubuntu-v${{ needs.validate.outputs.server_version }}.sh",
               "linux": "$(basename "${{ needs.validate.outputs.linux }}")",
+              "windows": "$(basename "${{ needs.validate.outputs.windows }}")",
               "checksums": "SHA256SUMS"
             }
           }
           EOF
-          else
-            cp "${{ needs.validate.outputs.linux }}" "dist/"
-
-            cat > dist/RELEASE.json <<EOF
-          {
-            "version": "${{ needs.validate.outputs.version }}",
-            "channel": "stable",
-            "artifacts": {
-              "linux": "$(basename "${{ needs.validate.outputs.linux }}")",
-              "checksums": "SHA256SUMS"
-            }
-          }
-          EOF
-          fi
 
           (
             cd dist
@@ -154,14 +148,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          if [[ "${{ needs.validate.outputs.kind }}" == "server" ]]; then
-            gh release create "${RELEASE_TAG}" \
-              --title "IKEv2 Server/Clients ${RELEASE_TAG}" \
-              --generate-notes \
-              dist/*
-          else
-            gh release create "${RELEASE_TAG}" \
-              --title "IKEv2 Linux Client ${RELEASE_TAG}" \
-              --generate-notes \
-              dist/*
-          fi
+          gh release create "${RELEASE_TAG}" \
+            --title "IKEv2 VPN Suite ${RELEASE_TAG}" \
+            --generate-notes \
+            dist/*

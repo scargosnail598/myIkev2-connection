@@ -9,22 +9,28 @@ The Linux client supports IPv4 full tunnel and optional IPv6 full tunnel.
 
 ## Release tags
 
-Use Git tags to publish releases in the project pipeline.
+Every release tags all three components at the same commit. Push the Linux and
+Windows tags first, then push the server tag to trigger one complete GitHub
+Release. The workflow verifies all three tags and packages the server, Linux
+client, and Windows client together.
 
-- Server release tags use the pattern: `server-vX.Y.Z`
-- Linux client release tags use the pattern: `linux-vX.Y.Z`
-
-Examples:
+For the current versions:
 
 ```bash
-git tag -a server-v6.4.0 -m "Server v6.4.0"
-git tag -a linux-v1.9.1 -m "Linux client v1.9.1"
+git tag -a linux-v1.9.2 -m "Linux client v1.9.2"
+git tag -a windows-v6.4.1 -m "Windows client v6.4.1"
+git tag -a server-v6.4.1 -m "Server v6.4.1"
 
-# push one or both tags
-git push origin server-v6.4.0 linux-v1.9.1
+# Publish component tags first; the server tag triggers the release workflow.
+git push origin linux-v1.9.2 windows-v6.4.1
+git push origin server-v6.4.1
 ```
 
-The GitHub Actions release workflow validates the tag name and the embedded script version before creating the release asset bundle.
+All tags must point to the same commit and match their embedded component
+versions. The resulting release includes the server installer, both generic
+client scripts, `RELEASE.json`, and `SHA256SUMS`.
+
+Commit and push the release changes to `main` before creating these tags.
 
 ---
 
@@ -32,9 +38,9 @@ The GitHub Actions release workflow validates the tag name and the embedded scri
 
 | Component | File | Version / Target |
 |---|---|---|
-| Server | `ikev2-strongswan-ubuntu.sh` | v6.4.0 / Ubuntu 22.04 & 24.04 |
-| Windows client | `ikev2-windows-client.ps1` | v6.4.0 / PowerShell 5.1+ |
-| Linux client | `ikev2-linux-client.sh` | v1.9.1 / Ubuntu 22.04 & 24.04 |
+| Server | `ikev2-strongswan-ubuntu.sh` | v6.4.1 / Ubuntu 22.04 & 24.04 |
+| Windows client | `ikev2-windows-client.ps1` | v6.4.1 / PowerShell 5.1+ |
+| Linux client | `ikev2-linux-client.sh` | v1.9.2 / Ubuntu 22.04 & 24.04 |
 
 The server installer manages StrongSwan packages, certificates, users, routing, DNS, NAT, firewall rules, status, uninstall, and the optional private SOCKS5 Proxy Mode.
 

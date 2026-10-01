@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 APP_NAME="IKEv2 Linux VPN Utility"
-APP_VERSION="1.9.1"
+APP_VERSION="1.9.2"
 STATE_DIR="/etc/ikev2-client-utility"
 META_DIR="$STATE_DIR/profiles"
 CONF_DIR="/etc/ipsec.d/ikev2-client-profiles"

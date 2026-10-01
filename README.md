@@ -17,13 +17,13 @@ client, and Windows client together.
 For the current versions:
 
 ```bash
-git tag -a linux-v1.9.4 -m "Linux client v1.9.4"
-git tag -a windows-v6.4.3 -m "Windows client v6.4.3"
-git tag -a server-v6.4.3 -m "Server v6.4.3"
+git tag -a linux-v1.9.5 -m "Linux client v1.9.5"
+git tag -a windows-v6.4.4 -m "Windows client v6.4.4"
+git tag -a server-v6.4.4 -m "Server v6.4.4"
 
 # Publish component tags first; the server tag triggers the release workflow.
-git push origin linux-v1.9.4 windows-v6.4.3
-git push origin server-v6.4.3
+git push origin linux-v1.9.5 windows-v6.4.4
+git push origin server-v6.4.4
 ```
 
 All tags must point to the same commit and match their embedded component
@@ -38,9 +38,9 @@ Commit and push the release changes to `main` before creating these tags.
 
 | Component | File | Version / Target |
 |---|---|---|
-| Server | `ikev2-strongswan-ubuntu.sh` | v6.4.3 / Ubuntu 22.04 & 24.04 |
-| Windows client | `ikev2-windows-client.ps1` | v6.4.3 / PowerShell 5.1+ |
-| Linux client | `ikev2-linux-client.sh` | v1.9.4 / Ubuntu 22.04 & 24.04 |
+| Server | `ikev2-strongswan-ubuntu.sh` | v6.4.4 / Ubuntu 22.04 & 24.04 |
+| Windows client | `ikev2-windows-client.ps1` | v6.4.4 / PowerShell 5.1+ |
+| Linux client | `ikev2-linux-client.sh` | v1.9.5 / Ubuntu 22.04 & 24.04 |
 
 The server installer manages StrongSwan packages, certificates, users, routing, DNS, NAT, firewall rules, status, uninstall, and the optional private SOCKS5 Proxy Mode.
 
@@ -553,7 +553,7 @@ The proxy itself does not use a second username/password layer. Access is protec
 
 # 7. Linux Gateway / Router Mode
 
-The Linux client can also act as a routed L3 gateway for selected traffic from an upstream router or MikroTik. This keeps the existing full-tunnel IKEv2 client and the SOCKS5 mode intact while allowing a downstream LAN to forward only the chosen traffic through the VPN.
+The Linux client can also act as a routed L3 gateway for one defined downstream IPv4 prefix. All IP protocols from that prefix are forwarded through the existing IKEv2 tunnel; the server and Linux client must use the same connected VPN profile.
 
 ## How to enable it
 
@@ -566,9 +566,10 @@ sudo ikev2 gateway enable
 ```
 
 Gateway Diagnostics checks the local interface, forwarding setting, connected
-VPN profile, endpoint route, XFRM policy/state, and Gateway Mode firewall/NAT
-rules without changing them. It cannot inspect routes configured on downstream
-hosts or routers, so end-to-end forwarding must still be tested from a client.
+VPN profile, endpoint route, XFRM policy/state, fail-closed guard, and Gateway
+Mode firewall/NAT rules without changing them. It cannot inspect routes
+configured on downstream hosts or routers, so end-to-end forwarding must still
+be tested from a client.
 
 To disable it again:
 
@@ -576,14 +577,15 @@ To disable it again:
 sudo ikev2 gateway disable
 ```
 
-The command is idempotent and removes only the Gateway Mode rules it created when disabled. Existing installations using the old single-subnet rules are migrated automatically the next time Gateway Mode is enabled.
+The command is idempotent and removes only the Gateway Mode rules it created when disabled. Existing installations with broad RFC1918 rules are migrated automatically; Gateway Mode asks for the specific downstream prefix.
 
 ## Required values
 
-The client detects the VPN endpoint from the single connected managed profile and discovers its next hop and routing table from the current kernel route. The LAN interface defaults to the interface on the default route. Gateway Mode accepts RFC1918 private IPv4 sources arriving on that interface: `10.0.0.0/8`, `172.16.0.0/12`, and `192.168.0.0/16`. No source subnet needs to be configured.
+The client detects the VPN endpoint from the single connected managed profile and discovers its next hop and routing table from the current kernel route. The LAN interface defaults to the interface on the default route. Gateway Mode prompts for the exact downstream network prefix; it does not select or broaden the prefix automatically. For the Ansible network shown in the troubleshooting examples, use `192.168.119.0/24` if that is the intended downstream LAN.
 
 ```bash
 export GATEWAY_LAN_IFACE=ens160
+export GATEWAY_DOWNSTREAM_SUBNET=192.168.119.0/24
 export GATEWAY_VPN_VIRTUAL_IP=10.10.10.1
 
 sudo -E ikev2 gateway enable
@@ -591,21 +593,19 @@ sudo -E ikev2 gateway enable
 
 If more than one managed profile is connected, set `GATEWAY_REMOTE_VPN_SERVER` to the active profile's IPv4 endpoint. `GATEWAY_LAN_GATEWAY` can also be set explicitly when automatic next-hop discovery is unsuitable. These values must match the live host and upstream router layout.
 
-Existing installations with a saved single-subnet configuration are automatically migrated when Gateway Mode is enabled with this version.
+To change the selected prefix later, disable and re-enable Gateway Mode with the new prefix.
 
 ## Why SNAT is used
 
-The XFRM child SA is still built for the VPN virtual IP `10.10.10.1`. Forwarded packets from a downstream server arrive with their original source address, so they do not naturally match the outbound `src 10.10.10.1/32` selector.
+The XFRM CHILD_SA uses the client virtual IP (for example `10.10.10.1`) as its local source selector. Forwarded packets arrive with their original downstream source, so they do not match that selector. Gateway Mode therefore SNATs traffic from the configured downstream prefix in `POSTROUTING` before XFRM policy lookup, changing its source to the assigned VPN virtual IP.
 
-Gateway Mode therefore adds SNAT rules for RFC1918 private sources only when they are leaving through the IPsec policy:
+Do not add `-m policy --dir out --pol ipsec` to these SNAT rules: before translation, the forwarded source does not match the IPsec selector, so that condition prevents the rule from matching. The VPN endpoint is excluded so its outer IKE/ESP traffic stays on the physical LAN route.
 
 ```bash
-for source_cidr in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16; do
-  iptables -t nat -A POSTROUTING -s "$source_cidr" -m policy --dir out --pol ipsec -j SNAT --to-source 10.10.10.1
-done
+iptables -t nat -A POSTROUTING -s "$GATEWAY_DOWNSTREAM_SUBNET" -o ens160 ! -d "$GATEWAY_REMOTE_VPN_SERVER/32" -j SNAT --to-source "$GATEWAY_VPN_VIRTUAL_IP"
 ```
 
-This preserves the remote VPN server's final Internet NAT and keeps the tunnel policy consistent without changing StrongSwan itself.
+The server's existing full-tunnel selector and VPN-client NAT then carry all traffic from the selected prefix through the tunnel. Check the `POSTROUTING` packet counter before and after a downstream test; a zero counter means the packets are not matching the SNAT rule.
 
 ## Routing safety
 
@@ -616,7 +616,7 @@ sudo ikev2 gateway status
 sudo ip route show table 220
 ```
 
-This keeps the tunnel maintenance path separate from forwarded traffic and avoids routing loops.
+This keeps the tunnel maintenance path separate from forwarded traffic and avoids routing loops. A low-priority XFRM block policy for the VPN virtual IP prevents forwarded packets from falling back to cleartext if the CHILD_SA disappears; the active IPsec policy takes precedence while the tunnel is up.
 
 ## Validation checklist
 
@@ -637,7 +637,7 @@ Expected behavior:
 
 - IPv4 forwarding is enabled
 - the protected VPN endpoint route uses the underlying LAN gateway, not the VPN tunnel
-- forwarded packets from the selected LAN subnet enter the IPsec policy
+- forwarded packets from the selected downstream prefix enter the IPsec tunnel
 - NAT rules mention the gateway rule comment and only target the downstream subnet
 - existing SOCKS5 mode is unchanged and still responds on `192.168.98.6:4443` if configured
 

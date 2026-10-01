@@ -17,13 +17,13 @@ client, and Windows client together.
 For the current versions:
 
 ```bash
-git tag -a linux-v1.9.6 -m "Linux client v1.9.6"
-git tag -a windows-v6.4.5 -m "Windows client v6.4.5"
-git tag -a server-v6.4.5 -m "Server v6.4.5"
+git tag -a linux-v1.9.7 -m "Linux client v1.9.7"
+git tag -a windows-v6.4.6 -m "Windows client v6.4.6"
+git tag -a server-v6.4.6 -m "Server v6.4.6"
 
 # Publish component tags first; the server tag triggers the release workflow.
-git push origin linux-v1.9.6 windows-v6.4.5
-git push origin server-v6.4.5
+git push origin linux-v1.9.7 windows-v6.4.6
+git push origin server-v6.4.6
 ```
 
 All tags must point to the same commit and match their embedded component
@@ -38,9 +38,9 @@ Commit and push the release changes to `main` before creating these tags.
 
 | Component | File | Version / Target |
 |---|---|---|
-| Server | `ikev2-strongswan-ubuntu.sh` | v6.4.5 / Ubuntu 22.04 & 24.04 |
-| Windows client | `ikev2-windows-client.ps1` | v6.4.5 / PowerShell 5.1+ |
-| Linux client | `ikev2-linux-client.sh` | v1.9.6 / Ubuntu 22.04 & 24.04 |
+| Server | `ikev2-strongswan-ubuntu.sh` | v6.4.6 / Ubuntu 22.04 & 24.04 |
+| Windows client | `ikev2-windows-client.ps1` | v6.4.6 / PowerShell 5.1+ |
+| Linux client | `ikev2-linux-client.sh` | v1.9.7 / Ubuntu 22.04 & 24.04 |
 
 The server installer manages StrongSwan packages, certificates, users, routing, DNS, NAT, firewall rules, status, uninstall, and the optional private SOCKS5 Proxy Mode.
 
@@ -616,7 +616,7 @@ sudo ikev2 gateway status
 sudo ip route show table 220
 ```
 
-This keeps the tunnel maintenance path separate from forwarded traffic and avoids routing loops. A low-priority XFRM block policy for the VPN virtual IP prevents forwarded packets from falling back to cleartext if the CHILD_SA disappears; the active IPsec policy takes precedence while the tunnel is up.
+This keeps the tunnel maintenance path separate from forwarded traffic and avoids routing loops. Two lower-precedence XFRM block policies (`0.0.0.0/1` and `128.0.0.0/1`) cover the VPN virtual IP's destinations without colliding with the active `0.0.0.0/0` CHILD_SA selector. They prevent forwarded packets from falling back to cleartext if the CHILD_SA disappears; the active IPsec policy takes precedence while the tunnel is up.
 
 ## Validation checklist
 

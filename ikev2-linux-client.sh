@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 APP_NAME="IKEv2 Linux VPN Utility"
-APP_VERSION="1.9.6"
+APP_VERSION="1.9.7"
 STATE_DIR="/etc/ikev2-client-utility"
 META_DIR="$STATE_DIR/profiles"
 CONF_DIR="/etc/ipsec.d/ikev2-client-profiles"
@@ -23,6 +23,7 @@ GATEWAY_MODE_STATE_FILE="$STATE_DIR/gateway-mode.state"
 GATEWAY_RULE_COMMENT="ikev2-client-gateway-mode"
 GATEWAY_RULES_VERSION="0"
 GATEWAY_FAIL_CLOSED_PRIORITY="2147483647"
+GATEWAY_FAIL_CLOSED_DESTINATIONS=("0.0.0.0/1" "128.0.0.0/1")
 GATEWAY_DOWNSTREAM_SUBNET="${GATEWAY_DOWNSTREAM_SUBNET:-}"
 GATEWAY_OLD_PRIVATE_CIDRS=("10.0.0.0/8" "172.16.0.0/12" "192.168.0.0/16")
 GATEWAY_LAN_IFACE="${GATEWAY_LAN_IFACE:-}"
@@ -214,9 +215,16 @@ gateway_route_to_vpn_endpoint() {
 }
 
 gateway_fail_closed_policy_index() {
+    local destination="$1"
     ip -s xfrm policy list 2>/dev/null |
-        awk -v virtual_ip="${GATEWAY_VPN_VIRTUAL_IP}/32" -v priority="$GATEWAY_FAIL_CLOSED_PRIORITY" '
-            /^src / { source_matches = ($2 == virtual_ip); index_value = "" }
+        awk -v virtual_ip="${GATEWAY_VPN_VIRTUAL_IP}/32" -v destination="$destination" -v priority="$GATEWAY_FAIL_CLOSED_PRIORITY" '
+            /^src / {
+                source_matches = ($2 == virtual_ip)
+                destination_matches = ($4 == destination)
+                index_value = ""
+                policy_matches = 0
+                priority_matches = 0
+            }
             /dir out/ && /action block/ { policy_matches = 1 }
             /priority/ {
                 for (i = 1; i < NF; i++) {
@@ -224,40 +232,35 @@ gateway_fail_closed_policy_index() {
                 }
             }
             /index/ { for (i = 1; i <= NF; i++) if ($i == "index") index_value = $(i + 1) }
-            /ptype/ && source_matches && policy_matches && priority_matches && index_value != "" {
+            /ptype/ && source_matches && destination_matches && policy_matches && priority_matches && index_value != "" {
                 print index_value
                 exit
             }
-            /^src / { policy_matches = 0; priority_matches = 0 }
         '
 }
 
 gateway_install_fail_closed_policy() {
-    local add_error policy_index
+    local destination add_error policy_index
 
-    if ! add_error="$(ip xfrm policy add \
-        src "${GATEWAY_VPN_VIRTUAL_IP}/32" dst 0.0.0.0/0 dir out \
-        action block priority "$GATEWAY_FAIL_CLOSED_PRIORITY" 2>&1)"; then
-        policy_index="$(gateway_fail_closed_policy_index)"
-        if [[ "$policy_index" =~ ^[0-9]+$ ]]; then
-            return 0
+    for destination in "${GATEWAY_FAIL_CLOSED_DESTINATIONS[@]}"; do
+        add_error="$(ip xfrm policy add \
+            src "${GATEWAY_VPN_VIRTUAL_IP}/32" dst "$destination" dir out \
+            action block priority "$GATEWAY_FAIL_CLOSED_PRIORITY" 2>&1)" || true
+        policy_index="$(gateway_fail_closed_policy_index "$destination")"
+        if [[ ! "$policy_index" =~ ^[0-9]+$ ]]; then
+            warn "Could not install fail-closed XFRM policy for $destination: $add_error"
+            return 1
         fi
-        warn "Could not install the fail-closed XFRM policy: $add_error"
-        return 1
-    fi
-
-    policy_index="$(gateway_fail_closed_policy_index)"
-    if [[ ! "$policy_index" =~ ^[0-9]+$ ]]; then
-        warn "The kernel accepted the fail-closed policy command but the policy could not be verified."
-        return 1
-    fi
+    done
 }
 
 gateway_remove_fail_closed_policy() {
-    local policy_index
-    policy_index="$(gateway_fail_closed_policy_index)"
-    [[ "$policy_index" =~ ^[0-9]+$ ]] || return 0
-    ip xfrm policy delete index "$policy_index" dir out >/dev/null 2>&1 || true
+    local destination policy_index
+    for destination in "${GATEWAY_FAIL_CLOSED_DESTINATIONS[@]}"; do
+        policy_index="$(gateway_fail_closed_policy_index "$destination")"
+        [[ "$policy_index" =~ ^[0-9]+$ ]] || continue
+        ip xfrm policy delete index "$policy_index" dir out >/dev/null 2>&1 || true
+    done
 }
 
 gateway_enable() {
@@ -452,28 +455,11 @@ gateway_diagnostic_xfrm_state() {
 }
 
 gateway_diagnostic_fail_closed_policy() {
-    ip -4 xfrm policy 2>/dev/null | awk \
-        -v virtual_ip="${GATEWAY_VPN_VIRTUAL_IP}/32" \
-        -v priority="$GATEWAY_FAIL_CLOSED_PRIORITY" '
-            function check_policy() {
-                if (source_matches && direction_matches && action_matches && priority_matches) found = 1
-            }
-            /^src / {
-                check_policy()
-                source_matches = ($2 == virtual_ip)
-                direction_matches = 0
-                action_matches = 0
-                priority_matches = 0
-            }
-            /dir out/ { direction_matches = 1 }
-            /action block/ { action_matches = 1 }
-            /priority/ {
-                for (i = 1; i < NF; i++) {
-                    if ($i == "priority" && $(i + 1) == priority) priority_matches = 1
-                }
-            }
-            END { check_policy(); exit !found }
-        '
+    local destination policy_index
+    for destination in "${GATEWAY_FAIL_CLOSED_DESTINATIONS[@]}"; do
+        policy_index="$(gateway_fail_closed_policy_index "$destination")"
+        [[ "$policy_index" =~ ^[0-9]+$ ]] || return 1
+    done
 }
 
 gateway_diagnostics() {

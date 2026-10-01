@@ -7,6 +7,25 @@ A complete IKEv2 VPN setup built around StrongSwan, EAP-MSCHAPv2 authentication,
 
 The Linux client supports IPv4 full tunnel and optional IPv6 full tunnel.
 
+## Release tags
+
+Use Git tags to publish releases in the project pipeline.
+
+- Server release tags use the pattern: `server-vX.Y.Z`
+- Linux client release tags use the pattern: `linux-vX.Y.Z`
+
+Examples:
+
+```bash
+git tag -a server-v6.4.0 -m "Server v6.4.0"
+git tag -a linux-v1.9.0 -m "Linux client v1.9.0"
+
+# push one or both tags
+git push origin server-v6.4.0 linux-v1.9.0
+```
+
+The GitHub Actions release workflow validates the tag name and the embedded script version before creating the release asset bundle.
+
 ---
 
 ## Included files

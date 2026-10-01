@@ -4,10 +4,11 @@ on:
   push:
     tags:
       - "server-v*.*.*"
+      - "linux-v*.*.*"
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing server release tag, for example server-v6.4.0"
+        description: "Existing release tag, for example server-v6.4.0 or linux-v1.9.0"
         required: true
         type: string
 
@@ -40,7 +41,22 @@ jobs:
             echo "Tag does not exist: ${release_tag}"
             exit 1
           }
-          tag="${release_tag#server-v}"
+
+          case "$release_tag" in
+            server-v*)
+              kind="server"
+              tag="${release_tag#server-v}"
+              ;;
+            linux-v*)
+              kind="linux"
+              tag="${release_tag#linux-v}"
+              ;;
+            *)
+              echo "Unsupported release tag: ${release_tag}"
+              exit 1
+              ;;
+          esac
+
           [[ "$tag" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
 
           mapfile -t server_files < <(find . -maxdepth 1 -type f -name 'ikev2-strongswan-ubuntu.sh' -print | sort)
@@ -50,20 +66,32 @@ jobs:
           [[ ${#linux_files[@]} -eq 1 ]] || { echo "Expected one Linux client"; exit 1; }
 
           server="${server_files[0]}"
+          linux="${linux_files[0]}"
+
           server_version=$(sed -nE 's/^CURRENT_INSTALLER_VERSION="([0-9]+\.[0-9]+\.[0-9]+).*"$/\1/p' "$server" | head -n1)
-          [[ "$server_version" == "$tag" ]] || {
-            echo "Tag/version mismatch: tag=$tag script=$server_version"
-            exit 1
-          }
+          linux_version=$(sed -nE 's/^APP_VERSION="([0-9]+\.[0-9]+\.[0-9]+)"$/\1/p' "$linux" | head -n1)
+
+          if [[ "$kind" == "server" ]]; then
+            [[ "$server_version" == "$tag" ]] || {
+              echo "Tag/version mismatch: tag=$tag script=$server_version"
+              exit 1
+            }
+          else
+            [[ "$linux_version" == "$tag" ]] || {
+              echo "Tag/version mismatch: tag=$tag script=$linux_version"
+              exit 1
+            }
+          fi
 
           bash -n "$server"
           shellcheck --severity=warning "$server"
-          bash -n "${linux_files[0]}"
-          shellcheck --severity=warning "${linux_files[0]}"
+          bash -n "$linux"
+          shellcheck --severity=warning "$linux"
 
           echo "version=$tag" >> "$GITHUB_OUTPUT"
+          echo "kind=$kind" >> "$GITHUB_OUTPUT"
           echo "server=$server" >> "$GITHUB_OUTPUT"
-          echo "linux=${linux_files[0]}" >> "$GITHUB_OUTPUT"
+          echo "linux=$linux" >> "$GITHUB_OUTPUT"
         env:
           RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
@@ -82,16 +110,13 @@ jobs:
           set -Eeuo pipefail
           rm -rf dist
           mkdir -p dist
-          cp "${{ needs.validate.outputs.server }}" \
-            "dist/ikev2-strongswan-ubuntu-v${{ needs.validate.outputs.version }}.sh"
-          cp "${{ needs.validate.outputs.linux }}" "dist/"
 
-          (
-            cd dist
-            sha256sum ./* > SHA256SUMS
-          )
+          if [[ "${{ needs.validate.outputs.kind }}" == "server" ]]; then
+            cp "${{ needs.validate.outputs.server }}" \
+              "dist/ikev2-strongswan-ubuntu-v${{ needs.validate.outputs.version }}.sh"
+            cp "${{ needs.validate.outputs.linux }}" "dist/"
 
-          cat > dist/RELEASE.json <<EOF
+            cat > dist/RELEASE.json <<EOF
           {
             "version": "${{ needs.validate.outputs.version }}",
             "channel": "stable",
@@ -102,6 +127,25 @@ jobs:
             }
           }
           EOF
+          else
+            cp "${{ needs.validate.outputs.linux }}" "dist/"
+
+            cat > dist/RELEASE.json <<EOF
+          {
+            "version": "${{ needs.validate.outputs.version }}",
+            "channel": "stable",
+            "artifacts": {
+              "linux": "$(basename "${{ needs.validate.outputs.linux }}")",
+              "checksums": "SHA256SUMS"
+            }
+          }
+          EOF
+          fi
+
+          (
+            cd dist
+            sha256sum ./* > SHA256SUMS
+          )
 
       - name: Create GitHub Release
         env:
@@ -110,7 +154,14 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          gh release create "${RELEASE_TAG}" \
-            --title "IKEv2 Server/Clients ${RELEASE_TAG}" \
-            --generate-notes \
-            dist/*
+          if [[ "${{ needs.validate.outputs.kind }}" == "server" ]]; then
+            gh release create "${RELEASE_TAG}" \
+              --title "IKEv2 Server/Clients ${RELEASE_TAG}" \
+              --generate-notes \
+              dist/*
+          else
+            gh release create "${RELEASE_TAG}" \
+              --title "IKEv2 Linux Client ${RELEASE_TAG}" \
+              --generate-notes \
+              dist/*
+          fi

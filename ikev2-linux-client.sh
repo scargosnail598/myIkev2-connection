@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 APP_NAME="IKEv2 Linux VPN Utility"
-APP_VERSION="1.9.5"
+APP_VERSION="1.9.6"
 STATE_DIR="/etc/ikev2-client-utility"
 META_DIR="$STATE_DIR/profiles"
 CONF_DIR="/etc/ipsec.d/ikev2-client-profiles"
@@ -214,7 +214,7 @@ gateway_route_to_vpn_endpoint() {
 }
 
 gateway_fail_closed_policy_index() {
-    ip -s xfrm policy list src "${GATEWAY_VPN_VIRTUAL_IP}/32" dst 0.0.0.0/0 dir out action block priority "$GATEWAY_FAIL_CLOSED_PRIORITY" 2>/dev/null |
+    ip -s xfrm policy list 2>/dev/null |
         awk -v virtual_ip="${GATEWAY_VPN_VIRTUAL_IP}/32" -v priority="$GATEWAY_FAIL_CLOSED_PRIORITY" '
             /^src / { source_matches = ($2 == virtual_ip); index_value = "" }
             /dir out/ && /action block/ { policy_matches = 1 }
@@ -233,13 +233,24 @@ gateway_fail_closed_policy_index() {
 }
 
 gateway_install_fail_closed_policy() {
-    ip xfrm policy add \
+    local add_error policy_index
+
+    if ! add_error="$(ip xfrm policy add \
         src "${GATEWAY_VPN_VIRTUAL_IP}/32" dst 0.0.0.0/0 dir out \
-        action block priority "$GATEWAY_FAIL_CLOSED_PRIORITY" 2>/dev/null || true
-    [[ "$(gateway_fail_closed_policy_index)" =~ ^[0-9]+$ ]] || {
-        warn "Could not verify the fail-closed XFRM policy. Gateway Mode was not enabled."
+        action block priority "$GATEWAY_FAIL_CLOSED_PRIORITY" 2>&1)"; then
+        policy_index="$(gateway_fail_closed_policy_index)"
+        if [[ "$policy_index" =~ ^[0-9]+$ ]]; then
+            return 0
+        fi
+        warn "Could not install the fail-closed XFRM policy: $add_error"
         return 1
-    }
+    fi
+
+    policy_index="$(gateway_fail_closed_policy_index)"
+    if [[ ! "$policy_index" =~ ^[0-9]+$ ]]; then
+        warn "The kernel accepted the fail-closed policy command but the policy could not be verified."
+        return 1
+    fi
 }
 
 gateway_remove_fail_closed_policy() {

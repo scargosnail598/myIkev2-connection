@@ -17,13 +17,13 @@ client, and Windows client together.
 For the current versions:
 
 ```bash
-git tag -a linux-v1.9.3 -m "Linux client v1.9.3"
-git tag -a windows-v6.4.2 -m "Windows client v6.4.2"
-git tag -a server-v6.4.2 -m "Server v6.4.2"
+git tag -a linux-v1.9.4 -m "Linux client v1.9.4"
+git tag -a windows-v6.4.3 -m "Windows client v6.4.3"
+git tag -a server-v6.4.3 -m "Server v6.4.3"
 
 # Publish component tags first; the server tag triggers the release workflow.
-git push origin linux-v1.9.3 windows-v6.4.2
-git push origin server-v6.4.2
+git push origin linux-v1.9.4 windows-v6.4.3
+git push origin server-v6.4.3
 ```
 
 All tags must point to the same commit and match their embedded component
@@ -38,9 +38,9 @@ Commit and push the release changes to `main` before creating these tags.
 
 | Component | File | Version / Target |
 |---|---|---|
-| Server | `ikev2-strongswan-ubuntu.sh` | v6.4.2 / Ubuntu 22.04 & 24.04 |
-| Windows client | `ikev2-windows-client.ps1` | v6.4.2 / PowerShell 5.1+ |
-| Linux client | `ikev2-linux-client.sh` | v1.9.3 / Ubuntu 22.04 & 24.04 |
+| Server | `ikev2-strongswan-ubuntu.sh` | v6.4.3 / Ubuntu 22.04 & 24.04 |
+| Windows client | `ikev2-windows-client.ps1` | v6.4.3 / PowerShell 5.1+ |
+| Linux client | `ikev2-linux-client.sh` | v1.9.4 / Ubuntu 22.04 & 24.04 |
 
 The server installer manages StrongSwan packages, certificates, users, routing, DNS, NAT, firewall rules, status, uninstall, and the optional private SOCKS5 Proxy Mode.
 
@@ -561,8 +561,14 @@ After the Linux client is installed and the IKEv2 profile is connected:
 
 ```bash
 sudo ikev2 gateway status
+sudo ikev2 gateway diagnose
 sudo ikev2 gateway enable
 ```
+
+Gateway Diagnostics checks the local interface, forwarding setting, connected
+VPN profile, endpoint route, XFRM policy/state, and Gateway Mode firewall/NAT
+rules without changing them. It cannot inspect routes configured on downstream
+hosts or routers, so end-to-end forwarding must still be tested from a client.
 
 To disable it again:
 

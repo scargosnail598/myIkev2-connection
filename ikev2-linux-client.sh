@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 APP_NAME="IKEv2 Linux VPN Utility"
-APP_VERSION="1.9.3"
+APP_VERSION="1.9.4"
 STATE_DIR="/etc/ikev2-client-utility"
 META_DIR="$STATE_DIR/profiles"
 CONF_DIR="/etc/ipsec.d/ikev2-client-profiles"
@@ -268,6 +268,116 @@ gateway_status() {
     iptables -t nat -S 2>/dev/null | grep "$GATEWAY_RULE_COMMENT" || echo "  none"
     printf '\nRelevant XFRM policy:\n'
     ip xfrm policy 2>/dev/null | sed -n '1,20p' || echo "  XFRM policy unavailable"
+}
+
+gateway_diagnostic_check() {
+    local label="$1"
+    shift
+
+    if "$@"; then
+        printf '[OK]   %s\n' "$label"
+    else
+        printf '[FAIL] %s\n' "$label"
+        GATEWAY_DIAGNOSTIC_FAILURES=$((GATEWAY_DIAGNOSTIC_FAILURES + 1))
+    fi
+}
+
+gateway_diagnostic_interface() {
+    [[ -n "$GATEWAY_LAN_IFACE" ]] || return 1
+    ip link show dev "$GATEWAY_LAN_IFACE" >/dev/null 2>&1 || return 1
+    ip -4 -o addr show dev "$GATEWAY_LAN_IFACE" scope global 2>/dev/null |
+        awk 'NR == 1 { found = 1 } END { exit !found }'
+}
+
+gateway_diagnostic_forwarding() {
+    [[ "$(sysctl -n net.ipv4.ip_forward 2>/dev/null || true)" == "1" ]]
+}
+
+gateway_diagnostic_connected_profile() {
+    local profile_file
+    local connected_count=0
+
+    while IFS= read -r profile_file; do
+        [[ -n "$profile_file" ]] || continue
+        read_metadata "$profile_file"
+        if is_connected "$META_ID"; then
+            connected_count=$((connected_count + 1))
+        fi
+    done < <(list_profile_files)
+
+    [[ "$connected_count" -eq 1 ]]
+}
+
+gateway_diagnostic_endpoint_route() {
+    local route
+    route="$(ip -4 route show table "$GATEWAY_ROUTE_TABLE" 2>/dev/null |
+        awk -v endpoint="$GATEWAY_REMOTE_VPN_SERVER" '$1 == endpoint || $1 == endpoint "/32" { print; exit }')"
+    [[ -n "$route" && "$route" == *"dev $GATEWAY_ROUTE_IFACE"* ]] || return 1
+    [[ -z "$GATEWAY_LAN_GATEWAY" || "$route" == *"via $GATEWAY_LAN_GATEWAY"* ]]
+}
+
+gateway_diagnostic_policy_rule() {
+    ip -4 rule show 2>/dev/null |
+        grep -Eq "lookup[[:space:]]+${GATEWAY_ROUTE_TABLE}([[:space:]]|$)"
+}
+
+gateway_diagnostic_xfrm_policy() {
+    ip -4 xfrm policy 2>/dev/null | awk -v virtual_ip="${GATEWAY_VPN_VIRTUAL_IP}/32" '
+        /^src / { source_matches = ($2 == virtual_ip) }
+        /dir out/ && source_matches { found = 1 }
+        END { exit !found }
+    '
+}
+
+gateway_diagnostic_xfrm_state() {
+    ip -4 xfrm state 2>/dev/null |
+        awk -v endpoint="$GATEWAY_REMOTE_VPN_SERVER" '$1 == "src" && $4 == endpoint { found = 1 } END { exit !found }'
+}
+
+gateway_diagnostics() {
+    local private_cidr
+
+    GATEWAY_DIAGNOSTIC_FAILURES=0
+    gateway_load_state
+    if [[ -z "$GATEWAY_LAN_IFACE" ]]; then
+        GATEWAY_LAN_IFACE="$(ip -4 route show default 2>/dev/null | awk 'NR == 1 { for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit } }')"
+    fi
+
+    printf '\nGateway / Router Diagnostics (read-only)\n'
+    printf '========================================\n'
+    gateway_diagnostic_check "Gateway Mode is enabled" gateway_mode_enabled
+    gateway_diagnostic_check "Required commands are installed (ip, iptables, ipsec, sysctl)" sh -c 'command -v ip >/dev/null && command -v iptables >/dev/null && command -v ipsec >/dev/null && command -v sysctl >/dev/null'
+    gateway_diagnostic_check "Exactly one managed VPN profile is connected" gateway_diagnostic_connected_profile
+    if ! gateway_diagnostic_check "VPN endpoint resolves to IPv4" gateway_resolve_remote_server; then
+        GATEWAY_REMOTE_VPN_SERVER=""
+    fi
+    gateway_diagnostic_check "LAN interface '$GATEWAY_LAN_IFACE' exists and has IPv4" gateway_diagnostic_interface
+    gateway_diagnostic_check "IPv4 forwarding is enabled" gateway_diagnostic_forwarding
+    gateway_diagnostic_check "Policy rule selects routing table '$GATEWAY_ROUTE_TABLE'" gateway_diagnostic_policy_rule
+    gateway_diagnostic_check "Protected VPN endpoint route uses the LAN next hop" gateway_diagnostic_endpoint_route
+    gateway_diagnostic_check "Outbound XFRM policy matches VPN IP $GATEWAY_VPN_VIRTUAL_IP" gateway_diagnostic_xfrm_policy
+    gateway_diagnostic_check "XFRM state exists for VPN endpoint $GATEWAY_REMOTE_VPN_SERVER" gateway_diagnostic_xfrm_state
+
+    if [[ -n "$GATEWAY_LEGACY_LAN_SUBNET" ]]; then
+        printf '[WARN] Saved Gateway Mode uses legacy source range %s; select Enable to migrate it.\n' "$GATEWAY_LEGACY_LAN_SUBNET"
+    fi
+
+    for private_cidr in "${GATEWAY_PRIVATE_CIDRS[@]}"; do
+        gateway_diagnostic_check "FORWARD permits source $private_cidr" \
+            iptables -C FORWARD -i "$GATEWAY_LAN_IFACE" -s "$private_cidr" -m comment --comment "$GATEWAY_RULE_COMMENT" -j ACCEPT
+        gateway_diagnostic_check "FORWARD permits return traffic to $private_cidr" \
+            iptables -C FORWARD -o "$GATEWAY_LAN_IFACE" -d "$private_cidr" -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment "$GATEWAY_RULE_COMMENT" -j ACCEPT
+        gateway_diagnostic_check "IPsec SNAT exists for $private_cidr" \
+            iptables -t nat -C POSTROUTING -s "$private_cidr" -m policy --dir out --pol ipsec -m comment --comment "$GATEWAY_RULE_COMMENT" -j SNAT --to-source "$GATEWAY_VPN_VIRTUAL_IP"
+    done
+
+    printf '\n[INFO] This checks the VPN gateway itself; it cannot verify routes configured on downstream hosts or routers.\n'
+    if (( GATEWAY_DIAGNOSTIC_FAILURES > 0 )); then
+        printf '[FAIL] %s local check(s) failed.\n' "$GATEWAY_DIAGNOSTIC_FAILURES"
+        return 1
+    fi
+
+    printf '[OK] All local Gateway Mode checks passed. Generate traffic from a downstream host to test forwarding end-to-end.\n'
 }
 
 pause_menu() {
@@ -1910,7 +2020,7 @@ show_all_status() {
 }
 
 usage() {
-    printf '%s\n' "Usage: ikev2 [gateway {enable|disable|status}]"
+    printf '%s\n' "Usage: ikev2 [gateway {enable|disable|status|diagnose}]"
     printf '%s\n' "       ikev2 [menu options]"
 }
 
@@ -2022,13 +2132,15 @@ main_menu() {
                 printf '1) Enable Gateway Mode\n'
                 printf '2) Disable Gateway Mode\n'
                 printf '3) Gateway Status\n'
-                printf '4) Back\n\n'
-                read -r -p "Choose an action [1-4]: " action
+                printf '4) Gateway Diagnostics\n'
+                printf '5) Back\n\n'
+                read -r -p "Choose an action [1-5]: " action
                 case "$action" in
                     1) gateway_enable ;;
                     2) gateway_disable ;;
                     3) gateway_status ;;
-                    4) return ;;
+                    4) gateway_diagnostics || true ;;
+                    5) return ;;
                     *) warn "Invalid option." ;;
                 esac
                 pause_menu
@@ -2061,6 +2173,7 @@ if [[ "${1:-}" == "gateway" ]]; then
         enable) gateway_enable ; exit $? ;;
         disable) gateway_disable ; exit $? ;;
         status) gateway_status ; exit $? ;;
+        diagnose) gateway_diagnostics ; exit $? ;;
         "") usage ; exit 1 ;;
         *) usage ; exit 2 ;;
     esac

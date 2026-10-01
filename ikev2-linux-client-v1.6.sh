@@ -19,6 +19,13 @@ DNS_GLOBAL_BACKUP="$STATE_DIR/resolv.conf.pre-vpn"
 DNS_OWNER_FILE="$STATE_DIR/resolv.conf.owner"
 STRONGSWAN_RESOLVE_OVERRIDE="/etc/strongswan.d/charon/zz-ikev2-client-resolve.conf"
 RESOLVCONF_NOOP="/usr/local/libexec/ikev2-client-resolvconf-noop"
+GATEWAY_MODE_STATE_FILE="$STATE_DIR/gateway-mode.state"
+GATEWAY_RULE_COMMENT="ikev2-client-gateway-mode"
+GATEWAY_LAN_IFACE="${GATEWAY_LAN_IFACE:-ens160}"
+GATEWAY_LAN_GATEWAY="${GATEWAY_LAN_GATEWAY:-192.168.98.5}"
+GATEWAY_REMOTE_VPN_SERVER="${GATEWAY_REMOTE_VPN_SERVER:-194.5.206.142}"
+GATEWAY_LAN_SUBNET="${GATEWAY_LAN_SUBNET:-192.168.50.0/24}"
+GATEWAY_VPN_VIRTUAL_IP="${GATEWAY_VPN_VIRTUAL_IP:-10.10.10.1}"
 DNS_MODE="managed"
 STRONGSWAN_DNS_CONFIG_CHANGED=0
 DNS_CONFIG_MARKER="$STATE_DIR/managed-dns-config.sha256"
@@ -37,6 +44,117 @@ die() { warn "$*"; exit 1; }
 
 show_about() {
     printf '\nIKEv2 Linux VPN Utility v%s configures and manages Ubuntu StrongSwan client profiles with EAP authentication, optional IPv6 full-tunnel routing, and VPN-aware DNS handling.\n\n' "$APP_VERSION"
+}
+
+gateway_mode_enabled() {
+    [[ -f "$GATEWAY_MODE_STATE_FILE" ]]
+}
+
+gateway_write_state() {
+    cat > "$GATEWAY_MODE_STATE_FILE" <<EOF
+GATEWAY_LAN_IFACE=$GATEWAY_LAN_IFACE
+GATEWAY_LAN_GATEWAY=$GATEWAY_LAN_GATEWAY
+GATEWAY_REMOTE_VPN_SERVER=$GATEWAY_REMOTE_VPN_SERVER
+GATEWAY_LAN_SUBNET=$GATEWAY_LAN_SUBNET
+GATEWAY_VPN_VIRTUAL_IP=$GATEWAY_VPN_VIRTUAL_IP
+EOF
+    chmod 0600 "$GATEWAY_MODE_STATE_FILE"
+}
+
+gateway_validate_config() {
+    command -v ip >/dev/null 2>&1 || die "Gateway Mode requires the ip command."
+    command -v iptables >/dev/null 2>&1 || die "Gateway Mode requires iptables."
+
+    [[ "$GATEWAY_LAN_SUBNET" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$ ]] || die "Gateway Mode LAN subnet is invalid: $GATEWAY_LAN_SUBNET"
+    [[ "$GATEWAY_VPN_VIRTUAL_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "Gateway Mode virtual IP is invalid: $GATEWAY_VPN_VIRTUAL_IP"
+    [[ "$GATEWAY_REMOTE_VPN_SERVER" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "Gateway Mode remote VPN server is invalid: $GATEWAY_REMOTE_VPN_SERVER"
+
+    ip link show dev "$GATEWAY_LAN_IFACE" >/dev/null 2>&1 || die "Gateway Mode LAN interface '$GATEWAY_LAN_IFACE' is not present."
+    ip -4 -o addr show dev "$GATEWAY_LAN_IFACE" scope global 2>/dev/null | awk 'NR==1 {split($4,a,"/"); print a[1]}' | grep -q '.' || \
+        die "Gateway Mode LAN interface '$GATEWAY_LAN_IFACE' does not have an IPv4 address."
+
+    ip route show default dev "$GATEWAY_LAN_IFACE" >/dev/null 2>&1 || warn "No default route is currently attached to '$GATEWAY_LAN_IFACE'. Gateway Mode still uses the configured gateway: $GATEWAY_LAN_GATEWAY"
+}
+
+gateway_route_to_vpn_endpoint() {
+    local lan_ip
+    lan_ip="$(ip -4 -o addr show dev "$GATEWAY_LAN_IFACE" scope global 2>/dev/null | awk 'NR==1 {split($4,a,"/"); print a[1]}')"
+    [[ -n "$lan_ip" ]] || return 1
+
+    ip route replace "${GATEWAY_REMOTE_VPN_SERVER}/32" via "$GATEWAY_LAN_GATEWAY" dev "$GATEWAY_LAN_IFACE" src "$lan_ip" >/dev/null 2>&1
+}
+
+gateway_enable() {
+    ensure_directories
+    gateway_validate_config
+
+    if gateway_mode_enabled; then
+        info "Gateway Mode is already enabled."
+        gateway_status
+        return 0
+    fi
+
+    sysctl -w net.ipv4.ip_forward=1 >/dev/null
+
+    gateway_route_to_vpn_endpoint || die "The host route to the VPN endpoint could not be configured. Check the LAN interface and gateway values."
+
+    iptables -C FORWARD -i "$GATEWAY_LAN_IFACE" -s "$GATEWAY_LAN_SUBNET" -m comment --comment "$GATEWAY_RULE_COMMENT" -j ACCEPT >/dev/null 2>&1 || \
+        iptables -I FORWARD 1 -i "$GATEWAY_LAN_IFACE" -s "$GATEWAY_LAN_SUBNET" -m comment --comment "$GATEWAY_RULE_COMMENT" -j ACCEPT
+
+    iptables -C FORWARD -o "$GATEWAY_LAN_IFACE" -d "$GATEWAY_LAN_SUBNET" -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment "$GATEWAY_RULE_COMMENT" -j ACCEPT >/dev/null 2>&1 || \
+        iptables -I FORWARD 2 -o "$GATEWAY_LAN_IFACE" -d "$GATEWAY_LAN_SUBNET" -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment "$GATEWAY_RULE_COMMENT" -j ACCEPT
+
+    iptables -t nat -C POSTROUTING -s "$GATEWAY_LAN_SUBNET" -m policy --dir out --pol ipsec -m comment --comment "$GATEWAY_RULE_COMMENT" -j SNAT --to-source "$GATEWAY_VPN_VIRTUAL_IP" >/dev/null 2>&1 || \
+        iptables -t nat -A POSTROUTING -s "$GATEWAY_LAN_SUBNET" -m policy --dir out --pol ipsec -m comment --comment "$GATEWAY_RULE_COMMENT" -j SNAT --to-source "$GATEWAY_VPN_VIRTUAL_IP"
+
+    gateway_write_state
+    info "Gateway Mode enabled. Selected LAN traffic is forwarded through the IKEv2 tunnel and SNATed to $GATEWAY_VPN_VIRTUAL_IP."
+    gateway_status
+}
+
+gateway_disable() {
+    if ! gateway_mode_enabled; then
+        info "Gateway Mode is already disabled."
+        return 0
+    fi
+
+    iptables -D FORWARD -i "$GATEWAY_LAN_IFACE" -s "$GATEWAY_LAN_SUBNET" -m comment --comment "$GATEWAY_RULE_COMMENT" -j ACCEPT >/dev/null 2>&1 || true
+    iptables -D FORWARD -o "$GATEWAY_LAN_IFACE" -d "$GATEWAY_LAN_SUBNET" -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment "$GATEWAY_RULE_COMMENT" -j ACCEPT >/dev/null 2>&1 || true
+    iptables -t nat -D POSTROUTING -s "$GATEWAY_LAN_SUBNET" -m policy --dir out --pol ipsec -m comment --comment "$GATEWAY_RULE_COMMENT" -j SNAT --to-source "$GATEWAY_VPN_VIRTUAL_IP" >/dev/null 2>&1 || true
+    ip route del "${GATEWAY_REMOTE_VPN_SERVER}/32" via "$GATEWAY_LAN_GATEWAY" dev "$GATEWAY_LAN_IFACE" >/dev/null 2>&1 || true
+
+    rm -f "$GATEWAY_MODE_STATE_FILE"
+    info "Gateway Mode disabled. The previous default LAN path and tunnel policy were left in place."
+    gateway_status
+}
+
+gateway_status() {
+    local enabled="disabled"
+    local forwarding="unknown"
+
+    if gateway_mode_enabled; then
+        enabled="enabled"
+    fi
+
+    forwarding="$(sysctl -n net.ipv4.ip_forward 2>/dev/null || echo unknown)"
+
+    printf '\nGateway / Router Mode\n'
+    printf '====================\n'
+    printf 'Mode              : %s\n' "$enabled"
+    printf 'IPv4 forwarding   : %s\n' "$forwarding"
+    printf 'LAN interface     : %s\n' "$GATEWAY_LAN_IFACE"
+    printf 'LAN subnet        : %s\n' "$GATEWAY_LAN_SUBNET"
+    printf 'LAN gateway       : %s\n' "$GATEWAY_LAN_GATEWAY"
+    printf 'VPN virtual IP    : %s\n' "$GATEWAY_VPN_VIRTUAL_IP"
+    printf 'Remote VPN server : %s\n' "$GATEWAY_REMOTE_VPN_SERVER"
+    printf '\nRelevant routes:\n'
+    ip route show 2>/dev/null | grep -E "${GATEWAY_REMOTE_VPN_SERVER}/32|default" || echo "  none visible"
+    printf '\nRelevant iptables filter rules:\n'
+    iptables -S 2>/dev/null | grep "$GATEWAY_RULE_COMMENT" || echo "  none"
+    printf '\nRelevant iptables NAT rules:\n'
+    iptables -t nat -S 2>/dev/null | grep "$GATEWAY_RULE_COMMENT" || echo "  none"
+    printf '\nRelevant XFRM policy:\n'
+    ip xfrm policy 2>/dev/null | sed -n '1,20p' || echo "  XFRM policy unavailable"
 }
 
 pause_menu() {
@@ -1678,6 +1796,11 @@ show_all_status() {
     done
 }
 
+usage() {
+    printf '%s\n' "Usage: ikev2 [gateway {enable|disable|status}]"
+    printf '%s\n' "       ikev2 [menu options]"
+}
+
 update_client_script() {
     local update_url="https://raw.githubusercontent.com/scargosnail598/myIkev2-connection/main/ikev2-linux-client-v1.6.sh"
     local downloaded current_path remote_version latest_version target staging
@@ -1756,10 +1879,11 @@ main_menu() {
         printf '7) Remove Profile\n'
         printf '8) Uninstall Utility\n'
         printf '9) Update Client\n'
-        printf '10) About\n'
-        printf '11) Exit\n\n'
+        printf '10) Gateway Mode\n'
+        printf '11) About\n'
+        printf '12) Exit\n\n'
 
-        read -r -p "Choose an option [1-11]: " choice
+        read -r -p "Choose an option [1-12]: " choice
 
         case "$choice" in
             1) install_update_profile; pause_menu ;;
@@ -1779,8 +1903,25 @@ main_menu() {
             7) remove_selected_profile; pause_menu ;;
             8) uninstall_utility; pause_menu ;;
             9) update_client_script; pause_menu ;;
-            10) show_about; pause_menu ;;
-            11) printf '\nExiting...\n'; exit 0 ;;
+            10)
+                printf '\nGateway / Router Mode\n'
+                printf '====================\n'
+                printf '1) Enable Gateway Mode\n'
+                printf '2) Disable Gateway Mode\n'
+                printf '3) Gateway Status\n'
+                printf '4) Back\n\n'
+                read -r -p "Choose an action [1-4]: " action
+                case "$action" in
+                    1) gateway_enable ;;
+                    2) gateway_disable ;;
+                    3) gateway_status ;;
+                    4) return ;;
+                    *) warn "Invalid option." ;;
+                esac
+                pause_menu
+                ;;
+            11) show_about; pause_menu ;;
+            12) printf '\nExiting...\n'; exit 0 ;;
             *) warn "Invalid option."; sleep 1 ;;
         esac
     done
@@ -1790,10 +1931,26 @@ require_root "$@"
 detect_ubuntu
 ensure_directories
 
+if [[ "${1:-}" =~ ^(-h|--help)$ ]]; then
+    usage
+    exit 0
+fi
+
 if [[ "${1:-}" == "--autoreconnect-watch" ]]; then
     [[ $# -eq 2 && "$2" =~ ^ikev2c_[a-f0-9]{12}$ ]] || die "Invalid auto-reconnect profile ID."
     autoreconnect_watch "$2"
     exit 0
+fi
+
+if [[ "${1:-}" == "gateway" ]]; then
+    shift || true
+    case "${1:-}" in
+        enable) gateway_enable ; exit $? ;;
+        disable) gateway_disable ; exit $? ;;
+        status) gateway_status ; exit $? ;;
+        "") usage ; exit 1 ;;
+        *) usage ; exit 2 ;;
+    esac
 fi
 
 cleanup_stale_dns_override

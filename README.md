@@ -526,7 +526,101 @@ The proxy itself does not use a second username/password layer. Access is protec
 
 ---
 
-# 7. Prepare client files
+# 7. Linux Gateway / Router Mode
+
+The Linux client can also act as a routed L3 gateway for selected traffic from an upstream router or MikroTik. This keeps the existing full-tunnel IKEv2 client and the SOCKS5 mode intact while allowing a downstream LAN to forward only the chosen traffic through the VPN.
+
+## How to enable it
+
+After the Linux client is installed and the IKEv2 profile is connected:
+
+```bash
+sudo ikev2 gateway status
+sudo ikev2 gateway enable
+```
+
+To disable it again:
+
+```bash
+sudo ikev2 gateway disable
+```
+
+The command is idempotent and removes only the Gateway Mode rules it created when disabled.
+
+## Required values
+
+The script exposes the gateway settings as environment variables so they can be overridden without editing the main script:
+
+```bash
+export GATEWAY_LAN_IFACE=ens160
+export GATEWAY_LAN_GATEWAY=192.168.98.5
+export GATEWAY_REMOTE_VPN_SERVER=194.5.206.142
+export GATEWAY_LAN_SUBNET=192.168.50.0/24
+export GATEWAY_VPN_VIRTUAL_IP=10.10.10.1
+
+sudo -E ikev2 gateway enable
+```
+
+The defaults are already aligned to the common pattern above, but these values should match the live host and upstream router layout.
+
+## Why SNAT is used
+
+The XFRM child SA is still built for the VPN virtual IP `10.10.10.1`. Forwarded packets from a downstream server arrive with their original source address, so they do not naturally match the outbound `src 10.10.10.1/32` selector.
+
+Gateway Mode therefore adds a narrow SNAT rule only for traffic from the configured downstream subnet and only when it is leaving through the IPsec policy:
+
+```bash
+iptables -t nat -A POSTROUTING -s 192.168.50.0/24 -m policy --dir out --pol ipsec -j SNAT --to-source 10.10.10.1
+```
+
+This preserves the remote VPN server's final Internet NAT and keeps the tunnel policy consistent without changing StrongSwan itself.
+
+## Routing safety
+
+The gateway protects the IKEv2 endpoint route so tunnel control traffic continues to leave through the normal LAN gateway instead of looping back into the VPN:
+
+```bash
+ip route replace 194.5.206.142/32 via 192.168.98.5 dev ens160
+```
+
+This keeps the tunnel maintenance path separate from forwarded traffic and avoids routing loops.
+
+## Validation checklist
+
+Use the following checks after enabling Gateway Mode:
+
+```bash
+sudo sysctl net.ipv4.ip_forward
+sudo ip -br addr
+sudo ip route
+sudo ip route show 194.5.206.142/32
+sudo ip xfrm policy
+sudo iptables -S | grep ikev2-client-gateway-mode
+sudo iptables -t nat -S | grep ikev2-client-gateway-mode
+sudo tcpdump -ni ens160
+```
+
+Expected behavior:
+
+- IPv4 forwarding is enabled
+- the VPN endpoint `194.5.206.142` is reachable via the LAN gateway, not via the VPN
+- forwarded packets from the selected LAN subnet enter the IPsec policy
+- NAT rules mention the gateway rule comment and only target the downstream subnet
+- existing SOCKS5 mode is unchanged and still responds on `192.168.98.6:4443` if configured
+
+## Disable and rollback
+
+To remove only the Gateway Mode changes:
+
+```bash
+sudo ikev2 gateway disable
+```
+
+This removes the added forwarding/NAT rules and the protected route while leaving the existing normal IKEv2 profile and SOCKS5 setup intact.
+
+---
+
+# 8. Prepare client files
 
 Manual client setup needs:
 

@@ -17,13 +17,13 @@ client, and Windows client together.
 For the current versions:
 
 ```bash
-git tag -a linux-v1.9.2 -m "Linux client v1.9.2"
-git tag -a windows-v6.4.1 -m "Windows client v6.4.1"
-git tag -a server-v6.4.1 -m "Server v6.4.1"
+git tag -a linux-v1.9.3 -m "Linux client v1.9.3"
+git tag -a windows-v6.4.2 -m "Windows client v6.4.2"
+git tag -a server-v6.4.2 -m "Server v6.4.2"
 
 # Publish component tags first; the server tag triggers the release workflow.
-git push origin linux-v1.9.2 windows-v6.4.1
-git push origin server-v6.4.1
+git push origin linux-v1.9.3 windows-v6.4.2
+git push origin server-v6.4.2
 ```
 
 All tags must point to the same commit and match their embedded component
@@ -38,9 +38,9 @@ Commit and push the release changes to `main` before creating these tags.
 
 | Component | File | Version / Target |
 |---|---|---|
-| Server | `ikev2-strongswan-ubuntu.sh` | v6.4.1 / Ubuntu 22.04 & 24.04 |
-| Windows client | `ikev2-windows-client.ps1` | v6.4.1 / PowerShell 5.1+ |
-| Linux client | `ikev2-linux-client.sh` | v1.9.2 / Ubuntu 22.04 & 24.04 |
+| Server | `ikev2-strongswan-ubuntu.sh` | v6.4.2 / Ubuntu 22.04 & 24.04 |
+| Windows client | `ikev2-windows-client.ps1` | v6.4.2 / PowerShell 5.1+ |
+| Linux client | `ikev2-linux-client.sh` | v1.9.3 / Ubuntu 22.04 & 24.04 |
 
 The server installer manages StrongSwan packages, certificates, users, routing, DNS, NAT, firewall rules, status, uninstall, and the optional private SOCKS5 Proxy Mode.
 
@@ -570,15 +570,14 @@ To disable it again:
 sudo ikev2 gateway disable
 ```
 
-The command is idempotent and removes only the Gateway Mode rules it created when disabled.
+The command is idempotent and removes only the Gateway Mode rules it created when disabled. Existing installations using the old single-subnet rules are migrated automatically the next time Gateway Mode is enabled.
 
 ## Required values
 
-The client detects the VPN endpoint from the single connected managed profile and discovers its next hop and routing table from the current kernel route. The LAN interface defaults to the interface on the default route. Override settings when the downstream traffic arrives on a different interface or your network needs explicit values:
+The client detects the VPN endpoint from the single connected managed profile and discovers its next hop and routing table from the current kernel route. The LAN interface defaults to the interface on the default route. Gateway Mode accepts RFC1918 private IPv4 sources arriving on that interface: `10.0.0.0/8`, `172.16.0.0/12`, and `192.168.0.0/16`. No source subnet needs to be configured.
 
 ```bash
 export GATEWAY_LAN_IFACE=ens160
-export GATEWAY_LAN_SUBNET=192.168.50.0/24
 export GATEWAY_VPN_VIRTUAL_IP=10.10.10.1
 
 sudo -E ikev2 gateway enable
@@ -586,14 +585,18 @@ sudo -E ikev2 gateway enable
 
 If more than one managed profile is connected, set `GATEWAY_REMOTE_VPN_SERVER` to the active profile's IPv4 endpoint. `GATEWAY_LAN_GATEWAY` can also be set explicitly when automatic next-hop discovery is unsuitable. These values must match the live host and upstream router layout.
 
+Existing installations with a saved single-subnet configuration are automatically migrated when Gateway Mode is enabled with this version.
+
 ## Why SNAT is used
 
 The XFRM child SA is still built for the VPN virtual IP `10.10.10.1`. Forwarded packets from a downstream server arrive with their original source address, so they do not naturally match the outbound `src 10.10.10.1/32` selector.
 
-Gateway Mode therefore adds a narrow SNAT rule only for traffic from the configured downstream subnet and only when it is leaving through the IPsec policy:
+Gateway Mode therefore adds SNAT rules for RFC1918 private sources only when they are leaving through the IPsec policy:
 
 ```bash
-iptables -t nat -A POSTROUTING -s 192.168.50.0/24 -m policy --dir out --pol ipsec -j SNAT --to-source 10.10.10.1
+for source_cidr in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16; do
+  iptables -t nat -A POSTROUTING -s "$source_cidr" -m policy --dir out --pol ipsec -j SNAT --to-source 10.10.10.1
+done
 ```
 
 This preserves the remote VPN server's final Internet NAT and keeps the tunnel policy consistent without changing StrongSwan itself.

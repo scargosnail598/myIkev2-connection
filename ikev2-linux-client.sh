@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 APP_NAME="IKEv2 Linux VPN Utility"
-APP_VERSION="1.9.2"
+APP_VERSION="1.9.3"
 STATE_DIR="/etc/ikev2-client-utility"
 META_DIR="$STATE_DIR/profiles"
 CONF_DIR="/etc/ipsec.d/ikev2-client-profiles"
@@ -21,10 +21,11 @@ STRONGSWAN_RESOLVE_OVERRIDE="/etc/strongswan.d/charon/zz-ikev2-client-resolve.co
 RESOLVCONF_NOOP="/usr/local/libexec/ikev2-client-resolvconf-noop"
 GATEWAY_MODE_STATE_FILE="$STATE_DIR/gateway-mode.state"
 GATEWAY_RULE_COMMENT="ikev2-client-gateway-mode"
+GATEWAY_PRIVATE_CIDRS=("10.0.0.0/8" "172.16.0.0/12" "192.168.0.0/16")
 GATEWAY_LAN_IFACE="${GATEWAY_LAN_IFACE:-}"
 GATEWAY_LAN_GATEWAY="${GATEWAY_LAN_GATEWAY:-}"
 GATEWAY_REMOTE_VPN_SERVER="${GATEWAY_REMOTE_VPN_SERVER:-}"
-GATEWAY_LAN_SUBNET="${GATEWAY_LAN_SUBNET:-192.168.50.0/24}"
+GATEWAY_LEGACY_LAN_SUBNET=""
 GATEWAY_VPN_VIRTUAL_IP="${GATEWAY_VPN_VIRTUAL_IP:-10.10.10.1}"
 GATEWAY_ROUTE_TABLE="${GATEWAY_ROUTE_TABLE:-main}"
 GATEWAY_ROUTE_IFACE="${GATEWAY_ROUTE_IFACE:-}"
@@ -57,7 +58,6 @@ gateway_write_state() {
 GATEWAY_LAN_IFACE=$GATEWAY_LAN_IFACE
 GATEWAY_LAN_GATEWAY=$GATEWAY_LAN_GATEWAY
 GATEWAY_REMOTE_VPN_SERVER=$GATEWAY_REMOTE_VPN_SERVER
-GATEWAY_LAN_SUBNET=$GATEWAY_LAN_SUBNET
 GATEWAY_VPN_VIRTUAL_IP=$GATEWAY_VPN_VIRTUAL_IP
 GATEWAY_ROUTE_TABLE=$GATEWAY_ROUTE_TABLE
 GATEWAY_ROUTE_IFACE=$GATEWAY_ROUTE_IFACE
@@ -74,7 +74,7 @@ gateway_load_state() {
             GATEWAY_LAN_IFACE) GATEWAY_LAN_IFACE="$value" ;;
             GATEWAY_LAN_GATEWAY) GATEWAY_LAN_GATEWAY="$value" ;;
             GATEWAY_REMOTE_VPN_SERVER) GATEWAY_REMOTE_VPN_SERVER="$value" ;;
-            GATEWAY_LAN_SUBNET) GATEWAY_LAN_SUBNET="$value" ;;
+            GATEWAY_LAN_SUBNET) GATEWAY_LEGACY_LAN_SUBNET="$value" ;;
             GATEWAY_VPN_VIRTUAL_IP) GATEWAY_VPN_VIRTUAL_IP="$value" ;;
             GATEWAY_ROUTE_TABLE) GATEWAY_ROUTE_TABLE="$value" ;;
             GATEWAY_ROUTE_IFACE) GATEWAY_ROUTE_IFACE="$value" ;;
@@ -122,7 +122,6 @@ gateway_validate_config() {
     fi
     [[ -n "$GATEWAY_LAN_IFACE" ]] || die "Set GATEWAY_LAN_IFACE to the interface that receives downstream traffic."
 
-    [[ "$GATEWAY_LAN_SUBNET" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$ ]] || die "Gateway Mode LAN subnet is invalid: $GATEWAY_LAN_SUBNET"
     [[ "$GATEWAY_VPN_VIRTUAL_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "Gateway Mode virtual IP is invalid: $GATEWAY_VPN_VIRTUAL_IP"
     [[ "$GATEWAY_REMOTE_VPN_SERVER" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "Gateway Mode remote VPN server is invalid: $GATEWAY_REMOTE_VPN_SERVER"
 
@@ -169,48 +168,68 @@ gateway_route_to_vpn_endpoint() {
 }
 
 gateway_enable() {
+    local private_cidr
+
     ensure_directories
     gateway_load_state
     gateway_resolve_remote_server || die "Gateway Mode could not determine the active VPN endpoint."
     gateway_validate_config
 
     if gateway_mode_enabled; then
-        info "Gateway Mode is already enabled."
-        gateway_status
-        return 0
+        if [[ -n "$GATEWAY_LEGACY_LAN_SUBNET" ]]; then
+            info "Replacing the saved single-subnet Gateway Mode rules with RFC1918 private ranges."
+            gateway_disable
+        else
+            info "Gateway Mode is already enabled."
+            gateway_status
+            return 0
+        fi
     fi
 
     gateway_route_to_vpn_endpoint || die "The host route to the VPN endpoint could not be configured. Check the LAN interface and gateway values."
 
     sysctl -w net.ipv4.ip_forward=1 >/dev/null
 
-    iptables -C FORWARD -i "$GATEWAY_LAN_IFACE" -s "$GATEWAY_LAN_SUBNET" -m comment --comment "$GATEWAY_RULE_COMMENT" -j ACCEPT >/dev/null 2>&1 || \
-        iptables -I FORWARD 1 -i "$GATEWAY_LAN_IFACE" -s "$GATEWAY_LAN_SUBNET" -m comment --comment "$GATEWAY_RULE_COMMENT" -j ACCEPT
+    for private_cidr in "${GATEWAY_PRIVATE_CIDRS[@]}"; do
+        iptables -C FORWARD -i "$GATEWAY_LAN_IFACE" -s "$private_cidr" -m comment --comment "$GATEWAY_RULE_COMMENT" -j ACCEPT >/dev/null 2>&1 || \
+            iptables -I FORWARD 1 -i "$GATEWAY_LAN_IFACE" -s "$private_cidr" -m comment --comment "$GATEWAY_RULE_COMMENT" -j ACCEPT
 
-    iptables -C FORWARD -o "$GATEWAY_LAN_IFACE" -d "$GATEWAY_LAN_SUBNET" -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment "$GATEWAY_RULE_COMMENT" -j ACCEPT >/dev/null 2>&1 || \
-        iptables -I FORWARD 2 -o "$GATEWAY_LAN_IFACE" -d "$GATEWAY_LAN_SUBNET" -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment "$GATEWAY_RULE_COMMENT" -j ACCEPT
+        iptables -C FORWARD -o "$GATEWAY_LAN_IFACE" -d "$private_cidr" -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment "$GATEWAY_RULE_COMMENT" -j ACCEPT >/dev/null 2>&1 || \
+            iptables -I FORWARD 2 -o "$GATEWAY_LAN_IFACE" -d "$private_cidr" -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment "$GATEWAY_RULE_COMMENT" -j ACCEPT
 
-    iptables -t nat -C POSTROUTING -s "$GATEWAY_LAN_SUBNET" -m policy --dir out --pol ipsec -m comment --comment "$GATEWAY_RULE_COMMENT" -j SNAT --to-source "$GATEWAY_VPN_VIRTUAL_IP" >/dev/null 2>&1 || \
-        iptables -t nat -A POSTROUTING -s "$GATEWAY_LAN_SUBNET" -m policy --dir out --pol ipsec -m comment --comment "$GATEWAY_RULE_COMMENT" -j SNAT --to-source "$GATEWAY_VPN_VIRTUAL_IP"
+        iptables -t nat -C POSTROUTING -s "$private_cidr" -m policy --dir out --pol ipsec -m comment --comment "$GATEWAY_RULE_COMMENT" -j SNAT --to-source "$GATEWAY_VPN_VIRTUAL_IP" >/dev/null 2>&1 || \
+            iptables -t nat -A POSTROUTING -s "$private_cidr" -m policy --dir out --pol ipsec -m comment --comment "$GATEWAY_RULE_COMMENT" -j SNAT --to-source "$GATEWAY_VPN_VIRTUAL_IP"
+    done
 
     gateway_write_state
-    info "Gateway Mode enabled. Selected LAN traffic is forwarded through the IKEv2 tunnel and SNATed to $GATEWAY_VPN_VIRTUAL_IP."
+    info "Gateway Mode enabled for RFC1918 private sources and SNATed to $GATEWAY_VPN_VIRTUAL_IP when sent through IPsec."
     gateway_status
 }
 
 gateway_disable() {
+    local private_cidr
+
     gateway_load_state
     if ! gateway_mode_enabled; then
         info "Gateway Mode is already disabled."
         return 0
     fi
 
-    iptables -D FORWARD -i "$GATEWAY_LAN_IFACE" -s "$GATEWAY_LAN_SUBNET" -m comment --comment "$GATEWAY_RULE_COMMENT" -j ACCEPT >/dev/null 2>&1 || true
-    iptables -D FORWARD -o "$GATEWAY_LAN_IFACE" -d "$GATEWAY_LAN_SUBNET" -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment "$GATEWAY_RULE_COMMENT" -j ACCEPT >/dev/null 2>&1 || true
-    iptables -t nat -D POSTROUTING -s "$GATEWAY_LAN_SUBNET" -m policy --dir out --pol ipsec -m comment --comment "$GATEWAY_RULE_COMMENT" -j SNAT --to-source "$GATEWAY_VPN_VIRTUAL_IP" >/dev/null 2>&1 || true
+    for private_cidr in "${GATEWAY_PRIVATE_CIDRS[@]}"; do
+        iptables -D FORWARD -i "$GATEWAY_LAN_IFACE" -s "$private_cidr" -m comment --comment "$GATEWAY_RULE_COMMENT" -j ACCEPT >/dev/null 2>&1 || true
+        iptables -D FORWARD -o "$GATEWAY_LAN_IFACE" -d "$private_cidr" -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment "$GATEWAY_RULE_COMMENT" -j ACCEPT >/dev/null 2>&1 || true
+        iptables -t nat -D POSTROUTING -s "$private_cidr" -m policy --dir out --pol ipsec -m comment --comment "$GATEWAY_RULE_COMMENT" -j SNAT --to-source "$GATEWAY_VPN_VIRTUAL_IP" >/dev/null 2>&1 || true
+    done
+
+    if [[ -n "$GATEWAY_LEGACY_LAN_SUBNET" ]]; then
+        iptables -D FORWARD -i "$GATEWAY_LAN_IFACE" -s "$GATEWAY_LEGACY_LAN_SUBNET" -m comment --comment "$GATEWAY_RULE_COMMENT" -j ACCEPT >/dev/null 2>&1 || true
+        iptables -D FORWARD -o "$GATEWAY_LAN_IFACE" -d "$GATEWAY_LEGACY_LAN_SUBNET" -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment "$GATEWAY_RULE_COMMENT" -j ACCEPT >/dev/null 2>&1 || true
+        iptables -t nat -D POSTROUTING -s "$GATEWAY_LEGACY_LAN_SUBNET" -m policy --dir out --pol ipsec -m comment --comment "$GATEWAY_RULE_COMMENT" -j SNAT --to-source "$GATEWAY_VPN_VIRTUAL_IP" >/dev/null 2>&1 || true
+    fi
     ip route del "${GATEWAY_REMOTE_VPN_SERVER}/32" table "$GATEWAY_ROUTE_TABLE" >/dev/null 2>&1 || true
 
     rm -f "$GATEWAY_MODE_STATE_FILE"
+    GATEWAY_LEGACY_LAN_SUBNET=""
     info "Gateway Mode disabled. The previous default LAN path and tunnel policy were left in place."
     gateway_status
 }
@@ -232,13 +251,17 @@ gateway_status() {
     printf 'Mode              : %s\n' "$enabled"
     printf 'IPv4 forwarding   : %s\n' "$forwarding"
     printf 'LAN interface     : %s\n' "$GATEWAY_LAN_IFACE"
-    printf 'LAN subnet        : %s\n' "$GATEWAY_LAN_SUBNET"
+    if [[ -n "$GATEWAY_LEGACY_LAN_SUBNET" ]]; then
+        printf 'Source ranges     : legacy %s (press Enable to migrate)\n' "$GATEWAY_LEGACY_LAN_SUBNET"
+    else
+        printf 'Source ranges     : RFC1918 private IPv4\n'
+    fi
     printf 'LAN gateway       : %s\n' "$GATEWAY_LAN_GATEWAY"
     printf 'VPN virtual IP    : %s\n' "$GATEWAY_VPN_VIRTUAL_IP"
     printf 'Remote VPN server : %s\n' "$GATEWAY_REMOTE_VPN_SERVER"
     printf 'Route table       : %s\n' "$GATEWAY_ROUTE_TABLE"
     printf '\nRelevant routes:\n'
-    ip route show table "$GATEWAY_ROUTE_TABLE" 2>/dev/null | grep -E "${GATEWAY_REMOTE_VPN_SERVER}/32|default" || echo "  none visible"
+    ip route show table "$GATEWAY_ROUTE_TABLE" 2>/dev/null | awk -v endpoint="$GATEWAY_REMOTE_VPN_SERVER" '$1 == "default" || $1 == endpoint || $1 == endpoint "/32" { print; found = 1 } END { if (!found) exit 1 }' || echo "  none visible"
     printf '\nRelevant iptables filter rules:\n'
     iptables -S 2>/dev/null | grep "$GATEWAY_RULE_COMMENT" || echo "  none"
     printf '\nRelevant iptables NAT rules:\n'

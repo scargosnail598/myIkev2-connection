@@ -8,7 +8,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$APP_VERSION = "6.4.1"
+$APP_VERSION = "6.4.2"
 $DEFAULT_PROXY_HOST = "10.254.254.1"
 $DEFAULT_PROXY_PORT = 1080
 $STATE_ROOT = Join-Path $env:ProgramData "IKEv2-Windows-VPN-Utility"

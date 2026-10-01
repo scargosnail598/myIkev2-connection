@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    paths:
+      - "ikev2-strongswan-ubuntu.sh"
+      - "ikev2-linux-client.sh"
+      - "ikev2-windows-client.ps1"
+      - ".github/workflows/ci.yml"
+  pull_request:
+    paths:
+      - "ikev2-strongswan-ubuntu.sh"
+      - "ikev2-linux-client.sh"
+      - "ikev2-windows-client.ps1"
+      - ".github/workflows/ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install ShellCheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Check Bash scripts
+        run: |
+          bash -n ikev2-strongswan-ubuntu.sh ikev2-linux-client.sh
+          shellcheck --severity=warning ikev2-strongswan-ubuntu.sh ikev2-linux-client.sh
+
+      - name: Check PowerShell syntax
+        shell: bash
+        run: |
+          pwsh -NoProfile -Command '
+            $tokens = $null
+            $parseErrors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile("ikev2-windows-client.ps1", [ref]$tokens, [ref]$parseErrors) | Out-Null
+            if ($parseErrors.Count -gt 0) {
+              $parseErrors | ForEach-Object { Write-Error $_ }
+              exit 1
+            }
+          '

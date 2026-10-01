@@ -18,10 +18,10 @@ Examples:
 
 ```bash
 git tag -a server-v6.4.0 -m "Server v6.4.0"
-git tag -a linux-v1.9.0 -m "Linux client v1.9.0"
+git tag -a linux-v1.9.1 -m "Linux client v1.9.1"
 
 # push one or both tags
-git push origin server-v6.4.0 linux-v1.9.0
+git push origin server-v6.4.0 linux-v1.9.1
 ```
 
 The GitHub Actions release workflow validates the tag name and the embedded script version before creating the release asset bundle.
@@ -34,7 +34,7 @@ The GitHub Actions release workflow validates the tag name and the embedded scri
 |---|---|---|
 | Server | `ikev2-strongswan-ubuntu.sh` | v6.4.0 / Ubuntu 22.04 & 24.04 |
 | Windows client | `ikev2-windows-client-v6.1.ps1` | v6.4.0 / PowerShell 5.1+ |
-| Linux client | `ikev2-linux-client-v1.6.sh` | v1.9.0 / Ubuntu 22.04 & 24.04 |
+| Linux client | `ikev2-linux-client-v1.6.sh` | v1.9.1 / Ubuntu 22.04 & 24.04 |
 
 The server installer manages StrongSwan packages, certificates, users, routing, DNS, NAT, firewall rules, status, uninstall, and the optional private SOCKS5 Proxy Mode.
 
@@ -568,19 +568,17 @@ The command is idempotent and removes only the Gateway Mode rules it created whe
 
 ## Required values
 
-The script exposes the gateway settings as environment variables so they can be overridden without editing the main script:
+The client detects the VPN endpoint from the single connected managed profile and discovers its next hop and routing table from the current kernel route. The LAN interface defaults to the interface on the default route. Override settings when the downstream traffic arrives on a different interface or your network needs explicit values:
 
 ```bash
 export GATEWAY_LAN_IFACE=ens160
-export GATEWAY_LAN_GATEWAY=192.168.98.5
-export GATEWAY_REMOTE_VPN_SERVER=194.5.206.142
 export GATEWAY_LAN_SUBNET=192.168.50.0/24
 export GATEWAY_VPN_VIRTUAL_IP=10.10.10.1
 
 sudo -E ikev2 gateway enable
 ```
 
-The defaults are already aligned to the common pattern above, but these values should match the live host and upstream router layout.
+If more than one managed profile is connected, set `GATEWAY_REMOTE_VPN_SERVER` to the active profile's IPv4 endpoint. `GATEWAY_LAN_GATEWAY` can also be set explicitly when automatic next-hop discovery is unsuitable. These values must match the live host and upstream router layout.
 
 ## Why SNAT is used
 
@@ -596,10 +594,11 @@ This preserves the remote VPN server's final Internet NAT and keeps the tunnel p
 
 ## Routing safety
 
-The gateway protects the IKEv2 endpoint route so tunnel control traffic continues to leave through the normal LAN gateway instead of looping back into the VPN:
+The gateway protects the IKEv2 endpoint route in the routing table selected by the kernel (StrongSwan commonly uses table `220`) so tunnel control traffic continues to leave through the normal LAN gateway instead of looping back into the VPN:
 
 ```bash
-ip route replace 194.5.206.142/32 via 192.168.98.5 dev ens160
+sudo ikev2 gateway status
+sudo ip route show table 220
 ```
 
 This keeps the tunnel maintenance path separate from forwarded traffic and avoids routing loops.
@@ -612,17 +611,17 @@ Use the following checks after enabling Gateway Mode:
 sudo sysctl net.ipv4.ip_forward
 sudo ip -br addr
 sudo ip route
-sudo ip route show 194.5.206.142/32
+sudo ip route show table 220
 sudo ip xfrm policy
 sudo iptables -S | grep ikev2-client-gateway-mode
 sudo iptables -t nat -S | grep ikev2-client-gateway-mode
-sudo tcpdump -ni ens160
+sudo tcpdump -ni any
 ```
 
 Expected behavior:
 
 - IPv4 forwarding is enabled
-- the VPN endpoint `194.5.206.142` is reachable via the LAN gateway, not via the VPN
+- the protected VPN endpoint route uses the underlying LAN gateway, not the VPN tunnel
 - forwarded packets from the selected LAN subnet enter the IPsec policy
 - NAT rules mention the gateway rule comment and only target the downstream subnet
 - existing SOCKS5 mode is unchanged and still responds on `192.168.98.6:4443` if configured

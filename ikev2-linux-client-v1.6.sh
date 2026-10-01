@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 APP_NAME="IKEv2 Linux VPN Utility"
-APP_VERSION="1.9.0"
+APP_VERSION="1.9.1"
 STATE_DIR="/etc/ikev2-client-utility"
 META_DIR="$STATE_DIR/profiles"
 CONF_DIR="/etc/ipsec.d/ikev2-client-profiles"
@@ -21,11 +21,13 @@ STRONGSWAN_RESOLVE_OVERRIDE="/etc/strongswan.d/charon/zz-ikev2-client-resolve.co
 RESOLVCONF_NOOP="/usr/local/libexec/ikev2-client-resolvconf-noop"
 GATEWAY_MODE_STATE_FILE="$STATE_DIR/gateway-mode.state"
 GATEWAY_RULE_COMMENT="ikev2-client-gateway-mode"
-GATEWAY_LAN_IFACE="${GATEWAY_LAN_IFACE:-ens160}"
-GATEWAY_LAN_GATEWAY="${GATEWAY_LAN_GATEWAY:-192.168.98.5}"
-GATEWAY_REMOTE_VPN_SERVER="${GATEWAY_REMOTE_VPN_SERVER:-194.5.206.142}"
+GATEWAY_LAN_IFACE="${GATEWAY_LAN_IFACE:-}"
+GATEWAY_LAN_GATEWAY="${GATEWAY_LAN_GATEWAY:-}"
+GATEWAY_REMOTE_VPN_SERVER="${GATEWAY_REMOTE_VPN_SERVER:-}"
 GATEWAY_LAN_SUBNET="${GATEWAY_LAN_SUBNET:-192.168.50.0/24}"
 GATEWAY_VPN_VIRTUAL_IP="${GATEWAY_VPN_VIRTUAL_IP:-10.10.10.1}"
+GATEWAY_ROUTE_TABLE="${GATEWAY_ROUTE_TABLE:-main}"
+GATEWAY_ROUTE_IFACE="${GATEWAY_ROUTE_IFACE:-}"
 DNS_MODE="managed"
 STRONGSWAN_DNS_CONFIG_CHANGED=0
 DNS_CONFIG_MARKER="$STATE_DIR/managed-dns-config.sha256"
@@ -57,13 +59,68 @@ GATEWAY_LAN_GATEWAY=$GATEWAY_LAN_GATEWAY
 GATEWAY_REMOTE_VPN_SERVER=$GATEWAY_REMOTE_VPN_SERVER
 GATEWAY_LAN_SUBNET=$GATEWAY_LAN_SUBNET
 GATEWAY_VPN_VIRTUAL_IP=$GATEWAY_VPN_VIRTUAL_IP
+GATEWAY_ROUTE_TABLE=$GATEWAY_ROUTE_TABLE
+GATEWAY_ROUTE_IFACE=$GATEWAY_ROUTE_IFACE
 EOF
     chmod 0600 "$GATEWAY_MODE_STATE_FILE"
+}
+
+gateway_load_state() {
+    [[ -f "$GATEWAY_MODE_STATE_FILE" ]] || return 0
+
+    local key value
+    while IFS='=' read -r key value; do
+        case "$key" in
+            GATEWAY_LAN_IFACE) GATEWAY_LAN_IFACE="$value" ;;
+            GATEWAY_LAN_GATEWAY) GATEWAY_LAN_GATEWAY="$value" ;;
+            GATEWAY_REMOTE_VPN_SERVER) GATEWAY_REMOTE_VPN_SERVER="$value" ;;
+            GATEWAY_LAN_SUBNET) GATEWAY_LAN_SUBNET="$value" ;;
+            GATEWAY_VPN_VIRTUAL_IP) GATEWAY_VPN_VIRTUAL_IP="$value" ;;
+            GATEWAY_ROUTE_TABLE) GATEWAY_ROUTE_TABLE="$value" ;;
+            GATEWAY_ROUTE_IFACE) GATEWAY_ROUTE_IFACE="$value" ;;
+        esac
+    done < "$GATEWAY_MODE_STATE_FILE"
+}
+
+gateway_resolve_remote_server() {
+    local profile_file server
+    local -a connected_servers=()
+
+    if [[ -z "$GATEWAY_REMOTE_VPN_SERVER" ]]; then
+        while IFS= read -r profile_file; do
+            [[ -n "$profile_file" ]] || continue
+            read_metadata "$profile_file"
+            if is_connected "$META_ID"; then
+                connected_servers+=("$META_SERVER")
+            fi
+        done < <(list_profile_files)
+
+        [[ ${#connected_servers[@]} -eq 1 ]] || {
+            warn "Connect exactly one managed VPN profile, or set GATEWAY_REMOTE_VPN_SERVER to its IPv4 endpoint."
+            return 1
+        }
+        server="${connected_servers[0]}"
+        if [[ "$server" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            GATEWAY_REMOTE_VPN_SERVER="$server"
+        else
+            GATEWAY_REMOTE_VPN_SERVER="$(getent ahostsv4 "$server" 2>/dev/null | awk 'NR==1 {print $1}')"
+        fi
+    fi
+
+    [[ "$GATEWAY_REMOTE_VPN_SERVER" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+        warn "The VPN endpoint must resolve to an IPv4 address: $GATEWAY_REMOTE_VPN_SERVER"
+        return 1
+    }
 }
 
 gateway_validate_config() {
     command -v ip >/dev/null 2>&1 || die "Gateway Mode requires the ip command."
     command -v iptables >/dev/null 2>&1 || die "Gateway Mode requires iptables."
+
+    if [[ -z "$GATEWAY_LAN_IFACE" ]]; then
+        GATEWAY_LAN_IFACE="$(ip -4 route show default | awk 'NR==1 {for (i=1; i<=NF; i++) if ($i == "dev") {print $(i+1); exit}}')"
+    fi
+    [[ -n "$GATEWAY_LAN_IFACE" ]] || die "Set GATEWAY_LAN_IFACE to the interface that receives downstream traffic."
 
     [[ "$GATEWAY_LAN_SUBNET" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$ ]] || die "Gateway Mode LAN subnet is invalid: $GATEWAY_LAN_SUBNET"
     [[ "$GATEWAY_VPN_VIRTUAL_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "Gateway Mode virtual IP is invalid: $GATEWAY_VPN_VIRTUAL_IP"
@@ -77,15 +134,44 @@ gateway_validate_config() {
 }
 
 gateway_route_to_vpn_endpoint() {
-    local lan_ip
-    lan_ip="$(ip -4 -o addr show dev "$GATEWAY_LAN_IFACE" scope global 2>/dev/null | awk 'NR==1 {split($4,a,"/"); print a[1]}')"
-    [[ -n "$lan_ip" ]] || return 1
+    local route_info route_dev route_gateway lan_ip
+    route_info="$(ip -4 route get "$GATEWAY_REMOTE_VPN_SERVER" 2>&1)" || {
+        warn "Could not look up a route to VPN endpoint $GATEWAY_REMOTE_VPN_SERVER: $route_info"
+        return 1
+    }
+    route_dev="$(awk '{for (i=1; i<=NF; i++) if ($i == "dev") {print $(i+1); exit}}' <<< "$route_info")"
+    route_gateway="$GATEWAY_LAN_GATEWAY"
+    if [[ -z "$route_gateway" ]]; then
+        route_gateway="$(awk '{for (i=1; i<=NF; i++) if ($i == "via") {print $(i+1); exit}}' <<< "$route_info")"
+    fi
+    GATEWAY_ROUTE_TABLE="$(awk '{for (i=1; i<=NF; i++) if ($i == "table") {print $(i+1); exit}}' <<< "$route_info")"
+    GATEWAY_ROUTE_TABLE="${GATEWAY_ROUTE_TABLE:-main}"
+    GATEWAY_ROUTE_IFACE="$route_dev"
 
-    ip route replace "${GATEWAY_REMOTE_VPN_SERVER}/32" via "$GATEWAY_LAN_GATEWAY" dev "$GATEWAY_LAN_IFACE" src "$lan_ip" >/dev/null 2>&1
+    [[ -n "$route_dev" ]] || {
+        warn "The route lookup for VPN endpoint $GATEWAY_REMOTE_VPN_SERVER did not return an interface: $route_info"
+        return 1
+    }
+    lan_ip="$(ip -4 -o addr show dev "$route_dev" scope global 2>/dev/null | awk 'NR==1 {split($4,a,"/"); print a[1]}')"
+    [[ -n "$lan_ip" ]] || {
+        warn "No global IPv4 address was found on VPN route interface '$route_dev'."
+        return 1
+    }
+
+    local -a route_args=(replace "${GATEWAY_REMOTE_VPN_SERVER}/32")
+    [[ -n "$route_gateway" ]] && route_args+=(via "$route_gateway")
+    route_args+=(dev "$route_dev" src "$lan_ip" table "$GATEWAY_ROUTE_TABLE")
+    if ! ip route "${route_args[@]}"; then
+        warn "Failed to install the VPN endpoint route using table '$GATEWAY_ROUTE_TABLE' and interface '$route_dev'."
+        return 1
+    fi
+    GATEWAY_LAN_GATEWAY="$route_gateway"
 }
 
 gateway_enable() {
     ensure_directories
+    gateway_load_state
+    gateway_resolve_remote_server || die "Gateway Mode could not determine the active VPN endpoint."
     gateway_validate_config
 
     if gateway_mode_enabled; then
@@ -94,9 +180,9 @@ gateway_enable() {
         return 0
     fi
 
-    sysctl -w net.ipv4.ip_forward=1 >/dev/null
-
     gateway_route_to_vpn_endpoint || die "The host route to the VPN endpoint could not be configured. Check the LAN interface and gateway values."
+
+    sysctl -w net.ipv4.ip_forward=1 >/dev/null
 
     iptables -C FORWARD -i "$GATEWAY_LAN_IFACE" -s "$GATEWAY_LAN_SUBNET" -m comment --comment "$GATEWAY_RULE_COMMENT" -j ACCEPT >/dev/null 2>&1 || \
         iptables -I FORWARD 1 -i "$GATEWAY_LAN_IFACE" -s "$GATEWAY_LAN_SUBNET" -m comment --comment "$GATEWAY_RULE_COMMENT" -j ACCEPT
@@ -113,6 +199,7 @@ gateway_enable() {
 }
 
 gateway_disable() {
+    gateway_load_state
     if ! gateway_mode_enabled; then
         info "Gateway Mode is already disabled."
         return 0
@@ -121,7 +208,7 @@ gateway_disable() {
     iptables -D FORWARD -i "$GATEWAY_LAN_IFACE" -s "$GATEWAY_LAN_SUBNET" -m comment --comment "$GATEWAY_RULE_COMMENT" -j ACCEPT >/dev/null 2>&1 || true
     iptables -D FORWARD -o "$GATEWAY_LAN_IFACE" -d "$GATEWAY_LAN_SUBNET" -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment "$GATEWAY_RULE_COMMENT" -j ACCEPT >/dev/null 2>&1 || true
     iptables -t nat -D POSTROUTING -s "$GATEWAY_LAN_SUBNET" -m policy --dir out --pol ipsec -m comment --comment "$GATEWAY_RULE_COMMENT" -j SNAT --to-source "$GATEWAY_VPN_VIRTUAL_IP" >/dev/null 2>&1 || true
-    ip route del "${GATEWAY_REMOTE_VPN_SERVER}/32" via "$GATEWAY_LAN_GATEWAY" dev "$GATEWAY_LAN_IFACE" >/dev/null 2>&1 || true
+    ip route del "${GATEWAY_REMOTE_VPN_SERVER}/32" table "$GATEWAY_ROUTE_TABLE" >/dev/null 2>&1 || true
 
     rm -f "$GATEWAY_MODE_STATE_FILE"
     info "Gateway Mode disabled. The previous default LAN path and tunnel policy were left in place."
@@ -131,6 +218,8 @@ gateway_disable() {
 gateway_status() {
     local enabled="disabled"
     local forwarding="unknown"
+
+    gateway_load_state
 
     if gateway_mode_enabled; then
         enabled="enabled"
@@ -147,8 +236,9 @@ gateway_status() {
     printf 'LAN gateway       : %s\n' "$GATEWAY_LAN_GATEWAY"
     printf 'VPN virtual IP    : %s\n' "$GATEWAY_VPN_VIRTUAL_IP"
     printf 'Remote VPN server : %s\n' "$GATEWAY_REMOTE_VPN_SERVER"
+    printf 'Route table       : %s\n' "$GATEWAY_ROUTE_TABLE"
     printf '\nRelevant routes:\n'
-    ip route show 2>/dev/null | grep -E "${GATEWAY_REMOTE_VPN_SERVER}/32|default" || echo "  none visible"
+    ip route show table "$GATEWAY_ROUTE_TABLE" 2>/dev/null | grep -E "${GATEWAY_REMOTE_VPN_SERVER}/32|default" || echo "  none visible"
     printf '\nRelevant iptables filter rules:\n'
     iptables -S 2>/dev/null | grep "$GATEWAY_RULE_COMMENT" || echo "  none"
     printf '\nRelevant iptables NAT rules:\n'

@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - "server-v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing server release tag, for example server-v6.4.0"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -18,6 +24,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
       - name: Install validation tools
         run: sudo apt-get update && sudo apt-get install -y shellcheck
@@ -27,7 +35,12 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          tag="${GITHUB_REF_NAME#server-v}"
+          release_tag="${RELEASE_TAG}"
+          git show-ref --tags --verify --quiet "refs/tags/${release_tag}" || {
+            echo "Tag does not exist: ${release_tag}"
+            exit 1
+          }
+          tag="${release_tag#server-v}"
           [[ "$tag" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
 
           mapfile -t server_files < <(find . -maxdepth 1 -type f -name 'ikev2-strongswan-ubuntu.sh' -print | sort)
@@ -51,6 +64,8 @@ jobs:
           echo "version=$tag" >> "$GITHUB_OUTPUT"
           echo "server=$server" >> "$GITHUB_OUTPUT"
           echo "linux=${linux_files[0]}" >> "$GITHUB_OUTPUT"
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
   release:
     needs: validate
@@ -58,6 +73,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
       - name: Prepare release bundle
         shell: bash
@@ -89,10 +106,11 @@ jobs:
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
         shell: bash
         run: |
           set -Eeuo pipefail
-          gh release create "${GITHUB_REF_NAME}" \
-            --title "IKEv2 Server/Clients ${GITHUB_REF_NAME}" \
+          gh release create "${RELEASE_TAG}" \
+            --title "IKEv2 Server/Clients ${RELEASE_TAG}" \
             --generate-notes \
             dist/*

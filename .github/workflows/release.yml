@@ -60,7 +60,7 @@ jobs:
           [[ "$tag" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
 
           mapfile -t server_files < <(find . -maxdepth 1 -type f -name 'ikev2-strongswan-ubuntu.sh' -print | sort)
-          mapfile -t linux_files < <(find . -maxdepth 1 -type f -name 'ikev2-linux-client-*.sh' -print | sort)
+          mapfile -t linux_files < <(find . -maxdepth 1 -type f -name 'ikev2-linux-client.sh' -print | sort)
 
           [[ ${#server_files[@]} -eq 1 ]] || { echo "Expected one server script"; exit 1; }
           [[ ${#linux_files[@]} -eq 1 ]] || { echo "Expected one Linux client"; exit 1; }

@@ -1837,7 +1837,7 @@ function Disconnect-VpnProfile {
 }
 
 function Update-ClientScript {
-    $updateUrl = "https://raw.githubusercontent.com/scargosnail598/myIkev2-connection/main/ikev2-windows-client-v6.1.ps1"
+    $updateUrl = "https://raw.githubusercontent.com/scargosnail598/myIkev2-connection/main/ikev2-windows-client.ps1"
     $downloadPath = Join-Path $env:TEMP ("ikev2-windows-update-{0}.ps1" -f [guid]::NewGuid())
 
     try {

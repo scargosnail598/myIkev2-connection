@@ -6,7 +6,7 @@ The repository contains top-level platform scripts: `ikev2-strongswan-ubuntu.sh`
 
 ## Build, Test, and Development Commands
 
-From the repository root, run `bash -n ikev2-strongswan-ubuntu.sh ikev2-linux-client-v1.6.sh` and, when installed, ShellCheck on both files. Use disposable VMs for privileged VPN integration tests.
+From the repository root, run `bash -n ikev2-strongswan-ubuntu.sh ikev2-linux-client.sh` and, when installed, ShellCheck on both files. Use disposable VMs for privileged VPN integration tests.
 
 ## Coding Style & Naming Conventions
 

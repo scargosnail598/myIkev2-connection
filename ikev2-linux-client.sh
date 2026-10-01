@@ -1892,7 +1892,7 @@ usage() {
 }
 
 update_client_script() {
-    local update_url="https://raw.githubusercontent.com/scargosnail598/myIkev2-connection/main/ikev2-linux-client-v1.6.sh"
+    local update_url="https://raw.githubusercontent.com/scargosnail598/myIkev2-connection/main/ikev2-linux-client.sh"
     local downloaded current_path remote_version latest_version target staging
     local -a targets=()
 

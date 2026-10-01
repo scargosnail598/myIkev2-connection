@@ -33,8 +33,8 @@ The GitHub Actions release workflow validates the tag name and the embedded scri
 | Component | File | Version / Target |
 |---|---|---|
 | Server | `ikev2-strongswan-ubuntu.sh` | v6.4.0 / Ubuntu 22.04 & 24.04 |
-| Windows client | `ikev2-windows-client-v6.1.ps1` | v6.4.0 / PowerShell 5.1+ |
-| Linux client | `ikev2-linux-client-v1.6.sh` | v1.9.1 / Ubuntu 22.04 & 24.04 |
+| Windows client | `ikev2-windows-client.ps1` | v6.4.0 / PowerShell 5.1+ |
+| Linux client | `ikev2-linux-client.sh` | v1.9.1 / Ubuntu 22.04 & 24.04 |
 
 The server installer manages StrongSwan packages, certificates, users, routing, DNS, NAT, firewall rules, status, uninstall, and the optional private SOCKS5 Proxy Mode.
 
@@ -664,28 +664,28 @@ public CA certificate and do not require a separate certificate file.
 Windows manual setup:
 
 ```text
-ikev2-windows-client-v6.1.ps1
+ikev2-windows-client.ps1
 ca-cert.cer
 ```
 
 Windows portable-profile import:
 
 ```text
-ikev2-windows-client-v6.1.ps1
+ikev2-windows-client.ps1
 username.ikev
 ```
 
 Linux manual setup:
 
 ```text
-ikev2-linux-client-v1.6.sh
+ikev2-linux-client.sh
 ca-cert.cer
 ```
 
 Linux portable-profile import:
 
 ```text
-ikev2-linux-client-v1.6.sh
+ikev2-linux-client.sh
 username.ikev
 ```
 
@@ -698,7 +698,7 @@ username.ikev
 - Windows with built-in VPN PowerShell cmdlets
 - PowerShell 5.1+
 - Administrator privileges
-- `ikev2-windows-client-v6.1.ps1`
+- `ikev2-windows-client.ps1`
 - either `ca-cert.cer` for manual setup or an exported `username.ikev` for portable setup
 
 The script automatically requests Administrator privileges through UAC when required.
@@ -706,7 +706,7 @@ The script automatically requests Administrator privileges through UAC when requ
 ## Run the utility
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\ikev2-windows-client-v6.1.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\ikev2-windows-client.ps1
 ```
 
 A sibling `ca-cert.cer` is still validated and trusted at startup when present.
@@ -759,7 +759,7 @@ Manual **Disconnect** stops and removes the task.
 Keep together:
 
 ```text
-ikev2-windows-client-v6.1.ps1
+ikev2-windows-client.ps1
 ca-cert.cer
 ```
 
@@ -775,7 +775,7 @@ If no sibling CA exists, manual setup stops with guidance to add
 Keep together:
 
 ```text
-ikev2-windows-client-v6.1.ps1
+ikev2-windows-client.ps1
 username.ikev
 ```
 
@@ -878,7 +878,7 @@ relying on the changed routing state.
 Windows v6.1 can configure the traffic mode of existing IKEv2 profiles. Run:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\ikev2-windows-client-v6.1.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\ikev2-windows-client.ps1
 ```
 
 Then choose option 6 and select the existing profile. Manual creation still
@@ -940,8 +940,8 @@ add proxy routes, or enable split tunneling.
 Run:
 
 ```bash
-chmod +x ikev2-linux-client-v1.6.sh
-sudo ./ikev2-linux-client-v1.6.sh
+chmod +x ikev2-linux-client.sh
+sudo ./ikev2-linux-client.sh
 ```
 
 Menu:
@@ -979,7 +979,7 @@ auto-reconnect. Restart the utility after updating.
 Keep these files together:
 
 ```text
-ikev2-linux-client-v1.6.sh
+ikev2-linux-client.sh
 ca-cert.cer
 ```
 
@@ -1205,7 +1205,7 @@ The Linux utility uses native StrongSwan/systemd-resolved integration when suita
 Run the Linux utility:
 
 ```bash
-sudo ./ikev2-linux-client-v1.6.sh
+sudo ./ikev2-linux-client.sh
 ```
 
 Choose:
@@ -1294,21 +1294,21 @@ For portable setup, export and copy the user's `username.ikev` instead.
 Manual setup:
 
 ```text
-ikev2-windows-client-v6.1.ps1
+ikev2-windows-client.ps1
 ca-cert.cer
 ```
 
 Portable setup:
 
 ```text
-ikev2-windows-client-v6.1.ps1
+ikev2-windows-client.ps1
 username.ikev
 ```
 
 Run:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\ikev2-windows-client-v6.1.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\ikev2-windows-client.ps1
 ```
 
 Choose either:
@@ -1327,8 +1327,8 @@ SOCKS5 10.254.254.1:1080
 ## Linux
 
 ```bash
-chmod +x ikev2-linux-client-v1.6.sh
-sudo ./ikev2-linux-client-v1.6.sh
+chmod +x ikev2-linux-client.sh
+sudo ./ikev2-linux-client.sh
 ```
 
 ---
@@ -1362,7 +1362,7 @@ sudo ss -lntp | grep 1080
 Run:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\ikev2-windows-client-v6.1.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\ikev2-windows-client.ps1
 ```
 
 Choose:

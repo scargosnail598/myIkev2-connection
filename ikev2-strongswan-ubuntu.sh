@@ -4046,7 +4046,8 @@ main() {
     reconnect) apply_reconnect_policy ;;
     update) update_installer ;;
     status) status_vpn ;;
-    certificate) require_managed_installation; source "$STATE_FILE"; initialize_certbot_state_defaults; show_certificate_status ;;
+    certificate) require_managed_installation; # shellcheck disable=SC1090
+      source "$STATE_FILE"; initialize_certbot_state_defaults; show_certificate_status ;;
     renew) renew_acme_certificate ;;
     logs) show_logs ;;
     traffic-snapshot) snapshot_vpn_traffic ;;

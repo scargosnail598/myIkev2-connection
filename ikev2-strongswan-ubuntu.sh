@@ -3,10 +3,10 @@ set -Eeuo pipefail
 IFS=$'\n\t'
 
 # IKEv2 VPN installer for Ubuntu 22.04 and 24.04.
-# Uses StrongSwan, EAP-MSCHAPv2, a private CA, and IPv4 full-tunnel NAT.
+# Uses StrongSwan, EAP-MSCHAPv2, selectable Private CA or ACME trust, and IPv4 full-tunnel NAT.
 
 INSTALLER_NAME="ikev2-easy-installer"
-CURRENT_INSTALLER_VERSION="6.4.7-en"
+CURRENT_INSTALLER_VERSION="6.2.0-en"
 INSTALLER_VERSION="$CURRENT_INSTALLER_VERSION"
 
 STATE_DIR="/var/lib/${INSTALLER_NAME}"
@@ -51,6 +51,12 @@ CA_CERT="/etc/ipsec.d/cacerts/ikev2-installer-ca-cert.pem"
 SERVER_KEY="/etc/ipsec.d/private/ikev2-installer-server-key.pem"
 SERVER_CERT="/etc/ipsec.d/certs/ikev2-installer-server-cert.pem"
 CERTBOT_RELOAD_HOOK="/etc/letsencrypt/renewal-hooks/deploy/ikev2-strongswan-reload.sh"
+ACME_DEPLOY_HOOK="/usr/local/sbin/ikev2-vpn-acme-deploy"
+ACME_CERT_PATH="/etc/ipsec.d/certs/ikev2-installer-acme-server-cert.pem"
+ACME_KEY_PATH="/etc/ipsec.d/private/ikev2-installer-acme-server-key.pem"
+ACME_CLIENT=""
+ACME_RENEWAL_ENABLED="no"
+CERT_MODE="private"
 
 REQUESTED_PACKAGES=(
   strongswan-starter
@@ -275,6 +281,7 @@ collect_certbot_email() {
       warn "Without an email address, Let\x27s Encrypt cannot send expiry or security notifications."
       if ask_yes_no "Continue without a Let\x27s Encrypt email address?" N; then
         CERTBOT_EMAIL=""
+        ACME_EMAIL=""
         return 0
       fi
       continue
@@ -282,6 +289,7 @@ collect_certbot_email() {
 
     if validate_email "$email"; then
       CERTBOT_EMAIL="$email"
+      ACME_EMAIL="$email"
       return 0
     fi
     warn "Enter a plausible email address, or leave it empty and explicitly confirm no email."
@@ -463,6 +471,16 @@ validate_server_id() {
   [[ "$value" != *"-."* ]] || return 1
 }
 
+validate_fqdn() {
+  local value="$1" label
+  [[ "$value" == *.* && ${#value} -le 253 ]] || return 1
+  [[ "$value" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] || return 1
+  [[ "$value" != *".."* && "$value" != *".-"* && "$value" != *"-."* ]] || return 1
+  while IFS= read -r label; do
+    [[ "$label" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]] || return 1
+  done < <(tr '.' '\n' <<< "$value")
+}
+
 validate_ca_name() {
   [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._[:space:]-]{0,63}$ ]]
 }
@@ -537,10 +555,21 @@ write_state() {
     printf 'DNS_SERVERS=%q\n' "$DNS_SERVERS"
     printf 'CA_NAME=%q\n' "$CA_NAME"
     printf 'CERTIFICATE_MODE=%q\n' "${CERTIFICATE_MODE:-private-ca}"
+    printf 'CERT_MODE=%q\n' "${CERT_MODE:-private}"
     printf 'CERTBOT_DOMAIN=%q\n' "${CERTBOT_DOMAIN:-}"
     printf 'CERTBOT_LINEAGE_CREATED=%q\n' "${CERTBOT_LINEAGE_CREATED:-no}"
     printf 'CERTBOT_EMAIL=%q\n' "${CERTBOT_EMAIL:-}"
     printf 'CERTBOT_RELOAD_HOOK_EXISTED=%q\n' "${CERTBOT_RELOAD_HOOK_EXISTED:-no}"
+    printf 'ACME_DOMAIN=%q\n' "${ACME_DOMAIN:-${CERTBOT_DOMAIN:-}}"
+    printf 'ACME_EMAIL=%q\n' "${ACME_EMAIL:-${CERTBOT_EMAIL:-}}"
+    printf 'ACME_CLIENT=%q\n' "${ACME_CLIENT:-}"
+    printf 'ACME_CERT_PATH=%q\n' "${ACME_CERT_PATH:-}"
+    printf 'ACME_KEY_PATH=%q\n' "${ACME_KEY_PATH:-}"
+    printf 'ACME_DEPLOY_HOOK=%q\n' "${ACME_DEPLOY_HOOK:-$ACME_DEPLOY_HOOK}"
+    printf 'ACME_RENEWAL_ENABLED=%q\n' "${ACME_RENEWAL_ENABLED:-no}"
+    printf 'ACME_DEPLOY_HOOK_EXISTED=%q\n' "${ACME_DEPLOY_HOOK_EXISTED:-no}"
+    printf 'CERTBOT_TIMER_WAS_ENABLED=%q\n' "${CERTBOT_TIMER_WAS_ENABLED:-no}"
+    printf 'CERTBOT_TIMER_WAS_ACTIVE=%q\n' "${CERTBOT_TIMER_WAS_ACTIVE:-no}"
     printf 'ALLOW_STOCK_WINDOWS=%q\n' "$ALLOW_STOCK_WINDOWS"
     printf 'CLIENT_DIR=%q\n' "$CLIENT_DIR"
     printf 'NEW_PACKAGES=%q\n' "$NEW_PACKAGES"
@@ -568,6 +597,8 @@ write_state() {
     printf 'CA_CERT_EXISTED=%q\n' "$CA_CERT_EXISTED"
     printf 'SERVER_KEY_EXISTED=%q\n' "$SERVER_KEY_EXISTED"
     printf 'SERVER_CERT_EXISTED=%q\n' "$SERVER_CERT_EXISTED"
+    printf 'ACME_CERT_EXISTED=%q\n' "${ACME_CERT_EXISTED:-no}"
+    printf 'ACME_KEY_EXISTED=%q\n' "${ACME_KEY_EXISTED:-no}"
 
     printf 'PROXY_ENABLED=%q\n' "$PROXY_ENABLED"
     printf 'PROXY_IP=%q\n' "$PROXY_IP"
@@ -589,6 +620,18 @@ initialize_certbot_state_defaults() {
   CERTBOT_LINEAGE_CREATED="${CERTBOT_LINEAGE_CREATED:-no}"
   CERTBOT_DOMAIN="${CERTBOT_DOMAIN:-}"
   CERTBOT_EMAIL="${CERTBOT_EMAIL:-}"
+  CERT_MODE="${CERT_MODE:-}"
+  if [[ -z "$CERT_MODE" ]]; then
+    if [[ "${CERTIFICATE_MODE:-private-ca}" == "public-trust" ]]; then CERT_MODE="public"; else CERT_MODE="private"; fi
+  fi
+  CERTIFICATE_MODE="${CERTIFICATE_MODE:-$([[ "$CERT_MODE" == "public" ]] && printf public-trust || printf private-ca)}"
+  ACME_DOMAIN="${ACME_DOMAIN:-${CERTBOT_DOMAIN:-}}"
+  ACME_EMAIL="${ACME_EMAIL:-${CERTBOT_EMAIL:-}}"
+  ACME_CLIENT="${ACME_CLIENT:-}"
+  ACME_CERT_PATH="${ACME_CERT_PATH:-/etc/ipsec.d/certs/ikev2-installer-acme-server-cert.pem}"
+  ACME_KEY_PATH="${ACME_KEY_PATH:-/etc/ipsec.d/private/ikev2-installer-acme-server-key.pem}"
+  ACME_DEPLOY_HOOK="${ACME_DEPLOY_HOOK:-/usr/local/sbin/ikev2-vpn-acme-deploy}"
+  ACME_RENEWAL_ENABLED="${ACME_RENEWAL_ENABLED:-no}"
 }
 
 initialize_proxy_state_defaults() {
@@ -868,6 +911,8 @@ record_preinstall_state() {
   CA_CERT_EXISTED="no"
   SERVER_KEY_EXISTED="no"
   SERVER_CERT_EXISTED="no"
+  ACME_CERT_EXISTED="no"
+  ACME_KEY_EXISTED="no"
 
   backup_file "$IPSEC_CONF" "ipsec.conf" && IPSEC_CONF_EXISTED="yes" || true
   backup_file "$IPSEC_SECRETS" "ipsec.secrets" && IPSEC_SECRETS_EXISTED="yes" || true
@@ -878,12 +923,23 @@ record_preinstall_state() {
   backup_file "$CA_CERT" "ca-cert.pem" && CA_CERT_EXISTED="yes" || true
   backup_file "$SERVER_KEY" "server-key.pem" && SERVER_KEY_EXISTED="yes" || true
   backup_file "$SERVER_CERT" "server-cert.pem" && SERVER_CERT_EXISTED="yes" || true
+  backup_file "$ACME_CERT_PATH" "acme-server-cert.pem" && ACME_CERT_EXISTED="yes" || true
+  backup_file "$ACME_KEY_PATH" "acme-server-key.pem" && ACME_KEY_EXISTED="yes" || true
   if [[ -e "$CERTBOT_RELOAD_HOOK" ]]; then
     CERTBOT_RELOAD_HOOK_EXISTED="yes"
     backup_file "$CERTBOT_RELOAD_HOOK" "certbot-reload-hook"
   else
     CERTBOT_RELOAD_HOOK_EXISTED="no"
   fi
+  ACME_DEPLOY_HOOK_EXISTED="no"
+  if [[ -e "$ACME_DEPLOY_HOOK" ]]; then
+    ACME_DEPLOY_HOOK_EXISTED="yes"
+    backup_file "$ACME_DEPLOY_HOOK" "acme-deploy-hook"
+  fi
+  CERTBOT_TIMER_WAS_ENABLED="no"
+  CERTBOT_TIMER_WAS_ACTIVE="no"
+  service_is_enabled certbot.timer && CERTBOT_TIMER_WAS_ENABLED="yes" || true
+  service_is_active certbot.timer && CERTBOT_TIMER_WAS_ACTIVE="yes" || true
 
   NEW_PACKAGES=""
   local package
@@ -910,6 +966,9 @@ install_packages() {
   command_exists pki || die "The pki command was not installed."
   command_exists iptables || die "The iptables command was not installed."
   command_exists openssl || die "The openssl command was not installed."
+  if [[ "${CERT_MODE:-private}" == "public" ]]; then
+    command_exists certbot || die "The certbot command was not installed."
+  fi
 
   [[ -f /usr/lib/ipsec/plugins/libstrongswan-eap-mschapv2.so ]] || \
     die "The EAP-MSCHAPv2 plugin file was not found after package installation."
@@ -936,37 +995,111 @@ check_certbot_standalone_port() {
   die "TCP/80 is already in use. Let's Encrypt standalone HTTP-01 validation requires TCP/80 to be available. IPv4 listeners: ${ipv4_listeners:-none}; IPv6 listeners: ${ipv6_listeners:-none}. Review the listening process/service shown above and stop or reconfigure it before retrying."
 }
 
+check_acme_dns_reachability() {
+  local domain="$1" resolved detected resolved6
+  resolved=$(getent ahostsv4 "$domain" 2>/dev/null | awk '{print $1}' | sort -u | paste -sd, - || true)
+  [[ -n "$resolved" ]] || die "ACME domain ${domain} does not resolve to an IPv4 address."
+  resolved6=$(getent ahostsv6 "$domain" 2>/dev/null | awk '{print $1}' | sort -u | paste -sd, - || true)
+  if [[ -n "$resolved6" ]] && ! ip -6 route show default dev "$OUT_IF" 2>/dev/null | grep -q '^default'; then
+    warn "${domain} has IPv6 addresses (${resolved6}), but this server has no IPv6 route; HTTP-01 may validate against an unreachable address."
+    ask_yes_no "Continue with the IPv6 DNS records?" N || die "ACME issuance canceled due to unreachable IPv6 DNS records."
+  fi
+  detected=$(interface_ipv4 "$OUT_IF")
+  if [[ -n "$detected" && ",${resolved}," != *",${detected},"* ]]; then
+    warn "${domain} resolves to ${resolved}, while ${OUT_IF} has ${detected}."
+    ask_yes_no "Continue anyway? (ACME validation may fail)" N || die "ACME issuance canceled because DNS does not point to this server."
+  fi
+}
+
+validate_acme_certificate() {
+  local cert="$1" key="$2" domain="$3" cert_pub key_pub
+  [[ -r "$cert" && -r "$key" ]] || return 1
+  openssl x509 -in "$cert" -noout -checkend 0 >/dev/null 2>&1 || return 1
+  openssl x509 -in "$cert" -noout -checkhost "$domain" >/dev/null 2>&1 || return 1
+  openssl x509 -in "$cert" -purpose 2>/dev/null | grep -q 'SSL server : Yes' || return 1
+  cert_pub=$(openssl x509 -in "$cert" -pubkey -noout 2>/dev/null) || return 1
+  key_pub=$(openssl pkey -in "$key" -pubout 2>/dev/null) || return 1
+  [[ "$cert_pub" == "$key_pub" ]]
+}
+
+install_acme_deploy_hook() {
+  install -d -m 755 "$(dirname "$ACME_DEPLOY_HOOK")"
+  cat > "$ACME_DEPLOY_HOOK" <<EOF
+#!/usr/bin/env bash
+set -Eeuo pipefail
+# Managed by ${INSTALLER_NAME}; validates ACME output before reloading StrongSwan.
+domain="${ACME_DOMAIN}"
+source_cert="/etc/letsencrypt/live/\${domain}/fullchain.pem"
+source_key="/etc/letsencrypt/live/\${domain}/privkey.pem"
+cert="${ACME_CERT_PATH}"
+key="${ACME_KEY_PATH}"
+tmp_cert="\${cert}.new.\$\$"
+tmp_key="\${key}.new.\$\$"
+log(){ logger -t ikev2-vpn-acme "\$*"; }
+if [[ ! -r "\$source_cert" || ! -r "\$source_key" ]] || ! openssl x509 -in "\$source_cert" -noout -checkend 0 >/dev/null 2>&1 ||
+   ! openssl x509 -in "\$source_cert" -noout -checkhost "\$domain" >/dev/null 2>&1 ||
+   ! openssl x509 -in "\$source_cert" -purpose 2>/dev/null | grep -q 'SSL server : Yes' ||
+   [[ "\$(openssl x509 -in "\$source_cert" -pubkey -noout 2>/dev/null)" != "\$(openssl pkey -in "\$source_key" -pubout 2>/dev/null)" ]]; then
+  log 'Renewal validation failed; existing certificate remains active.'
+  exit 1
+fi
+install -m 644 "\$source_cert" "\$tmp_cert"
+install -m 600 "\$source_key" "\$tmp_key"
+mv -f "\$tmp_cert" "\$cert"
+mv -f "\$tmp_key" "\$key"
+log 'Installing renewed certificate and reloading StrongSwan certificates.'
+if ! ipsec rereadall >/dev/null 2>&1; then
+  log 'StrongSwan certificate reload failed; existing runtime remains unchanged.'
+  exit 1
+fi
+log 'ACME renewal completed successfully.'
+EOF
+  chmod 700 "$ACME_DEPLOY_HOOK"
+}
+
 create_certificates() {
   log "Preparing the VPN server certificate..."
 
   install -d -m 700 /etc/ipsec.d/private
   install -d -m 755 /etc/ipsec.d/cacerts /etc/ipsec.d/certs
 
-  if [[ "$CERTIFICATE_MODE" == "public-trust" ]]; then
-    [[ ! "$SERVER_ID" =~ ^[0-9.]+$ ]] || die "Let's Encrypt requires a DNS name, not an IPv4 address."
+  if [[ "$CERT_MODE" == "public" || "$CERTIFICATE_MODE" == "public-trust" ]]; then
+    validate_fqdn "$SERVER_ID" || die "Public CA mode requires a valid fully qualified DNS name."
+    ACME_DOMAIN="$SERVER_ID"
+    ACME_CLIENT="certbot"
+    local acme_source_cert="/etc/letsencrypt/live/${ACME_DOMAIN}/fullchain.pem"
+    local acme_source_key="/etc/letsencrypt/live/${ACME_DOMAIN}/privkey.pem"
+    ACME_CERT_PATH="/etc/ipsec.d/certs/ikev2-installer-acme-server-cert.pem"
+    ACME_KEY_PATH="/etc/ipsec.d/private/ikev2-installer-acme-server-key.pem"
+    check_acme_dns_reachability "$ACME_DOMAIN"
     if certbot_lineage_exists; then
       die "A Certbot certificate lineage already exists for ${SERVER_ID}. Refusing to claim or delete an existing lineage; decide whether to reuse it explicitly or choose another certificate name before retrying."
     fi
     check_certbot_standalone_port
     log "Requesting a Let's Encrypt certificate for ${SERVER_ID}..."
-    certbot certonly --standalone --non-interactive --agree-tos \
-      --email "$CERTBOT_EMAIL" -d "$SERVER_ID"
-    [[ -r "/etc/letsencrypt/live/${SERVER_ID}/fullchain.pem" ]] || die "Let's Encrypt certificate was not created."
-    [[ -r "/etc/letsencrypt/live/${SERVER_ID}/privkey.pem" ]] || die "Let's Encrypt private key was not created."
+    local -a certbot_args=(certonly --standalone --non-interactive --agree-tos -d "$SERVER_ID")
+    if [[ -n "${ACME_EMAIL:-}" ]]; then certbot_args+=(--email "$ACME_EMAIL"); else certbot_args+=(--register-unsafely-without-email); fi
+    certbot "${certbot_args[@]}"
+    validate_acme_certificate "$acme_source_cert" "$acme_source_key" "$ACME_DOMAIN" || die "The issued ACME certificate failed validation."
     CERTBOT_LINEAGE_CREATED="yes"
     CERTBOT_DOMAIN="$SERVER_ID"
+    ACME_RENEWAL_ENABLED="yes"
     write_state
-    ln -sfn "/etc/letsencrypt/live/${SERVER_ID}/fullchain.pem" "$SERVER_CERT"
-    ln -sfn "/etc/letsencrypt/live/${SERVER_ID}/privkey.pem" "$SERVER_KEY"
+    install -m 644 "$acme_source_cert" "$ACME_CERT_PATH"
+    install -m 600 "$acme_source_key" "$ACME_KEY_PATH"
+    ln -sfn "$ACME_CERT_PATH" "$SERVER_CERT"
+    ln -sfn "$ACME_KEY_PATH" "$SERVER_KEY"
+    install_acme_deploy_hook
+    # Keep the native Certbot deploy-hook location as a small managed shim.
     install -d -m 755 "$(dirname "$CERTBOT_RELOAD_HOOK")"
     cat > "$CERTBOT_RELOAD_HOOK" <<EOF
 #!/usr/bin/env bash
-set -Eeuo pipefail
-if systemctl is-active --quiet ${STRONGSWAN_SERVICE}; then
-  ipsec rereadall >/dev/null 2>&1 || systemctl restart ${STRONGSWAN_SERVICE}
-fi
+exec "$ACME_DEPLOY_HOOK"
 EOF
     chmod 700 "$CERTBOT_RELOAD_HOOK"
+    if systemctl list-unit-files certbot.timer >/dev/null 2>&1; then
+      systemctl enable --now certbot.timer >/dev/null 2>&1 || warn "Certbot timer could not be enabled; use 'renew' manually."
+    fi
   else
     umask 077
     pki --gen --type rsa --size 4096 --outform pem > "$CA_KEY"
@@ -1241,6 +1374,7 @@ Remote ID: ${SERVER_ID}
 Authentication: EAP-MSCHAPv2 username and password
 VPN address pool: ${VPN_SUBNET}
 DNS servers: ${DNS_SERVERS}
+Certificate Mode: $([[ "${CERT_MODE:-private}" == "public" ]] && printf 'Public CA' || printf 'Private CA')
 Certificate trust mode: ${CERTIFICATE_MODE}
 
 Client setup summary
@@ -1720,15 +1854,40 @@ install_vpn() {
     warn "Enter one or more valid IPv4 DNS addresses separated by commas."
   done
 
-  printf '\n%bCertificate trust%b\n' "$BOLD" "$RESET"
-  printf '  Private CA requires distributing ca-cert.cer to clients.\n'
-  printf '  Let''s Encrypt requires a public DNS name pointing to this server and TCP/80 available during issuance.\n'
-  if ask_yes_no "Use Let's Encrypt for the server certificate?" N; then
-    CERTIFICATE_MODE="public-trust"
-    CA_NAME=""
-    [[ ! "$SERVER_ID" =~ ^[0-9.]+$ ]] || die "Let''s Encrypt requires a DNS name, not an IPv4 address."
-    collect_certbot_email
-  else
+  printf '\n%bCertificate Authority Mode%b\n' "$BOLD" "$RESET"
+  printf '  1) Private CA\n'
+  printf '     Generate a local Root CA and sign the IKEv2 server certificate.\n'
+  printf '  2) Public CA (ACME)\n'
+  printf '     Obtain a publicly trusted certificate using ACME.\n'
+  local cert_choice=""
+  while true; do
+    read -r -p 'Choose certificate mode [1-2]: ' cert_choice || true
+    cert_choice=${cert_choice:-1}
+    case "$cert_choice" in
+      1)
+        CERT_MODE="private"; CERTIFICATE_MODE="private-ca"
+        break
+        ;;
+      2)
+        if is_ipv4 "$SERVER_ID"; then
+          warn "Public CA certificates require a DNS hostname, not an IPv4 address."
+          while true; do
+            ask_value SERVER_ID "ACME domain" "Enter a valid FQDN, for example vpn.example.com." ""
+            validate_fqdn "$SERVER_ID" && break
+            warn "Enter a valid fully qualified domain name."
+          done
+        elif ! validate_fqdn "$SERVER_ID"; then
+          warn "Public CA mode requires a valid FQDN with a dot, such as vpn.example.com."
+          continue
+        fi
+        CERT_MODE="public"; CERTIFICATE_MODE="public-trust"; CA_NAME=""
+        collect_certbot_email
+        break
+        ;;
+      *) warn "Choose 1 for Private CA or 2 for Public CA (ACME)." ;;
+    esac
+  done
+  if [[ "$CERT_MODE" == "private" ]]; then
     CERTIFICATE_MODE="private-ca"
     while true; do
       ask_value CA_NAME \
@@ -1960,12 +2119,22 @@ uninstall_vpn() {
   restore_file "$CA_CERT" "ca-cert.pem" "${CA_CERT_EXISTED:-no}"
   restore_file "$SERVER_KEY" "server-key.pem" "${SERVER_KEY_EXISTED:-no}"
   restore_file "$SERVER_CERT" "server-cert.pem" "${SERVER_CERT_EXISTED:-no}"
+  restore_file "$ACME_KEY_PATH" "acme-server-key.pem" "${ACME_KEY_EXISTED:-no}"
+  restore_file "$ACME_CERT_PATH" "acme-server-cert.pem" "${ACME_CERT_EXISTED:-no}"
   if [[ "${CERTBOT_RELOAD_HOOK_EXISTED:-no}" == "yes" ]]; then
     restore_file "$CERTBOT_RELOAD_HOOK" "certbot-reload-hook" yes
   else
     rm -f "$CERTBOT_RELOAD_HOOK"
   fi
+  if [[ "${ACME_DEPLOY_HOOK_EXISTED:-no}" == "yes" ]]; then
+    restore_file "$ACME_DEPLOY_HOOK" "acme-deploy-hook" yes
+  else
+    rm -f "$ACME_DEPLOY_HOOK"
+  fi
   delete_owned_certbot_lineage
+  if [[ "${CERT_MODE:-private}" == "public" ]]; then
+    restore_service_state certbot.timer "${CERTBOT_TIMER_WAS_ENABLED:-no}" "${CERTBOT_TIMER_WAS_ACTIVE:-no}"
+  fi
 
   if [[ "$PROXY_BASELINE_RECORDED" == "yes" ]]; then
     restore_file "$PROXY_CONF" "proxy-danted.conf" "${PROXY_CONF_EXISTED:-no}"
@@ -3239,6 +3408,7 @@ status_vpn() {
   # shellcheck disable=SC1090
   source "$STATE_FILE"
   local installed_version="${INSTALLER_VERSION:-unknown}"
+  initialize_certbot_state_defaults
   initialize_proxy_state_defaults
   initialize_ipv6_state_defaults
 
@@ -3273,6 +3443,8 @@ status_vpn() {
     printf '  SOCKS5 Proxy Mode  : disabled/not configured\n'
   fi
 
+  show_certificate_status
+
   echo
   echo "Configured users:"
   if [[ -r "$IPSEC_SECRETS" ]]; then
@@ -3286,6 +3458,75 @@ status_vpn() {
     echo "StrongSwan status:"
     ipsec statusall 2>/dev/null | sed -n '1,80p' || true
   fi
+}
+
+show_certificate_status() {
+  local cert_file="${SERVER_CERT}" end_line end_value expiry days issuer mode
+  mode="${CERT_MODE:-}"
+  [[ -n "$mode" ]] || mode="$([[ "${CERTIFICATE_MODE:-private-ca}" == "public-trust" ]] && printf public || printf private)"
+  if [[ "$mode" == "public" ]]; then
+    printf '  Certificate mode   : Public CA / ACME\n'
+    printf '  Domain             : %s\n' "${ACME_DOMAIN:-${CERTBOT_DOMAIN:-$SERVER_ID}}"
+    issuer=$(openssl x509 -in "$cert_file" -noout -issuer 2>/dev/null | sed 's/^issuer=//' || true)
+    printf '  Issuer             : %s\n' "${issuer:-unavailable}"
+    printf '  ACME renewal       : %s\n' "${ACME_RENEWAL_ENABLED:-no}"
+    printf '  Renewal timer      : %s\n' "$(systemctl is-active certbot.timer 2>/dev/null || echo unavailable)"
+  else
+    printf '  Certificate mode   : Private CA\n'
+  fi
+  printf '  Certificate        : %s\n' "$cert_file"
+  if end_line=$(openssl x509 -in "$cert_file" -noout -enddate 2>/dev/null); then
+    end_value="${end_line#notAfter=}"
+    expiry=$(date -d "$end_value" '+%F' 2>/dev/null || printf '%s' "$end_value")
+    days=$(( ( $(date -d "$end_value" '+%s' 2>/dev/null || date +%s) - $(date +%s) ) / 86400 ))
+    printf '  Expires            : %s\n' "$expiry"
+    printf '  Days remaining     : %s\n' "$days"
+  else
+    printf '  Expires            : unavailable\n'
+  fi
+}
+
+certificate_management_menu() {
+  local choice
+  while true; do
+    # shellcheck disable=SC1090
+    source "$STATE_FILE"
+    initialize_certbot_state_defaults
+    printf '\n%bCertificate management%b\n' "$BOLD" "$RESET"
+    printf '  1) Show certificate status\n'
+    if [[ "$CERT_MODE" == "public" ]]; then
+      printf '  2) Renew ACME certificate now\n'
+      printf '  3) Reinstall / reconfigure ACME renewal\n'
+      printf '  4) Back\n'
+    else
+      printf '  2) Back\n'
+    fi
+    read -r -p 'Choose: ' choice || true
+    case "$choice" in
+      1) show_certificate_status; pause_main_menu ;;
+      2) if [[ "$CERT_MODE" == "public" ]]; then renew_acme_certificate; else return 0; fi ;;
+      3) if [[ "$CERT_MODE" == "public" ]]; then install_acme_deploy_hook; write_state; log "ACME renewal hook reinstalled."; else warn "ACME actions are unavailable in Private CA mode."; fi ;;
+      4) [[ "$CERT_MODE" == "public" ]] && return 0 ;;
+      *) warn "Invalid selection." ;;
+    esac
+  done
+}
+
+renew_acme_certificate() {
+  [[ -f "$STATE_FILE" ]] || die "No installation managed by this script was found."
+  # shellcheck disable=SC1090
+  source "$STATE_FILE"
+  initialize_certbot_state_defaults
+  [[ "$CERT_MODE" == "public" ]] || {
+    printf 'ACME renewal is not available because this installation uses Private CA mode.\n'
+    return 0
+  }
+  command_exists certbot || die "Certbot is not installed."
+  [[ -n "${ACME_DOMAIN:-}" ]] || die "ACME domain is missing from installer state."
+  log "Requesting ACME renewal for ${ACME_DOMAIN}..."
+  certbot renew --cert-name "$ACME_DOMAIN" --non-interactive --deploy-hook "$ACME_DEPLOY_HOOK"
+  validate_acme_certificate "${ACME_CERT_PATH:-/etc/letsencrypt/live/${ACME_DOMAIN}/fullchain.pem}" "${ACME_KEY_PATH:-/etc/letsencrypt/live/${ACME_DOMAIN}/privkey.pem}" "$ACME_DOMAIN" || die "Renewal validation failed; existing certificate remains active."
+  show_certificate_status
 }
 
 diag_reset() {
@@ -3365,7 +3606,6 @@ check_certificate_health() {
 
 check_public_trust_certificate_health() {
   local domain="${CERTBOT_DOMAIN:-$SERVER_ID}"
-  local resolved_cert resolved_key expected_cert expected_key
   local certificate_public_key key_public_key
 
   check_certificate_health "$SERVER_CERT" "Server certificate"
@@ -3380,22 +3620,10 @@ check_public_trust_certificate_health() {
     diag_ok "Server private key"
   fi
 
-  if [[ ! -L "$SERVER_CERT" || ! -L "$SERVER_KEY" ]]; then
-    diag_fail "Let's Encrypt certificate symlinks" "Server certificate and key must be symlinks to the Let's Encrypt live lineage"
+  if [[ ! -r "${ACME_CERT_PATH:-}" || ! -r "${ACME_KEY_PATH:-}" ]]; then
+    diag_fail "ACME certificate files" "Managed ACME certificate or key is missing"
   else
-    expected_cert="/etc/letsencrypt/live/${domain}/fullchain.pem"
-    expected_key="/etc/letsencrypt/live/${domain}/privkey.pem"
-    resolved_cert=$(readlink -f -- "$SERVER_CERT" 2>/dev/null || true)
-    resolved_key=$(readlink -f -- "$SERVER_KEY" 2>/dev/null || true)
-    expected_cert=$(readlink -f -- "$expected_cert" 2>/dev/null || true)
-    expected_key=$(readlink -f -- "$expected_key" 2>/dev/null || true)
-    if [[ -z "$resolved_cert" || -z "$resolved_key" || \
-          "$resolved_cert" != "$expected_cert" || "$resolved_key" != "$expected_key" || \
-          ! -r "$SERVER_CERT" || ! -r "$SERVER_KEY" ]]; then
-      diag_fail "Let's Encrypt certificate symlinks" "Server certificate or key symlink is broken, unreadable, or points outside the expected lineage"
-    else
-      diag_ok "Let's Encrypt certificate symlinks"
-    fi
+    diag_ok "ACME certificate files" "Validated managed certificate and key paths"
   fi
 
   if [[ -z "$domain" ]] || ! certbot_lineage_exists "$domain"; then
@@ -3684,11 +3912,12 @@ interactive_menu() {
       printf '  6) Show Last 100 Log Entries\n'
       printf '  7) Export Client Profile (.ikev)\n'
       printf '  8) SOCKS5 Proxy Mode\n'
-      printf '  9) Update Installer\n'
-      printf '  10) Uninstall\n'
-      printf '  11) About\n'
-      printf '  12) Exit\n'
-      read -r -p 'Choose [1-12]: ' choice || true
+      printf '  9) Certificate management\n'
+      printf '  10) Update Installer\n'
+      printf '  11) Uninstall\n'
+      printf '  12) About\n'
+      printf '  13) Exit\n'
+      read -r -p 'Choose [1-13]: ' choice || true
 
       case "$choice" in
         1)
@@ -3722,18 +3951,21 @@ interactive_menu() {
           pause_main_menu
           ;;
         9)
+          certificate_management_menu
+          ;;
+        10)
           update_installer
           pause_main_menu
           ;;
-        10)
+        11)
           uninstall_vpn
           pause_main_menu
           ;;
-        11)
+        12)
           show_about
           pause_main_menu
           ;;
-        12)
+        13)
           printf '\nExiting...\n'
           exit 0
           ;;
@@ -3771,13 +4003,15 @@ interactive_menu() {
 
 usage() {
   cat <<EOF
-Usage: $0 [install|upgrade|reconnect|update|status|logs|disconnect|diagnostics|start|stop|restart|proxy-start|proxy-stop|proxy-restart|start-all|stop-all|uninstall]
+Usage: $0 [install|upgrade|reconnect|update|status|certificate|renew|logs|disconnect|diagnostics|start|stop|restart|proxy-start|proxy-stop|proxy-restart|start-all|stop-all|uninstall]
 
 Commands:
   install        Full interactive IKEv2 installation; all previous features are retained.
   upgrade        Add or update private SOCKS5 Proxy Mode on an existing managed installation.\n  reconnect      Enable DPD-based stale-session recovery without changing certificates or users.
   update         Check the latest GitHub Release and safely update this installer only.
   status         Show VPN, StrongSwan, firewall, and Proxy Mode status.
+  certificate    Show certificate status and expiry.
+  renew          Renew the ACME-managed public certificate.
   logs           Show the last 100 installer log entries.
   disconnect     Disconnect a selected VPN user, or: disconnect <username>.
   diagnostics    Run read-only health checks for the managed VPN server.
@@ -3812,6 +4046,8 @@ main() {
     reconnect) apply_reconnect_policy ;;
     update) update_installer ;;
     status) status_vpn ;;
+    certificate) require_managed_installation; source "$STATE_FILE"; initialize_certbot_state_defaults; show_certificate_status ;;
+    renew) renew_acme_certificate ;;
     logs) show_logs ;;
     traffic-snapshot) snapshot_vpn_traffic ;;
     disconnect) disconnect_vpn_user "${2:-}" ;;

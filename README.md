@@ -38,7 +38,7 @@ Commit and push the release changes to `main` before creating these tags.
 
 | Component | File | Version / Target |
 |---|---|---|
-| Server | `ikev2-strongswan-ubuntu.sh` | v6.4.7 / Ubuntu 22.04 & 24.04 |
+| Server | `ikev2-strongswan-ubuntu.sh` | v6.2.0 / Ubuntu 22.04 & 24.04 |
 | Windows client | `ikev2-windows-client.ps1` | v6.4.7 / PowerShell 5.1+ |
 | Linux client | `ikev2-linux-client.sh` | v1.9.8 / Ubuntu 22.04 & 24.04 |
 
@@ -215,14 +215,15 @@ The installer generates a private CA and signs the VPN server certificate with i
 ### Public Let’s Encrypt certificate
 
 The installer can instead use a publicly trusted Let’s Encrypt certificate. Choose
-`Yes` when prompted to use Let’s Encrypt, then enter a DNS name such as
+`2) Public CA (ACME)` in the certificate mode prompt, then enter a DNS name such as
 `vpn.example.com`. The name must resolve to the server and TCP port `80` must be
 reachable during the initial HTTP-01 certificate request. An IPv4 address cannot
 be used for this mode.
 
 Certbot renews the 90-day certificate through its normal systemd timer. The
-installer adds a deploy hook that reloads the StrongSwan certificates after a
-successful renewal. The server's `status` command reports the selected trust mode.
+installer validates and atomically installs renewed material through a managed
+deploy hook, then reloads StrongSwan certificates. Use `sudo ./ikev2-strongswan-ubuntu.sh renew`
+for a manual attempt, or `certificate` for certificate status and renewal actions.
 No custom CA file is exported or imported in this mode; supported clients use the
 operating system's public trust store.
 

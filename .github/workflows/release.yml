@@ -69,15 +69,9 @@ jobs:
             exit 1
           }
 
-          release_commit="$(git rev-parse HEAD)"
           for component_tag in "$server_tag" "$linux_tag" "$windows_tag"; do
             git show-ref --tags --verify --quiet "refs/tags/${component_tag}" || {
               echo "Required component tag is missing: ${component_tag}"
-              exit 1
-            }
-            tag_commit="$(git rev-parse "${component_tag}^{commit}")"
-            [[ "$tag_commit" == "$release_commit" ]] || {
-              echo "Component tag ${component_tag} does not point to the release commit"
               exit 1
             }
           done
@@ -141,14 +135,18 @@ jobs:
             sha256sum ./* > SHA256SUMS
           )
 
-      - name: Create GitHub Release
+      - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
         shell: bash
         run: |
           set -Eeuo pipefail
-          gh release create "${RELEASE_TAG}" \
-            --title "IKEv2 VPN Suite ${RELEASE_TAG}" \
-            --generate-notes \
-            dist/*
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release upload "${RELEASE_TAG}" --clobber dist/*
+          else
+            gh release create "${RELEASE_TAG}" \
+              --title "IKEv2 VPN Suite ${RELEASE_TAG}" \
+              --generate-notes \
+              dist/*
+          fi

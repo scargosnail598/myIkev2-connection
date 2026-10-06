@@ -38,7 +38,7 @@ Commit and push the release changes to `main` before creating these tags.
 
 | Component | File | Version / Target |
 |---|---|---|
-| Server | `ikev2-strongswan-ubuntu.sh` | v6.2.0 / Ubuntu 22.04 & 24.04 |
+| Server | `ikev2-strongswan-ubuntu.sh` | v6.4.8 / Ubuntu 22.04 & 24.04 |
 | Windows client | `ikev2-windows-client.ps1` | v6.4.7 / PowerShell 5.1+ |
 | Linux client | `ikev2-linux-client.sh` | v1.9.8 / Ubuntu 22.04 & 24.04 |
 

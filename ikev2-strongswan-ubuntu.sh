@@ -978,7 +978,6 @@ certbot_lineage_exists() {
   local domain="${1:-$SERVER_ID}" certificates
   [[ -e "/etc/letsencrypt/live/$domain" || -L "/etc/letsencrypt/live/$domain" ]] && return 0
   command_exists certbot || return 1
-  certbot certificates --cert-name "$domain" >/dev/null 2>&1 && return 0
   certificates=$(certbot certificates 2>/dev/null) || return 1
   awk -v domain="$domain" '$1 == "Domains:" { for (index = 2; index <= NF; index++) if ($index == domain) found = 1 } END { exit !found }' <<<"$certificates"
 }

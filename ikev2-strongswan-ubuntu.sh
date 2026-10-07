@@ -999,7 +999,7 @@ check_acme_dns_reachability() {
   local domain="$1" resolved detected resolved6
   resolved=$(getent ahostsv4 "$domain" 2>/dev/null | awk '{print $1}' | sort -u | paste -sd, - || true)
   [[ -n "$resolved" ]] || die "ACME domain ${domain} does not resolve to an IPv4 address."
-  resolved6=$(getent ahostsv6 "$domain" 2>/dev/null | awk '{print $1}' | sort -u | paste -sd, - || true)
+  resolved6=$(getent ahostsv6 "$domain" 2>/dev/null | awk '$1 !~ /^::[fF][fF][fF][fF]:[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ {print $1}' | sort -u | paste -sd, - || true)
   if [[ -n "$resolved6" ]] && ! ip -6 route show default dev "$OUT_IF" 2>/dev/null | grep -q '^default'; then
     warn "${domain} has IPv6 addresses (${resolved6}), but this server has no IPv6 route; HTTP-01 may validate against an unreachable address."
     ask_yes_no "Continue with the IPv6 DNS records?" N || die "ACME issuance canceled due to unreachable IPv6 DNS records."

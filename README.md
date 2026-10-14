@@ -220,12 +220,30 @@ The installer can instead use a publicly trusted Let’s Encrypt certificate. Ch
 reachable during the initial HTTP-01 certificate request. An IPv4 address cannot
 be used for this mode.
 
-Certbot renews the 90-day certificate through its normal systemd timer. The
-installer validates and atomically installs renewed material through a managed
-deploy hook, then reloads StrongSwan certificates. Use `sudo ./ikev2-strongswan-ubuntu.sh renew`
-for a manual attempt, or `certificate` for certificate status and renewal actions.
+New ACME certificates explicitly use RSA keys (3072 bits), matching the server's
+StrongSwan key configuration and native Windows clients.
+
+Certbot renews certificates through its normal systemd timer. The managed deploy
+hook validates the certificate's hostname, expiry, server purpose, RSA key, and
+certificate/key match before replacing the managed files. It serializes deployments,
+keeps temporary backups, reloads both credentials and connection definitions, and
+waits until StrongSwan lists the renewed certificate with its private key. A failed
+deployment attempts to restore the previous files and reload them. The hook does
+not restart the daemon; established VPN sessions remain connected. If StrongSwan
+is stopped, the files are installed for its next start without starting the service.
+
+Use `sudo ./ikev2-strongswan-ubuntu.sh renew` for a manual attempt, or `certificate`
+for certificate status and renewal actions. After updating the installer on an
+existing ACME server, run `renew` once to refresh its installed deploy hook and
+apply the current certificate even if renewal is not yet due. If the
+existing Certbot key is ECDSA, this command requests an immediate replacement RSA
+certificate even when renewal is not yet due; that one-time request uses the ACME
+issuance quota. Later RSA renewals follow Certbot's normal renewal schedule. An
+invalid or missing Certbot key stops renewal before managed files are changed.
+
 No custom CA file is exported or imported in this mode; supported clients use the
-operating system's public trust store.
+operating system's public trust store. Verify an upgrade or renewal on a disposable
+Ubuntu VM, including a new Windows/Linux connection and an existing VPN session.
 
 ### Windows compatibility
 
@@ -1413,3 +1431,12 @@ SOCKS5 10.254.254.1:1080
 # License
 
 This project is available under the [MIT License](LICENSE).
+
+## ACME regression checks
+
+Run `python3 -B -m unittest discover -s tests -v` from the repository root.
+These tests use Python 3, Bash, OpenSSL, and temporary test certificates; Certbot,
+StrongSwan, and systemd commands are simulated. They cover RSA provisioning,
+ECDSA migration, invalid certificate rejection, credential/connection reload,
+stopped services, runtime certificate verification, and deployment rollback.
+They do not contact an ACME server, change host configuration, or require root.

@@ -7,12 +7,14 @@ on:
       - "ikev2-linux-client.sh"
       - "ikev2-windows-client.ps1"
       - ".github/workflows/ci.yml"
+      - "tests/**"
   pull_request:
     paths:
       - "ikev2-strongswan-ubuntu.sh"
       - "ikev2-linux-client.sh"
       - "ikev2-windows-client.ps1"
       - ".github/workflows/ci.yml"
+      - "tests/**"
 
 permissions:
   contents: read
@@ -31,6 +33,9 @@ jobs:
         run: |
           bash -n ikev2-strongswan-ubuntu.sh ikev2-linux-client.sh
           shellcheck --severity=warning ikev2-strongswan-ubuntu.sh ikev2-linux-client.sh
+
+      - name: Test ACME certificate provisioning and renewal
+        run: python3 -B -m unittest discover -s tests -v
 
       - name: Check PowerShell syntax
         shell: bash

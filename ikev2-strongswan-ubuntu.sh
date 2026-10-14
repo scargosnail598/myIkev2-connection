@@ -1013,9 +1013,12 @@ check_acme_dns_reachability() {
 validate_acme_certificate() {
   local cert="$1" key="$2" domain="$3" cert_pub key_pub
   [[ -r "$cert" && -r "$key" ]] || return 1
+  openssl rsa -in "$key" -check -noout >/dev/null 2>&1 || return 1
   openssl x509 -in "$cert" -noout -checkend 0 >/dev/null 2>&1 || return 1
-  openssl x509 -in "$cert" -noout -checkhost "$domain" >/dev/null 2>&1 || return 1
-  openssl x509 -in "$cert" -purpose 2>/dev/null | grep -q 'SSL server : Yes' || return 1
+  # x509 -checkhost can exit successfully on a mismatch; verify must reject it.
+  # Trust this supplied leaf only for these checks, not as a system trust anchor.
+  openssl verify -trusted "$cert" -partial_chain -verify_hostname "$domain" \
+    -purpose sslserver "$cert" >/dev/null 2>&1 || return 1
   cert_pub=$(openssl x509 -in "$cert" -pubkey -noout 2>/dev/null) || return 1
   key_pub=$(openssl pkey -in "$key" -pubout 2>/dev/null) || return 1
   [[ "$cert_pub" == "$key_pub" ]]
@@ -1032,26 +1035,92 @@ source_cert="/etc/letsencrypt/live/\${domain}/fullchain.pem"
 source_key="/etc/letsencrypt/live/\${domain}/privkey.pem"
 cert="${ACME_CERT_PATH}"
 key="${ACME_KEY_PATH}"
-tmp_cert="\${cert}.new.\$\$"
-tmp_key="\${key}.new.\$\$"
+service="${STRONGSWAN_SERVICE}"
+umask 077
+exec 9>"\${key}.deploy.lock"
+flock -x 9
 log(){ logger -t ikev2-vpn-acme "\$*"; }
-if [[ ! -r "\$source_cert" || ! -r "\$source_key" ]] || ! openssl x509 -in "\$source_cert" -noout -checkend 0 >/dev/null 2>&1 ||
-   ! openssl x509 -in "\$source_cert" -noout -checkhost "\$domain" >/dev/null 2>&1 ||
-   ! openssl x509 -in "\$source_cert" -purpose 2>/dev/null | grep -q 'SSL server : Yes' ||
-   [[ "\$(openssl x509 -in "\$source_cert" -pubkey -noout 2>/dev/null)" != "\$(openssl pkey -in "\$source_key" -pubout 2>/dev/null)" ]]; then
-  log 'Renewal validation failed; existing certificate remains active.'
+$(declare -f validate_acme_certificate)
+if ! validate_acme_certificate "\$source_cert" "\$source_key" "\$domain"; then
+  log 'Renewal validation failed (a matching RSA key and valid server certificate are required); managed files were not changed.'
   exit 1
 fi
+
+# Backups and the lock live in the root-only private-key directory.
+work_dir=\$(mktemp -d "\$(dirname "\$key")/.ikev2-acme.XXXXXX")
+tmp_cert=""
+tmp_key=""
+installed=no
+reload_started=no
+cert_existed=no
+key_existed=no
+cleanup() {
+  local result=\$?
+  trap - EXIT
+  if (( result != 0 )) && [[ "\$installed" == yes ]]; then
+    if [[ "\$cert_existed" == yes ]]; then
+      cp -p "\$work_dir/old-cert" "\$cert" || log 'Certificate rollback failed.'
+    else
+      rm -f "\$cert"
+    fi
+    if [[ "\$key_existed" == yes ]]; then
+      cp -p "\$work_dir/old-key" "\$key" || log 'Private-key rollback failed.'
+    else
+      rm -f "\$key"
+    fi
+    if [[ "\$reload_started" == yes ]]; then
+      if ! ipsec rereadall >/dev/null 2>&1 || ! ipsec reload >/dev/null 2>&1; then
+        log 'Rollback reload failed; administrator intervention is required.'
+      fi
+    fi
+    log 'ACME deployment failed; restoration of the previous managed files was attempted.'
+  fi
+  rm -f "\$tmp_cert" "\$tmp_key"
+  rm -rf "\$work_dir"
+  exit "\$result"
+}
+trap cleanup EXIT
+if [[ -e "\$cert" ]]; then cp -pL "\$cert" "\$work_dir/old-cert"; cert_existed=yes; fi
+if [[ -e "\$key" ]]; then cp -pL "\$key" "\$work_dir/old-key"; key_existed=yes; fi
+tmp_cert=\$(mktemp "\${cert}.new.XXXXXX")
+tmp_key=\$(mktemp "\${key}.new.XXXXXX")
 install -m 644 "\$source_cert" "\$tmp_cert"
 install -m 600 "\$source_key" "\$tmp_key"
+installed=yes
 mv -f "\$tmp_cert" "\$cert"
 mv -f "\$tmp_key" "\$key"
-log 'Installing renewed certificate and reloading StrongSwan certificates.'
-if ! ipsec rereadall >/dev/null 2>&1; then
-  log 'StrongSwan certificate reload failed; existing runtime remains unchanged.'
-  exit 1
+
+if ! systemctl is-active --quiet "\$service"; then
+  log 'Renewed certificate installed; StrongSwan is stopped and will load it on the next start.'
+  exit 0
 fi
-log 'ACME renewal completed successfully.'
+
+# rereadall reloads the key, while reload re-adds connections and their leaf
+# certificates without restarting charon or terminating established IKE SAs.
+log 'Installing renewed certificate and reloading StrongSwan credentials and connections.'
+reload_started=yes
+ipsec rereadall >/dev/null 2>&1
+ipsec reload >/dev/null 2>&1
+serial=\$(openssl x509 -in "\$cert" -noout -serial)
+serial="\${serial#serial=}"
+# starter handles reload asynchronously; wait for the new certificate AND key.
+for ((attempt=0; attempt<10; attempt++)); do
+  if ipsec listcerts 2>/dev/null | awk -v expected="\$serial" '
+    function normalize(value) {
+      gsub(":", "", value); sub(/^0+/, "", value); return tolower(value)
+    }
+    \$1 == "subject:" { matches = 0 }
+    \$1 == "serial:" { matches = (normalize(\$2) == normalize(expected)) }
+    matches && /has private key/ { found = 1 }
+    END { exit !found }
+  '; then
+    log 'ACME renewal completed; the renewed certificate and private key are loaded.'
+    exit 0
+  fi
+  sleep 1
+done
+log 'StrongSwan did not load the renewed certificate and private key before the timeout.'
+exit 1
 EOF
   chmod 700 "$ACME_DEPLOY_HOOK"
 }
@@ -1076,7 +1145,7 @@ create_certificates() {
     fi
     check_certbot_standalone_port
     log "Requesting a Let's Encrypt certificate for ${SERVER_ID}..."
-    local -a certbot_args=(certonly --standalone --non-interactive --agree-tos -d "$SERVER_ID")
+    local -a certbot_args=(certonly --standalone --non-interactive --agree-tos --key-type rsa --rsa-key-size 3072 -d "$SERVER_ID")
     if [[ -n "${ACME_EMAIL:-}" ]]; then certbot_args+=(--email "$ACME_EMAIL"); else certbot_args+=(--register-unsafely-without-email); fi
     certbot "${certbot_args[@]}"
     validate_acme_certificate "$acme_source_cert" "$acme_source_key" "$ACME_DOMAIN" || die "The issued ACME certificate failed validation."
@@ -3522,9 +3591,20 @@ renew_acme_certificate() {
   }
   command_exists certbot || die "Certbot is not installed."
   [[ -n "${ACME_DOMAIN:-}" ]] || die "ACME domain is missing from installer state."
+  local source_key="/etc/letsencrypt/live/${ACME_DOMAIN}/privkey.pem"
+  local -a certbot_args=(renew --cert-name "$ACME_DOMAIN" --non-interactive --key-type rsa --rsa-key-size 3072 --deploy-hook "$ACME_DEPLOY_HOOK")
+  openssl pkey -in "$source_key" -check -noout >/dev/null 2>&1 || die "The Certbot private key is missing or invalid."
+  if ! openssl rsa -in "$source_key" -check -noout >/dev/null 2>&1; then
+    log "Replacing the existing non-RSA ACME certificate with an RSA certificate for StrongSwan compatibility."
+    certbot_args+=(--force-renewal)
+  fi
+  # Refresh installed hooks as well as the script when upgrading an existing host.
+  install_acme_deploy_hook
   log "Requesting ACME renewal for ${ACME_DOMAIN}..."
-  certbot renew --cert-name "$ACME_DOMAIN" --non-interactive --deploy-hook "$ACME_DEPLOY_HOOK"
-  validate_acme_certificate "${ACME_CERT_PATH:-/etc/letsencrypt/live/${ACME_DOMAIN}/fullchain.pem}" "${ACME_KEY_PATH:-/etc/letsencrypt/live/${ACME_DOMAIN}/privkey.pem}" "$ACME_DOMAIN" || die "Renewal validation failed; existing certificate remains active."
+  certbot "${certbot_args[@]}"
+  # Also deploy the current lineage when Certbot says renewal is not yet due.
+  "$ACME_DEPLOY_HOOK"
+  validate_acme_certificate "$ACME_CERT_PATH" "$ACME_KEY_PATH" "$ACME_DOMAIN" || die "Managed ACME certificate validation failed; inspect the renewal hook log."
   show_certificate_status
 }
 

@@ -90,6 +90,27 @@ has no third-party runtime dependencies and always binds to a loopback address.
 Passwords are stored as scrypt hashes, sessions expire, login attempts are
 throttled, and all POST requests after login require a CSRF token.
 
+The overview shows running-service counts and highlights failed or unknown
+services. It refreshes every 30 seconds while the tab is visible, pausing during
+service commands and confirmations. Failed refreshes retain the last received
+status with a stale-data notice and disable commands until a successful refresh.
+Service commands require a confirmation explaining their connection impact,
+show progress, and are never automatically retried. A failed sign-out keeps the
+dashboard visible until the server confirms logout. Users, Sessions, and
+Diagnostics remain planned sections for later steps.
+
+Optional browser regression checks run against a local static server with mocked
+APIs, so no VPN service commands or production credentials are used:
+
+```bash
+npm install --prefix /tmp/ikev2-ui-tools --ignore-scripts --no-audit --no-fund playwright@1.64.1
+PLAYWRIGHT_BROWSERS_PATH=/tmp/ikev2-ui-browsers node /tmp/ikev2-ui-tools/node_modules/playwright/cli.js install firefox
+NODE_PATH=/tmp/ikev2-ui-tools/node_modules PLAYWRIGHT_BROWSERS_PATH=/tmp/ikev2-ui-browsers node --test tests/test_webui_browser.cjs
+```
+
+Run the browser checks as your normal desktop user. Set `UI_SCREENSHOT_DIR` to a
+temporary directory if desktop and mobile screenshots are needed.
+
 ### Install with working service controls
 
 Running `python3 -m webui.app` by itself starts only the unprivileged frontend;

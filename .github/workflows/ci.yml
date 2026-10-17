@@ -41,7 +41,9 @@ jobs:
           shellcheck --severity=warning ikev2-strongswan-ubuntu.sh ikev2-linux-client.sh packaging/install-webui.sh packaging/install-arvan-proxy.sh
 
       - name: Check Web UI JavaScript syntax
-        run: node --check webui/static/app.js
+        run: |
+          node --check webui/static/app.js
+          node --check tests/test_webui_browser.cjs
 
       - name: Test ACME and Web UI
         run: python3 -B -m unittest discover -s tests -v
@@ -58,3 +60,19 @@ jobs:
               exit 1
             }
           '
+
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install browser test tools
+        shell: bash
+        run: |
+          npm install --prefix "$RUNNER_TEMP/ikev2-ui-tools" --ignore-scripts --no-audit --no-fund playwright@1.64.1
+          node "$RUNNER_TEMP/ikev2-ui-tools/node_modules/playwright/cli.js" install --with-deps firefox
+
+      - name: Test dashboard behavior in Firefox with mocked APIs
+        shell: bash
+        run: NODE_PATH="$RUNNER_TEMP/ikev2-ui-tools/node_modules" node --test tests/test_webui_browser.cjs

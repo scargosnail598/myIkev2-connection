@@ -3,18 +3,26 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="description" content="Local administration console for the IKEv2 StrongSwan server">
+    <meta name="description" content="Administration console for the IKEv2 StrongSwan server">
     <title>IKEv2 Control Plane</title>
     <link rel="stylesheet" href="/assets/app.css">
     <script src="/assets/app.js" defer></script>
   </head>
   <body>
+    <section id="connection-view" class="login-view" aria-labelledby="connection-title">
+      <div class="login-panel connection-panel" role="status">
+        <span class="brand-mark login-mark" aria-hidden="true"><span></span></span>
+        <h1 id="connection-title">Connecting…</h1>
+        <p id="connection-copy" class="login-copy">Checking your session.</p>
+        <button id="connection-retry" class="secondary-button" type="button" hidden>Try again</button>
+      </div>
+    </section>
     <section id="login-view" class="login-view" aria-labelledby="login-title" hidden>
       <div class="login-panel">
         <span class="brand-mark login-mark" aria-hidden="true"><span></span></span>
         <p class="eyebrow">SECURE ADMINISTRATION</p>
         <h1 id="login-title">Enter the<br><span>control plane.</span></h1>
-        <p class="login-copy">Authenticate locally to inspect this IKEv2 server. Failed attempts are rate-limited.</p>
+        <p class="login-copy">Sign in to manage this IKEv2 server. Failed attempts are rate-limited.</p>
         <form id="login-form">
           <label for="username">Username</label>
           <input id="username" name="username" autocomplete="username" required maxlength="64">
@@ -38,8 +46,9 @@
           <button class="nav-item" disabled><span>03</span>Sessions<em>Next</em></button>
           <button class="nav-item" disabled><span>04</span>Diagnostics<em>Next</em></button>
         </nav>
-        <button id="logout" class="sidebar-foot" type="button">
+        <button id="logout" class="sidebar-foot" type="button" aria-label="Sign out" title="Sign out">
           <span class="pulse"></span>
+          <svg class="logout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M9 5H4v14h5M13 7l5 5-5 5M8 12h10"/></svg>
           <div><strong id="session-user">Authenticated</strong><small>Sign out of this session</small></div>
         </button>
       </aside>
@@ -48,7 +57,8 @@
         <header>
           <div>
             <p class="eyebrow">SERVER OPERATIONS / OVERVIEW</p>
-            <h1>Network status,<br><span>without the noise.</span></h1>
+            <h1 class="overview-title">Server overview</h1>
+            <p class="overview-copy">Monitor your VPN and manage its services.</p>
           </div>
           <div id="mode-badge" class="mode-badge"><span></span><b>CHECKING BROKER</b></div>
         </header>
@@ -65,14 +75,14 @@
             </div>
           </article>
           <article class="metric-card">
-            <p>SECURITY BOUNDARY</p>
-            <strong>LOOPBACK</strong>
-            <small>127.0.0.1</small>
+            <p>RUNNING SERVICES</p>
+            <strong id="running-services">—</strong>
+            <small id="services-summary">Waiting for status</small>
           </article>
-          <article class="metric-card accent">
-            <p>PRIVILEGE LEVEL</p>
-            <strong>UNPRIVILEGED</strong>
-            <small id="control-state">Checking service controls</small>
+          <article id="attention-card" class="metric-card accent">
+            <p>FAILED / UNKNOWN</p>
+            <strong id="attention-services">—</strong>
+            <small id="control-state">Waiting for status</small>
           </article>
         </section>
 
@@ -81,10 +91,14 @@
             <div><p>LIVE SIGNAL</p><h2>Service health</h2></div>
             <button id="refresh" type="button">Refresh status <span>↻</span></button>
           </div>
+          <div id="status-notice" class="broker-notice" role="alert" hidden>
+            <strong>Status update failed</strong>
+            <span id="status-error"></span>
+          </div>
+          <div id="action-progress" class="action-progress" role="status" hidden></div>
           <div id="broker-notice" class="broker-notice" hidden>
-            <strong>Service controls are offline</strong>
-            <span>The privileged broker is not running. Install or check the systemd services to enable commands.</span>
-            <code>sudo ./packaging/install-webui.sh install</code>
+            <strong>Service controls are unavailable</strong>
+            <span>You can view service status. Refresh to check whether controls are available again.</span>
           </div>
           <div id="services" class="service-grid" aria-live="polite">
             <article class="service-card skeleton"></article>
@@ -94,11 +108,20 @@
         </section>
 
         <footer>
-          <span>IKEv2 EASY INSTALLER</span>
+          <span>Status refreshes every 30 seconds while this page is visible</span>
           <span id="last-updated">Awaiting first update</span>
         </footer>
       </main>
     </div>
+    <dialog id="action-dialog" class="action-dialog" aria-labelledby="action-title" aria-describedby="action-copy">
+      <p class="eyebrow">SERVICE CONTROL</p>
+      <h2 id="action-title"></h2>
+      <p id="action-copy"></p>
+      <div class="dialog-actions">
+        <button id="action-cancel" class="secondary-button" type="button" autofocus>Cancel</button>
+        <button id="action-confirm" type="button"></button>
+      </div>
+    </dialog>
     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
   </body>
 </html>

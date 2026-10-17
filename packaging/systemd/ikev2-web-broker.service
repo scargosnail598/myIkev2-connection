@@ -1,0 +1,27 @@
+[Unit]
+Description=IKEv2 Web UI privileged broker
+After=dbus.service
+Before=ikev2-web.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/ikev2
+ExecStart=/usr/bin/python3 -m webui.broker --allowed-user ikev2-web --socket-group ikev2-web
+RuntimeDirectory=ikev2-web
+RuntimeDirectoryMode=0750
+LogsDirectory=ikev2-web
+LogsDirectoryMode=0700
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/run/ikev2-web /var/log/ikev2-web
+RestrictAddressFamilies=AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

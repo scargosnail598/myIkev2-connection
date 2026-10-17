@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Local administration console for the IKEv2 StrongSwan server">
+    <title>IKEv2 Control Plane</title>
+    <link rel="stylesheet" href="/assets/app.css">
+    <script src="/assets/app.js" defer></script>
+  </head>
+  <body>
+    <section id="login-view" class="login-view" aria-labelledby="login-title" hidden>
+      <div class="login-panel">
+        <span class="brand-mark login-mark" aria-hidden="true"><span></span></span>
+        <p class="eyebrow">SECURE ADMINISTRATION</p>
+        <h1 id="login-title">Enter the<br><span>control plane.</span></h1>
+        <p class="login-copy">Authenticate locally to inspect this IKEv2 server. Failed attempts are rate-limited.</p>
+        <form id="login-form">
+          <label for="username">Username</label>
+          <input id="username" name="username" autocomplete="username" required maxlength="64">
+          <label for="password">Password</label>
+          <input id="password" name="password" type="password" autocomplete="current-password" required>
+          <p id="login-error" class="form-error" role="alert" hidden></p>
+          <button type="submit">Sign in <span>→</span></button>
+        </form>
+      </div>
+    </section>
+
+    <div id="app-shell" class="shell" hidden>
+      <aside class="sidebar">
+        <a class="brand" href="/" aria-label="IKEv2 dashboard">
+          <span class="brand-mark" aria-hidden="true"><span></span></span>
+          <span><strong>IKEv2</strong><small>CONTROL PLANE</small></span>
+        </a>
+        <nav aria-label="Primary navigation">
+          <a class="nav-item active" href="#overview"><span>01</span>Overview</a>
+          <button class="nav-item" disabled><span>02</span>Users<em>Next</em></button>
+          <button class="nav-item" disabled><span>03</span>Sessions<em>Next</em></button>
+          <button class="nav-item" disabled><span>04</span>Diagnostics<em>Next</em></button>
+        </nav>
+        <button id="logout" class="sidebar-foot" type="button">
+          <span class="pulse"></span>
+          <div><strong id="session-user">Authenticated</strong><small>Sign out of this session</small></div>
+        </button>
+      </aside>
+
+      <main id="overview">
+        <header>
+          <div>
+            <p class="eyebrow">SERVER OPERATIONS / OVERVIEW</p>
+            <h1>Network status,<br><span>without the noise.</span></h1>
+          </div>
+          <div id="mode-badge" class="mode-badge"><span></span><b>CHECKING BROKER</b></div>
+        </header>
+
+        <section class="hero-grid" aria-label="System summary">
+          <article class="primary-card">
+            <div class="card-head">
+              <div><p>MANAGED INSTALLATION</p><h2 id="installation-state">Checking…</h2></div>
+              <span class="radar" aria-hidden="true"><i></i></span>
+            </div>
+            <p id="installation-copy" class="muted">Contacting the local status API.</p>
+            <div class="signal" aria-hidden="true">
+              <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+            </div>
+          </article>
+          <article class="metric-card">
+            <p>SECURITY BOUNDARY</p>
+            <strong>LOOPBACK</strong>
+            <small>127.0.0.1</small>
+          </article>
+          <article class="metric-card accent">
+            <p>PRIVILEGE LEVEL</p>
+            <strong>UNPRIVILEGED</strong>
+            <small>Write actions locked</small>
+          </article>
+        </section>
+
+        <section class="services-section">
+          <div class="section-title">
+            <div><p>LIVE SIGNAL</p><h2>Service health</h2></div>
+            <button id="refresh" type="button">Refresh status <span>↻</span></button>
+          </div>
+          <div id="broker-notice" class="broker-notice" hidden>
+            <strong>Service controls are offline</strong>
+            <span>The privileged broker is not running. Install or check the systemd services to enable commands.</span>
+            <code>sudo ./packaging/install-webui.sh install</code>
+          </div>
+          <div id="services" class="service-grid" aria-live="polite">
+            <article class="service-card skeleton"></article>
+            <article class="service-card skeleton"></article>
+            <article class="service-card skeleton"></article>
+          </div>
+        </section>
+
+        <footer>
+          <span>IKEv2 EASY INSTALLER</span>
+          <span id="last-updated">Awaiting first update</span>
+        </footer>
+      </main>
+    </div>
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  </body>
+</html>

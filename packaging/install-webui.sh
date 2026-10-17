@@ -1,0 +1,209 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+IFS=$'\n\t'
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+SOURCE_DIR=$(cd -- "${SCRIPT_DIR}/.." && pwd)
+INSTALL_DIR="/opt/ikev2"
+CONFIG_DIR="/etc/ikev2-web"
+CONFIG_FILE="${CONFIG_DIR}/config.json"
+SYSTEMD_DIR="/etc/systemd/system"
+WEB_USER="ikev2-web"
+BROKER_SERVICE="ikev2-web-broker.service"
+WEB_SERVICE="ikev2-web.service"
+
+usage() {
+  cat <<'EOF'
+Usage: sudo ./packaging/install-webui.sh install [--secure-cookie]
+       ./packaging/install-webui.sh status
+
+Commands:
+  install          Install/update the Web UI and start its systemd services.
+  status           Show Web UI, broker, socket, and HTTP health status.
+
+Options:
+  --secure-cookie  Require HTTPS for the login cookie. Without this option,
+                   loopback HTTP/SSH-tunnel mode is configured.
+EOF
+}
+
+die() {
+  printf 'Error: %s\n' "$*" >&2
+  exit 1
+}
+
+require_root() {
+  [[ ${EUID} -eq 0 ]] || die "Run install with sudo or as root."
+}
+
+require_source_files() {
+  local path
+  for path in \
+    "webui/__init__.py" \
+    "webui/app.py" \
+    "webui/broker.py" \
+    "webui/manage.py" \
+    "webui/security.py" \
+    "webui/static/index.html" \
+    "webui/static/app.css" \
+    "webui/static/app.js" \
+    "packaging/systemd/${BROKER_SERVICE}" \
+    "packaging/systemd/${WEB_SERVICE}"; do
+    [[ -f "${SOURCE_DIR}/${path}" ]] || die "Required source file is missing: ${path}"
+  done
+}
+
+install_source() {
+  install -d -o root -g root -m 0755 \
+    "$INSTALL_DIR" \
+    "${INSTALL_DIR}/webui" \
+    "${INSTALL_DIR}/webui/static"
+
+  install -o root -g root -m 0644 \
+    "${SOURCE_DIR}/webui/__init__.py" \
+    "${SOURCE_DIR}/webui/app.py" \
+    "${SOURCE_DIR}/webui/broker.py" \
+    "${SOURCE_DIR}/webui/manage.py" \
+    "${SOURCE_DIR}/webui/security.py" \
+    "${INSTALL_DIR}/webui/"
+  install -o root -g root -m 0644 \
+    "${SOURCE_DIR}/webui/static/index.html" \
+    "${SOURCE_DIR}/webui/static/app.css" \
+    "${SOURCE_DIR}/webui/static/app.js" \
+    "${INSTALL_DIR}/webui/static/"
+}
+
+ensure_service_account() {
+  if ! getent group "$WEB_USER" >/dev/null; then
+    groupadd --system "$WEB_USER"
+  fi
+  if ! getent passwd "$WEB_USER" >/dev/null; then
+    useradd --system \
+      --gid "$WEB_USER" \
+      --home-dir /nonexistent \
+      --shell /usr/sbin/nologin \
+      "$WEB_USER"
+  fi
+}
+
+ensure_config() {
+  local secure_cookie="$1"
+  install -d -o "$WEB_USER" -g "$WEB_USER" -m 0700 "$CONFIG_DIR"
+  if [[ -f "$CONFIG_FILE" ]]; then
+    chown "$WEB_USER:$WEB_USER" "$CONFIG_FILE"
+    chmod 0600 "$CONFIG_FILE"
+    printf 'Preserved existing authentication config: %s\n' "$CONFIG_FILE"
+    return 0
+  fi
+
+  local -a config_args=(
+    /usr/bin/python3 -m webui.manage create-config
+    --output "$CONFIG_FILE"
+    --username admin
+  )
+  if [[ "$secure_cookie" != "yes" ]]; then
+    config_args+=(--allow-http)
+  fi
+  (
+    cd "$INSTALL_DIR"
+    "${config_args[@]}"
+  )
+  chown "$WEB_USER:$WEB_USER" "$CONFIG_FILE"
+  chmod 0600 "$CONFIG_FILE"
+}
+
+install_units() {
+  install -o root -g root -m 0644 \
+    "${SOURCE_DIR}/packaging/systemd/${BROKER_SERVICE}" \
+    "${SYSTEMD_DIR}/${BROKER_SERVICE}"
+  install -o root -g root -m 0644 \
+    "${SOURCE_DIR}/packaging/systemd/${WEB_SERVICE}" \
+    "${SYSTEMD_DIR}/${WEB_SERVICE}"
+  systemctl daemon-reload
+  systemctl enable "$BROKER_SERVICE" "$WEB_SERVICE"
+  systemctl restart "$BROKER_SERVICE"
+  if ! systemctl restart "$WEB_SERVICE"; then
+    if command -v ss >/dev/null 2>&1 && ss -H -lnt 'sport = :8787' | grep -q .; then
+      printf 'Port 8787 is already in use. Stop the manually started Web UI and retry.\n' >&2
+    fi
+    return 1
+  fi
+}
+
+show_status() {
+  local failed="no"
+  local service
+  for service in "$BROKER_SERVICE" "$WEB_SERVICE"; do
+    if systemctl is-active --quiet "$service"; then
+      printf '%-32s active\n' "$service"
+    else
+      printf '%-32s inactive/failed\n' "$service"
+      failed="yes"
+    fi
+  done
+
+  if [[ -S /run/ikev2-web/broker.sock ]]; then
+    printf '%-32s available\n' "broker socket"
+  else
+    printf '%-32s missing\n' "broker socket"
+    failed="yes"
+  fi
+
+  if command -v curl >/dev/null 2>&1 && \
+      curl --fail --silent --show-error --max-time 3 \
+        http://127.0.0.1:8787/api/health >/dev/null; then
+    printf '%-32s healthy\n' "HTTP API"
+  else
+    printf '%-32s unavailable\n' "HTTP API"
+    failed="yes"
+  fi
+
+  [[ "$failed" == "no" ]]
+}
+
+install_webui() {
+  local secure_cookie="no"
+  case "${1:-}" in
+    --secure-cookie) secure_cookie="yes" ;;
+    "") ;;
+    *) usage; exit 2 ;;
+  esac
+
+  require_root
+  require_source_files
+  command -v /usr/bin/python3 >/dev/null 2>&1 || die "/usr/bin/python3 is required."
+  command -v systemctl >/dev/null 2>&1 || die "systemd is required."
+
+  ensure_service_account
+  install_source
+  ensure_config "$secure_cookie"
+  install_units
+
+  if ! show_status; then
+    systemctl --no-pager --full status "$BROKER_SERVICE" "$WEB_SERVICE" || true
+    die "Web UI installation completed, but health verification failed."
+  fi
+
+  printf '\nWeb UI installed successfully.\n'
+  printf 'Open it locally at http://127.0.0.1:8787\n'
+  printf 'For a remote server, use an SSH tunnel:\n'
+  printf '  ssh -L 8787:127.0.0.1:8787 user@server\n'
+}
+
+case "${1:-}" in
+  install)
+    shift
+    install_webui "${1:-}"
+    ;;
+  status)
+    [[ $# -eq 1 ]] || { usage; exit 2; }
+    show_status
+    ;;
+  -h|--help)
+    usage
+    ;;
+  *)
+    usage
+    exit 2
+    ;;
+esac

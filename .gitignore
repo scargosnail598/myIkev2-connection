@@ -3,3 +3,6 @@ captures/
 .idea/
 *.iml
 *.ikev
+__pycache__/
+*.py[cod]
+webui-config.json

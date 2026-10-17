@@ -1,0 +1,27 @@
+[Unit]
+Description=IKEv2 administration Web UI
+After=network.target ikev2-web-broker.service
+Requires=ikev2-web-broker.service
+
+[Service]
+Type=simple
+User=ikev2-web
+Group=ikev2-web
+WorkingDirectory=/opt/ikev2
+ExecStart=/usr/bin/python3 -m webui.app --config /etc/ikev2-web/config.json
+Environment=PYTHONUNBUFFERED=1
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

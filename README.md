@@ -83,6 +83,79 @@ every 30 seconds, so totals survive VPN service and server restarts.
 
 The Windows utility supports both Full Tunnel and Proxy Mode without requiring separate VPN profiles.
 
+## Web UI (phase 3)
+
+The repository includes an authenticated, local-only management dashboard. It
+has no third-party runtime dependencies and always binds to a loopback address.
+Passwords are stored as scrypt hashes, sessions expire, login attempts are
+throttled, and all POST requests after login require a CSRF token.
+
+### Install with working service controls
+
+Running `python3 -m webui.app` by itself starts only the unprivileged frontend;
+service commands remain disabled because the root broker is not running. On the
+Ubuntu VPN server, install or update both components with:
+
+```bash
+sudo ./packaging/install-webui.sh install
+```
+
+The installer prompts for the initial admin password, creates the dedicated
+`ikev2-web` system account, installs only the required Web UI files under
+`/opt/ikev2`, enables both systemd services, and verifies the socket and HTTP
+health endpoint. Existing authentication configuration is preserved on update.
+
+Check it at any time with:
+
+```bash
+./packaging/install-webui.sh status
+```
+
+The HTTP listener remains on loopback. From an administration workstation, use:
+
+```bash
+ssh -L 8787:127.0.0.1:8787 user@server
+```
+
+Then open `http://127.0.0.1:8787`. Pass `--secure-cookie` to the install command
+when an HTTPS reverse proxy will be used instead of a loopback HTTP/SSH tunnel.
+
+### Frontend-only development mode
+
+To preview the frontend without installing system services, create a local
+config and run the unprivileged process from the repository root:
+
+```bash
+python3 -m webui.manage create-config \
+  --output ./webui-config.json \
+  --username admin \
+  --allow-http
+
+python3 -m webui.app --config ./webui-config.json
+```
+
+In this mode, service buttons are intentionally disabled because no privileged
+broker is running. Use the installer above when commands must work.
+
+### Privileged service broker
+
+The Web UI process remains unprivileged. A separate root broker accepts only
+fixed start, stop, and restart operations for the managed StrongSwan, firewall,
+and proxy systemd units. It does not invoke a shell or accept arbitrary command
+arguments. Linux peer credentials restrict the Unix socket to the configured
+Web UI user, and requested/completed operations are appended to
+`/var/log/ikev2-web/audit.log` with mode `0600`.
+
+The installer deploys the reference units from `packaging/systemd/`, installs
+the application at `/opt/ikev2`, stores authentication configuration at
+`/etc/ikev2-web/config.json`, and creates the `ikev2-web` system account.
+
+Run the Web UI tests with:
+
+```bash
+python3 -m unittest tests.test_webui
+```
+
 ---
 
 # 1. Server requirements

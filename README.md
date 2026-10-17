@@ -160,6 +160,27 @@ ssh -L 8787:127.0.0.1:8787 user@server
 Then open `http://127.0.0.1:8787`. Pass `--secure-cookie` to the install command
 when an HTTPS reverse proxy will be used instead of a loopback HTTP/SSH tunnel.
 
+To publish `p.mahanfreenet.ir` through Arvan, run the Web UI workflow with
+`publish_arvan=true`. It installs a dedicated Caddy service as `ikev2-proxy` on
+HTTP port **8080**, restricted to actual Arvan peer IPs and loopback, and proxies
+to `127.0.0.1:8787`. It enables Secure cookies while preserving credentials.
+Configure Arvan's origin as HTTP port 8080, enable browser HTTPS and disable
+caching for this hostname. The CDN-to-origin leg remains unencrypted.
+See [the Persian deployment and rollback guide](WEBUI_ARVAN_GUIDE.md).
+
+The proxy uses only the Caddy binary extracted from the distribution's
+authenticated APT package; it does not install or start the package's default
+service. The dedicated service needs no root privileges or capabilities and
+does not listen on 80/443. Installation requires root, creates a service account
+and systemd unit, and downloads the current Arvan network list over HTTPS.
+It does not change firewall, VPN, DNS or CA trust settings. Existing firewall
+policy must permit Arvan to reach TCP 8080. Subsequent Web UI deployments retain
+the proxy configuration, refresh its binary/network list, and restart it.
+The binary is managed by this installer, so ordinary APT upgrades alone do not
+update it. Manage it with `sudo systemctl start|stop|restart ikev2-web-proxy`.
+Removing `/etc/ikev2-web-proxy/origin.json` and disabling its service stops
+subsequent deployments from enabling the proxy again.
+
 For unattended initial installation, `install --password-stdin` reads the exact
 password from stdin (without a trailing newline). Interactive installation
 continues to prompt twice. Keep passwords out of shell arguments and logs.

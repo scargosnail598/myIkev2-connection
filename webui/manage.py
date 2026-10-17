@@ -66,6 +66,12 @@ def reset_password(args: argparse.Namespace) -> None:
             raise SystemExit("Username must contain between 1 and 64 characters.")
         payload["username"] = args.username
     payload["password_hash"] = read_password_hash(args)
+    write_existing_config(path, payload)
+    print("Web UI credentials updated. Restart ikev2-web.service to apply and invalidate existing sessions.")
+
+
+def write_existing_config(path: Path, payload: dict) -> None:
+    """Replace private configuration atomically while retaining its owner."""
     original = path.stat()
     descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
@@ -81,7 +87,18 @@ def reset_password(args: argparse.Namespace) -> None:
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
-    print("Web UI credentials updated. Restart ikev2-web.service to apply and invalidate existing sessions.")
+
+
+def configure_cookie(args: argparse.Namespace) -> None:
+    path = args.config.resolve()
+    try:
+        AuthConfig.from_file(path)
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["secure_cookie"] = not args.allow_http
+    write_existing_config(path, payload)
+    print("Cookie security updated; credentials preserved. Restart ikev2-web.service to apply.")
 
 
 def parse_args() -> argparse.Namespace:
@@ -104,6 +121,9 @@ def parse_args() -> argparse.Namespace:
     reset.add_argument("--config", type=Path, required=True)
     reset.add_argument("--username", help="optionally replace the existing username")
     reset.add_argument("--password-stdin", action="store_true", help="read the exact new password from stdin")
+    cookie = subparsers.add_parser("configure-cookie", help="change cookie security without changing credentials")
+    cookie.add_argument("--config", type=Path, required=True)
+    cookie.add_argument("--allow-http", action="store_true", help="disable Secure cookies for loopback access")
     return parser.parse_args()
 
 
@@ -113,6 +133,8 @@ def main() -> None:
         create_config(args)
     elif args.command == "reset-password":
         reset_password(args)
+    elif args.command == "configure-cookie":
+        configure_cookie(args)
 
 
 if __name__ == "__main__":

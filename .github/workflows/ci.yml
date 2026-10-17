@@ -32,13 +32,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install ShellCheck
-        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Install ShellCheck and Caddy for proxy integration tests
+        run: sudo apt-get update && sudo apt-get install -y shellcheck caddy
 
       - name: Check Bash scripts
         run: |
-          bash -n ikev2-strongswan-ubuntu.sh ikev2-linux-client.sh packaging/install-webui.sh
-          shellcheck --severity=warning ikev2-strongswan-ubuntu.sh ikev2-linux-client.sh packaging/install-webui.sh
+          bash -n ikev2-strongswan-ubuntu.sh ikev2-linux-client.sh packaging/install-webui.sh packaging/install-arvan-proxy.sh
+          shellcheck --severity=warning ikev2-strongswan-ubuntu.sh ikev2-linux-client.sh packaging/install-webui.sh packaging/install-arvan-proxy.sh
 
       - name: Check Web UI JavaScript syntax
         run: node --check webui/static/app.js

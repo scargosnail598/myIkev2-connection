@@ -1,0 +1,27 @@
+[Unit]
+Description=Caddy origin proxy for the IKEv2 Web UI
+After=network.target ikev2-web.service
+Wants=ikev2-web.service
+
+[Service]
+Type=simple
+User=ikev2-proxy
+Group=ikev2-proxy
+ExecStart=/usr/local/lib/ikev2-web/caddy run --config /etc/ikev2-web-proxy/Caddyfile --adapter caddyfile
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

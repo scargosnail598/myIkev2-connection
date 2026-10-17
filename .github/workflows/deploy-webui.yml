@@ -3,6 +3,10 @@ name: Deploy Production Web UI
 on:
   workflow_dispatch:
     inputs:
+      publish_arvan:
+        description: Publish through unprivileged Caddy on HTTP 8080 for p.mahanfreenet.ir (Arvan peers only)
+        type: boolean
+        default: false
       inspect_origin:
         description: Only inspect origin web listeners and installed web-server tools
         type: boolean
@@ -37,10 +41,11 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          bash -n packaging/install-webui.sh
-          shellcheck packaging/install-webui.sh
+          bash -n packaging/install-webui.sh packaging/install-arvan-proxy.sh
+          shellcheck packaging/install-webui.sh packaging/install-arvan-proxy.sh
           node --check webui/static/app.js
           python3 -B -m unittest discover -s tests -p 'test_webui.py' -v
+          python3 -B -m unittest discover -s tests -p 'test_arvan_proxy.py' -v
 
       - name: Configure SSH
         shell: bash
@@ -69,13 +74,15 @@ jobs:
             -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" bash -s <<'REMOTE'
           set -Eeuo pipefail
           printf 'Origin web listeners:\n'
-          ss -H -lnt '( sport = :80 or sport = :443 or sport = :8787 )'
+          ss -H -lnt '( sport = :80 or sport = :443 or sport = :8080 or sport = :8787 )'
           printf 'Installed web tools:\n'
+          cat /etc/os-release
+          apt-cache policy caddy
           for tool in nginx caddy apache2 certbot; do
             command -v "$tool" || true
           done
           printf 'Web service state:\n'
-          systemctl is-active nginx.service caddy.service apache2.service ikev2-web.service || true
+          systemctl is-active nginx.service caddy.service apache2.service ikev2-web.service ikev2-web-proxy.service || true
           printf 'Public origin HTTPS health:\n'
           curl --silent --show-error --max-time 5 --resolve p.mahanfreenet.ir:443:127.0.0.1 \
             --output /dev/null --write-out 'HTTP %{http_code}\n' https://p.mahanfreenet.ir/api/health || true
@@ -87,6 +94,7 @@ jobs:
         env:
           INITIAL_PASSWORD: ${{ secrets.PRODUCTION_WEBUI_PASSWORD }}
           RESET_ADMIN_PASSWORD: ${{ inputs.reset_admin_password }}
+          PUBLISH_ARVAN: ${{ inputs.publish_arvan }}
         run: |
           # Staging paths are deliberately expanded locally after validation.
           # shellcheck disable=SC2029
@@ -116,7 +124,7 @@ jobs:
           git archive --format=tar.gz --output="$RUNNER_TEMP/ikev2-web.tar.gz" HEAD webui packaging
           ssh "${ssh_args[@]}" "$remote" "tar -xz -C '$remote_stage'" < "$RUNNER_TEMP/ikev2-web.tar.gz"
           # Publish root-owned sources to the fixed path allowed by sudoers.
-          ssh "${ssh_args[@]}" "$remote" bash -s -- "$remote_stage" <<'REMOTE'
+          ssh "${ssh_args[@]}" "$remote" bash -s -- "$remote_stage" "$PUBLISH_ARVAN" <<'REMOTE'
           set -Eeuo pipefail
           source_dir="$1"
           deploy_dir=/opt/ikev2-web-deploy
@@ -133,9 +141,19 @@ jobs:
           sudo -n /usr/bin/install -o root -g root -m 0644 \
             "$source_dir/packaging/systemd/ikev2-web.service" \
             "$source_dir/packaging/systemd/ikev2-web-broker.service" \
+            "$source_dir/packaging/systemd/ikev2-web-proxy.service" \
             "$deploy_dir/packaging/systemd/"
+          sudo -n /usr/bin/install -o root -g root -m 0644 \
+            "$source_dir/packaging/render-arvan-proxy.py" "$deploy_dir/packaging/"
+          sudo -n /usr/bin/install -o root -g root -m 0755 \
+            "$source_dir/packaging/install-arvan-proxy.sh" "$deploy_dir/packaging/"
           sudo -n /usr/bin/install -o root -g root -m 0755 \
             "$source_dir/packaging/install-webui.sh" "$deploy_dir/packaging/install-webui.sh"
+          if [[ "$2" == "true" ]]; then
+            sudo -n /usr/bin/install -d -o root -g root -m 0755 /etc/ikev2-web-proxy
+            sudo -n /usr/bin/install -o root -g root -m 0644 \
+              "$source_dir/packaging/arvan-origin.json" /etc/ikev2-web-proxy/origin.json
+          fi
           REMOTE
           # The initial password travels over SSH stdin, never in arguments or logs.
           # On updates the installer preserves the existing authentication config.
@@ -158,11 +176,34 @@ jobs:
             # Verify the real login and authenticated dashboard without logging credentials or tokens.
             python3 -c 'import json, os; print(json.dumps({"username": "admin", "password": os.environ["INITIAL_PASSWORD"]}))' | \
               ssh "${ssh_args[@]}" "$remote" \
-                "umask 077; curl --fail --silent --show-error --max-time 10 --output /dev/null --cookie-jar '$remote_stage/cookies' --header 'Content-Type: application/json' --data-binary @- http://127.0.0.1:8787/api/auth/login"
+                "umask 077; curl --fail --silent --show-error --max-time 10 --output /dev/null --cookie-jar '$remote_stage/cookies' --header 'Content-Type: application/json' --data-binary @- http://localhost:8787/api/auth/login"
             ssh "${ssh_args[@]}" "$remote" \
-              "curl --fail --silent --show-error --max-time 15 --output /dev/null --cookie '$remote_stage/cookies' http://127.0.0.1:8787/api/dashboard"
+              "curl --fail --silent --show-error --max-time 15 --output /dev/null --cookie '$remote_stage/cookies' http://localhost:8787/api/dashboard"
             printf 'Admin login and authenticated dashboard verified.\n'
           fi
+
+      - name: Verify public HTTPS through Arvan without credentials
+        if: ${{ !inputs.inspect_origin && inputs.publish_arvan }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -B - <<'PY'
+          from urllib.error import HTTPError
+          from urllib.request import urlopen
+
+          base = "https://p.mahanfreenet.ir"
+          with urlopen(base + "/api/health", timeout=30) as response:
+              assert response.status == 200
+              assert "no-store" in response.headers.get("Cache-Control", "")
+              assert response.headers.get("X-Cache", "").upper() not in ("HIT", "STALE"), "Disable CDN caching"
+          try:
+              urlopen(base + "/api/dashboard", timeout=30)
+          except HTTPError as error:
+              assert error.code == 401, f"Expected unauthenticated 401, got {error.code}"
+          else:
+              raise SystemExit("Dashboard was accessible without authentication")
+          print("Public HTTPS health and unauthenticated dashboard denial verified; no credentials sent.")
+          PY
 
       - name: Remove SSH credentials from runner
         if: always()

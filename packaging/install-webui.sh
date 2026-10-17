@@ -50,7 +50,10 @@ require_source_files() {
     "webui/static/app.css" \
     "webui/static/app.js" \
     "packaging/systemd/${BROKER_SERVICE}" \
-    "packaging/systemd/${WEB_SERVICE}"; do
+    "packaging/systemd/${WEB_SERVICE}" \
+    "packaging/systemd/ikev2-web-proxy.service" \
+    "packaging/install-arvan-proxy.sh" \
+    "packaging/render-arvan-proxy.py"; do
     [[ -f "${SOURCE_DIR}/${path}" ]] || die "Required source file is missing: ${path}"
   done
 }
@@ -219,7 +222,15 @@ install_webui() {
     die "Web UI installation completed, but health verification failed."
   fi
 
+  if [[ -f /etc/ikev2-web-proxy/origin.json ]]; then
+    bash "${SCRIPT_DIR}/install-arvan-proxy.sh"
+  fi
+
   printf '\nWeb UI installed successfully.\n'
+  if [[ -f /etc/ikev2-web-proxy/origin.json ]]; then
+    /usr/bin/python3 -c 'import json; c=json.load(open("/etc/ikev2-web-proxy/origin.json")); print("Open https://" + c["hostname"] + " through your CDN.")'
+    return 0
+  fi
   printf 'Open it locally at http://127.0.0.1:8787\n'
   printf 'For a remote server, use an SSH tunnel:\n'
   printf '  ssh -L 8787:127.0.0.1:8787 user@server\n'

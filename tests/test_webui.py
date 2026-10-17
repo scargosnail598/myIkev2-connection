@@ -354,6 +354,26 @@ class WebServerTests(unittest.TestCase):
 
 
 class ConfigCommandTests(unittest.TestCase):
+    def test_configure_cookie_preserves_credentials_owner_and_extra_settings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            self.assertEqual(self.create_config(path, PASSWORD).returncode, 0)
+            payload = json.loads(path.read_text())
+            payload["extra"] = "preserved"
+            path.write_text(json.dumps(payload))
+            original = path.stat()
+            for options, secure in [((), True), (("--allow-http",), False)]:
+                result = subprocess.run(
+                    [sys.executable, "-B", "-m", "webui.manage", "configure-cookie",
+                     "--config", str(path), *options], text=True, capture_output=True, cwd=REPO,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                expected = dict(payload, secure_cookie=secure)
+                self.assertEqual(json.loads(path.read_text()), expected)
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+                self.assertEqual((path.stat().st_uid, path.stat().st_gid), (original.st_uid, original.st_gid))
+                self.assertEqual(len(list(path.parent.iterdir())), 1)
+
     def reset_password(self, path, password, *options):
         return subprocess.run(
             [sys.executable, "-B", "-m", "webui.manage", "reset-password",

@@ -106,9 +106,14 @@ dashboard visible until the server confirms logout.
 The Overview's **CPU, memory & network** cards show current host readings and
 SVG charts of the last five minutes. Readings refresh every five seconds while
 Overview is visible and pause during confirmations, account forms, service
-commands, and sign-out. Chart history is shared in broker memory, sampled only
-on requests (at most once every five seconds), and resets when the broker
-restarts. Missing samples appear as gaps; no historical values are invented.
+commands, and sign-out. A dedicated collector in the broker records samples
+every five seconds even when no browser is connected or Overview is hidden.
+HTTP requests read the shared buffer and do not trigger or delay sampling.
+Chart history is a rolling five-minute buffer of at most 61 samples in broker
+RAM; older samples expire, and restarting the broker clears this history.
+It is not written to disk. Missing samples appear as gaps; no historical values
+are invented. If the collector's latest sample is over 15 seconds old, the API
+reports metrics as unavailable and the UI keeps the last readings as stale.
 The first CPU and traffic rates require a second sample. A failed request keeps
 the last readings with a stale-data notice; unavailable individual readings show
 an em dash rather than zero.
@@ -128,8 +133,9 @@ changes, counter resets, and sample gaps longer than 15 seconds restart the
 rate baseline. The API requires login, accepts no paths or command arguments,
 and uses no new broker privileges, subprocesses, runtime dependencies, or
 persistent storage. Installation verifies the metrics endpoint through the
-unprivileged broker client; rolling back the application discards chart history
-without changing VPN, routing, firewall, DNS, or certificate settings.
+unprivileged broker client and performs an 11-second no-request probe to verify
+that samples accumulate independently. Rolling back the application discards
+chart history without changing VPN, routing, firewall, DNS, or certificate settings.
 
 The **Diagnostics** page runs eight local, read-only checks when opened or when
 **Run checks** is selected: installer-state presence; VPN, firewall, and optional

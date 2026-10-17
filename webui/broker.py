@@ -336,6 +336,7 @@ class BrokerServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
         super().__init__(str(socket_path), BrokerRequestHandler)
         os.chown(socket_path, 0 if os.geteuid() == 0 else os.geteuid(), socket_gid)
         os.chmod(socket_path, 0o660)
+        self.metrics.start()
 
     @staticmethod
     def peer_credentials(connection: socket.socket) -> tuple[int, int, int]:
@@ -343,6 +344,7 @@ class BrokerServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
         return struct.unpack("3i", raw)
 
     def server_close(self) -> None:
+        self.metrics.stop()
         super().server_close()
         try:
             self.socket_path.unlink()

@@ -1,4 +1,4 @@
-"""Read-only, request-sampled host metrics with bounded in-memory history."""
+"""Continuously sampled host metrics with bounded in-memory history."""
 
 from collections import deque
 from pathlib import Path
@@ -31,6 +31,9 @@ class MetricsReader:
         self.previous = None
         self.latest = None
         self.history = deque(maxlen=WINDOW // INTERVAL + 1)
+        self._lifecycle_lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread = None
 
     def _cpu(self):
         try:
@@ -110,36 +113,74 @@ class MetricsReader:
             pass
         return network
 
+    def start(self):
+        """Start one collector for this broker, independent of HTTP requests."""
+        with self._lifecycle_lock:
+            if self._thread is not None and self._thread.is_alive():
+                return
+            self._stop.clear()
+            self.collect()
+            self._thread = threading.Thread(target=self._collect_loop, name="ikev2-metrics", daemon=True)
+            self._thread.start()
+
+    def stop(self):
+        with self._lifecycle_lock:
+            self._stop.set()
+            if self._thread is not None:
+                self._thread.join(timeout=2)
+
+    def _collect_loop(self):
+        deadline = self.monotonic() + INTERVAL
+        while not self._stop.wait(max(0, deadline - self.monotonic())):
+            self.collect()
+            # Stay on the schedule despite small timing differences between wakes.
+            # A delayed wake records a real gap instead of backfilling invented data.
+            deadline += INTERVAL
+            now = self.monotonic()
+            if deadline <= now:
+                deadline = now + INTERVAL
+
+    def collect(self):
+        """Record one actual sample; called by the server-side collector only."""
+        with self.lock:
+            self._collect_locked(self.monotonic())
+
+    def _collect_locked(self, now):
+        counters, cores = self._cpu()
+        memory, network = self._memory(), self._network()
+        percent = None
+        previous = self.previous
+        elapsed = now - previous["time"] if previous else 0
+        if previous and 0 < elapsed <= INTERVAL * 3:
+            before = previous["cpu"]
+            if counters is not None and before is not None and cores == previous["cores"]:
+                deltas = [current - old for current, old in zip(counters, before)]
+                total = sum(deltas)
+                if total > 0 and all(value >= 0 for value in deltas):
+                    percent = round((total - deltas[3] - deltas[4]) / total * 100, 2)
+            old_network = previous["network"]
+            if network["interface"] == old_network["interface"]:
+                for key in ("rx", "tx"):
+                    current, old = network[key + "_bytes"], old_network[key + "_bytes"]
+                    if current is not None and old is not None and current >= old:
+                        network[key + "_bytes_per_second"] = round((current - old) / elapsed, 2)
+        self.latest = {"sampled_at": self.clock(), "cpu": {"percent": percent, "cores": cores},
+                       "memory": memory, "network": network}
+        point = {"cpu_percent": percent, "memory_percent": memory["percent"],
+                 "interface": network["interface"], "rx_bytes_per_second": network["rx_bytes_per_second"],
+                 "tx_bytes_per_second": network["tx_bytes_per_second"]}
+        self.history.append((now, point))
+        self.previous = {"time": now, "cpu": counters, "cores": cores, "network": network.copy()}
+
     def snapshot(self):
+        """Read the buffer without moving the collector's sampling schedule."""
         with self.lock:
             now = self.monotonic()
-            if self.previous is None or now - self.previous["time"] >= INTERVAL:
-                counters, cores = self._cpu()
-                memory, network = self._memory(), self._network()
-                percent = None
-                previous = self.previous
-                elapsed = now - previous["time"] if previous else 0
-                if previous and 0 < elapsed <= INTERVAL * 3:
-                    before = previous["cpu"]
-                    if counters is not None and before is not None and cores == previous["cores"]:
-                        deltas = [current - old for current, old in zip(counters, before)]
-                        total = sum(deltas)
-                        if total > 0 and all(value >= 0 for value in deltas):
-                            percent = round((total - deltas[3] - deltas[4]) / total * 100, 2)
-                    old_network = previous["network"]
-                    if network["interface"] == old_network["interface"]:
-                        for key in ("rx", "tx"):
-                            current, old = network[key + "_bytes"], old_network[key + "_bytes"]
-                            if current is not None and old is not None and current >= old:
-                                network[key + "_bytes_per_second"] = round((current - old) / elapsed, 2)
-                self.latest = {"sampled_at": self.clock(), "cpu": {"percent": percent, "cores": cores},
-                               "memory": memory, "network": network}
-                point = {"cpu_percent": percent, "memory_percent": memory["percent"],
-                         "interface": network["interface"], "rx_bytes_per_second": network["rx_bytes_per_second"],
-                         "tx_bytes_per_second": network["tx_bytes_per_second"]}
-                self.history.append((now, point))
-                self.previous = {"time": now, "cpu": counters, "cores": cores, "network": network.copy()}
+            if self.latest is None:
+                self._collect_locked(now)
             while self.history and now - self.history[0][0] > WINDOW:
                 self.history.popleft()
-            return {"ok": True, **self.latest, "interval_seconds": INTERVAL, "window_seconds": WINDOW,
+            age = max(0, now - self.previous["time"])
+            return {"ok": age <= INTERVAL * 3, **self.latest, "sample_age_seconds": round(age, 3),
+                    "interval_seconds": INTERVAL, "window_seconds": WINDOW,
                     "history": [{"age_seconds": round(now - timestamp, 3), **point} for timestamp, point in self.history]}

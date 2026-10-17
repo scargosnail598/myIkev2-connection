@@ -217,6 +217,26 @@ sys.exit(0 if status["capabilities"]["service_actions"] and isinstance(status["i
   [[ "$failed" == "no" ]]
 }
 
+verify_metrics_collection() {
+  runuser -u "$WEB_USER" -- /usr/bin/python3 -B -c '
+import sys
+import time
+sys.path.insert(0, "/opt/ikev2")
+from webui.broker import BrokerClient
+broker = BrokerClient()
+first = broker.metrics()
+if first.get("ok") is not True:
+    raise SystemExit("Metrics collector is unavailable.")
+# No metrics requests from this probe while the server-side collector works.
+time.sleep(11)
+latest = broker.metrics()
+recent = [point for point in latest.get("history", []) if point.get("age_seconds", 300) < 10.5]
+if latest.get("ok") is not True or len(recent) < 2:
+    raise SystemExit("Metrics did not accumulate independently of requests.")
+print("Continuous metrics buffer verified: at least two new samples without requests from the deployment probe.")
+'
+}
+
 install_webui() {
   local secure_cookie="no"
   local password_stdin="no"
@@ -258,6 +278,8 @@ install_webui() {
     systemctl --no-pager --full status "$BROKER_SERVICE" "$WEB_SERVICE" || true
     die "Web UI installation completed, but health verification failed."
   fi
+
+  verify_metrics_collection
 
   if [[ -f /etc/ikev2-web-proxy/origin.json ]]; then
     bash "${SCRIPT_DIR}/install-arvan-proxy.sh"

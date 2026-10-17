@@ -66,6 +66,8 @@ jobs:
             -p "$DEPLOY_PORT"
           )
           remote="$DEPLOY_USER@$DEPLOY_HOST"
+          # Report the effective deployment policy before changing server files.
+          ssh "${ssh_args[@]}" "$remote" 'sudo -n -l'
           remote_stage=$(ssh "${ssh_args[@]}" "$remote" 'mktemp -d /tmp/ikev2-web.XXXXXXXX')
           [[ "$remote_stage" =~ ^/tmp/ikev2-web\.[a-zA-Z0-9]+$ ]]
           cleanup() {

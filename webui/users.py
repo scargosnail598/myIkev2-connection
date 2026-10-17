@@ -163,11 +163,19 @@ class UserStore:
 
     def check(self) -> dict:
         parse_users(self.snapshot())
+        active = False
         for command, allowed in [(["/usr/bin/systemctl", "is-active", "--quiet", "strongswan-starter.service"], {0, 3}),
                                  (["/usr/sbin/ipsec", "--version"], {0})]:
             result = self.runner(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5, check=False)
             if result.returncode not in allowed:
                 raise UserError("helper_unavailable", "The account helper cannot access required VPN tools.", 503)
+            if "is-active" in command:
+                active = result.returncode == 0
+        if active:
+            result = self.runner(["/usr/sbin/ipsec", "status"], stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL, timeout=5, check=False)
+            if result.returncode != 0:
+                raise UserError("helper_unavailable", "The account helper cannot reach the VPN control socket.", 503)
         return {"ok": True, "checked": True}
 
 

@@ -188,6 +188,7 @@ class UserStoreTests(unittest.TestCase):
         self.assertTrue(self.store.check()["checked"])
         self.assertEqual(self.path.read_bytes(), ORIGINAL)
         self.assertFalse(any("rereadsecrets" in command for command in self.commands))
+        self.assertIn(["/usr/sbin/ipsec", "status"], self.commands)
 
     def test_read_only_helper_check_uses_private_queue_and_cleans_it(self):
         queue = self.directory / "queue"

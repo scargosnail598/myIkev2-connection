@@ -92,6 +92,44 @@
           </article>
         </section>
 
+        <section class="metrics-section" aria-labelledby="metrics-title">
+          <div class="section-title">
+            <div><p>LIVE SERVER RESOURCES</p><h2 id="metrics-title">CPU, memory &amp; network</h2></div>
+            <button id="metrics-refresh" class="secondary-button" type="button">Refresh metrics</button>
+          </div>
+          <div id="metrics-error" class="broker-notice" role="alert" hidden></div>
+          <div id="metrics-grid" class="resource-grid" aria-busy="false">
+            <article class="resource-card">
+              <div class="resource-heading"><h3>CPU usage</h3><span class="resource-tag">ALL CORES</span></div>
+              <strong id="cpu-value" class="resource-value">—</strong>
+              <p id="cpu-copy" class="resource-copy">Waiting for the first sample</p>
+              <div class="chart-scale"><span>100%</span></div>
+              <svg id="cpu-chart" class="resource-chart cpu-chart" viewBox="0 0 400 112" role="img" aria-label="CPU usage over the last five minutes"></svg>
+              <p id="cpu-chart-empty" class="chart-empty">Collecting samples…</p>
+              <div class="chart-time"><span>5 min ago</span><span>Now</span></div>
+            </article>
+            <article class="resource-card">
+              <div class="resource-heading"><h3>Memory usage</h3><span class="resource-tag">RAM</span></div>
+              <strong id="memory-value" class="resource-value">—</strong>
+              <p id="memory-copy" class="resource-copy">Waiting for memory information</p>
+              <div class="chart-scale"><span>100%</span></div>
+              <svg id="memory-chart" class="resource-chart memory-chart" viewBox="0 0 400 112" role="img" aria-label="Memory usage over the last five minutes"></svg>
+              <p id="memory-chart-empty" class="chart-empty">Collecting samples…</p>
+              <div class="chart-time"><span>5 min ago</span><span>Now</span></div>
+            </article>
+            <article class="resource-card network-card">
+              <div class="resource-heading"><h3>Network traffic</h3><span id="network-interface" class="resource-tag">—</span></div>
+              <div class="network-rates"><div><span class="network-label rx">Received</span><strong id="network-rx">—</strong></div><div><span class="network-label tx">Sent</span><strong id="network-tx">—</strong></div></div>
+              <p id="network-copy" class="resource-copy">Waiting for interface counters</p>
+              <div class="chart-scale"><span id="network-scale">—</span></div>
+              <svg id="network-chart" class="resource-chart network-chart" viewBox="0 0 400 112" role="img" aria-label="Received and sent traffic over the last five minutes"></svg>
+              <p id="network-chart-empty" class="chart-empty">Collecting samples…</p>
+              <div class="chart-time"><span>5 min ago</span><span>Now</span></div>
+            </article>
+          </div>
+          <div class="metrics-foot"><span>Updates every 5 seconds while Overview is visible. Network includes all traffic on the displayed interface.</span><span id="metrics-updated">Awaiting first sample</span></div>
+        </section>
+
         <section class="services-section">
           <div class="section-title">
             <div><p>YOUR INFRASTRUCTURE</p><h2>Service health</h2></div>

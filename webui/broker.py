@@ -20,6 +20,7 @@ import threading
 from typing import Callable
 
 from webui.diagnostics import DiagnosticsReader
+from webui.metrics import MetricsReader
 from webui.sessions import SessionReader
 from webui.users import UserError, UserManager, validate_change
 
@@ -219,7 +220,13 @@ class BrokerRequestHandler(socketserver.StreamRequestHandler):
         if action == "ping":
             installed = installation_state()
             self._reply({"ok": True, "version": PROTOCOL_VERSION, "installed": installed,
-                         "user_management": installed is True, "session_monitoring": installed is True, "diagnostics": True})
+                         "user_management": installed is True, "session_monitoring": installed is True, "diagnostics": True, "metrics": True})
+            return
+        if action == "metrics":
+            if set(request) != {"version", "action"}:
+                self._reply({"ok": False, "status": 400, "message": "Metrics accepts no command arguments."})
+                return
+            self._reply(self.server.metrics.snapshot())
             return
         if action == "diagnostics":
             if set(request) != {"version", "action"}:
@@ -315,6 +322,7 @@ class BrokerServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
         users: UserManager | None = None,
         sessions: SessionReader | None = None,
         diagnostics: DiagnosticsReader | None = None,
+        metrics: MetricsReader | None = None,
     ):
         self.socket_path = socket_path
         self.allowed_uid = allowed_uid
@@ -323,6 +331,7 @@ class BrokerServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
         self.users = users or UserManager()
         self.sessions = sessions or SessionReader()
         self.diagnostics = diagnostics or DiagnosticsReader()
+        self.metrics = metrics or MetricsReader()
         self._prepare_socket_path(socket_gid)
         super().__init__(str(socket_path), BrokerRequestHandler)
         os.chown(socket_path, 0 if os.geteuid() == 0 else os.geteuid(), socket_gid)
@@ -399,6 +408,9 @@ class BrokerClient:
 
     def list_users(self, search: str = "", page: int = 0) -> dict:
         return self.request({"action": "users_list", "search": search, "page": page})
+
+    def metrics(self) -> dict:
+        return self.request({"action": "metrics"})
 
     def diagnostics(self) -> dict:
         return self.request({"action": "diagnostics"}, timeout=25)

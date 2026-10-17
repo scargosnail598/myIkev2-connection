@@ -72,10 +72,12 @@ class SystemStatusProvider:
         user_management = False
         session_monitoring = False
         diagnostics = False
+        metrics = False
         if self._broker:
             try:
                 status = self._broker.status()
                 broker_available = status.get("ok") is True
+                metrics = broker_available and status.get("metrics") is True
                 diagnostics = broker_available and status.get("diagnostics") is True
                 session_monitoring = broker_available and status.get("session_monitoring") is True
                 user_management = broker_available and status.get("user_management") is True
@@ -93,6 +95,7 @@ class SystemStatusProvider:
                 "session_management": False,
                 "session_monitoring": session_monitoring,
                 "diagnostics": diagnostics,
+                "metrics": metrics,
             },
         }
 
@@ -129,6 +132,19 @@ class Ikev2RequestHandler(BaseHTTPRequestHandler):
             if self._require_session() is None:
                 return
             self._send_json(self.provider.dashboard())
+            return
+        if path == "/api/metrics":
+            if self._require_session() is None:
+                return
+            try:
+                result = self.broker.metrics()
+            except BrokerError:
+                self._send_json({"message": "Server metrics are unavailable. Try refreshing metrics."}, HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            if result.get("ok") is True:
+                self._send_json(result)
+            else:
+                self._send_json({"message": "Server metrics could not be read."}, HTTPStatus.SERVICE_UNAVAILABLE)
             return
         if path == "/api/diagnostics":
             if self._require_session() is None:

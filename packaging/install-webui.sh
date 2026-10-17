@@ -49,6 +49,7 @@ require_source_files() {
     "webui/users.py" \
     "webui/sessions.py" \
     "webui/diagnostics.py" \
+    "webui/metrics.py" \
     "packaging/systemd/ikev2-web-users-apply.service" \
     "webui/static/index.html" \
     "webui/static/app.css" \
@@ -77,6 +78,7 @@ install_source() {
     "${SOURCE_DIR}/webui/users.py" \
     "${SOURCE_DIR}/webui/sessions.py" \
     "${SOURCE_DIR}/webui/diagnostics.py" \
+    "${SOURCE_DIR}/webui/metrics.py" \
     "${INSTALL_DIR}/webui/"
   install -o root -g root -m 0644 \
     "${SOURCE_DIR}/webui/static/index.html" \
@@ -186,7 +188,15 @@ valid = (report.get("ok") is True and isinstance(checks, list) and len(checks) =
 if valid:
     print("Read-only diagnostics: " + ", ".join("{}={}".format(state, sum(item["status"] == state for item in checks))
                                             for state in ("pass", "warn", "fail", "unknown")))
-sys.exit(0 if status["capabilities"]["service_actions"] and isinstance(status["installed"], bool) and valid else 1)
+metrics = broker.metrics()
+metrics_valid = (metrics.get("ok") is True and isinstance(metrics.get("cpu"), dict)
+                 and isinstance(metrics.get("memory"), dict) and isinstance(metrics.get("network"), dict)
+                 and isinstance(metrics.get("history"), list) and 1 <= len(metrics["history"]) <= 61)
+if metrics_valid:
+    print("Read-only metrics: cpu={}, memory={}, network={}".format(
+        metrics["cpu"].get("cores") is not None, metrics["memory"].get("total_bytes") is not None,
+        metrics["network"].get("rx_bytes") is not None))
+sys.exit(0 if status["capabilities"]["service_actions"] and isinstance(status["installed"], bool) and valid and metrics_valid else 1)
 '; then
       printf '%-32s verified\n' "unprivileged dashboard/broker"
     else

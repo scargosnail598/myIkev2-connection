@@ -103,6 +103,34 @@ Service commands require a confirmation explaining their connection impact,
 show progress, and are never automatically retried. A failed sign-out keeps the
 dashboard visible until the server confirms logout.
 
+The Overview's **CPU, memory & network** cards show current host readings and
+SVG charts of the last five minutes. Readings refresh every five seconds while
+Overview is visible and pause during confirmations, account forms, service
+commands, and sign-out. Chart history is shared in broker memory, sampled only
+on requests (at most once every five seconds), and resets when the broker
+restarts. Missing samples appear as gaps; no historical values are invented.
+The first CPU and traffic rates require a second sample. A failed request keeps
+the last readings with a stale-data notice; unavailable individual readings show
+an em dash rather than zero.
+
+CPU is the aggregate non-idle percentage across logical CPUs, excluding I/O
+wait and without double-counting guest time. RAM used is `MemTotal - MemAvailable`,
+which allows reclaimable cache. These counters come from Linux's
+[/proc interfaces](https://docs.kernel.org/filesystems/proc.html). Network RX/TX
+rates use byte-counter deltas from
+[/proc/net/dev](https://docs.kernel.org/networking/statistics.html), and totals
+are since the interface counters began, not persisted usage accounting. They
+include **all interface traffic**, not only VPN clients. The installer state's
+validated `OUT_IF` selects the interface; if unset, the lowest-metric IPv4 main
+default route is used. State is parsed as data and never executed. If a configured
+interface is missing or invalid, network readings are unavailable. Interface
+changes, counter resets, and sample gaps longer than 15 seconds restart the
+rate baseline. The API requires login, accepts no paths or command arguments,
+and uses no new broker privileges, subprocesses, runtime dependencies, or
+persistent storage. Installation verifies the metrics endpoint through the
+unprivileged broker client; rolling back the application discards chart history
+without changing VPN, routing, firewall, DNS, or certificate settings.
+
 The **Diagnostics** page runs eight local, read-only checks when opened or when
 **Run checks** is selected: installer-state presence; VPN, firewall, and optional
 SOCKS5 service states; the loaded `ikev2-eap` connection; local UDP 500/4500

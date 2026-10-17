@@ -20,6 +20,15 @@ const snapshot = () => ({
   ],
 });
 
+const resourceSnapshot = () => ({
+  ok: true, sampled_at: 1792238400, interval_seconds: 5, window_seconds: 300,
+  cpu: { percent: 42.5, cores: 2 }, memory: { percent: 62.5, used_bytes: 5368709120, total_bytes: 8589934592 },
+  network: { interface: "ens3", source: "configured", rx_bytes: 12884901888, tx_bytes: 6442450944, rx_bytes_per_second: 1048576, tx_bytes_per_second: 524288 },
+  history: Array.from({ length: 61 }, (_, index) => ({ age_seconds: (60 - index) * 5, cpu_percent: 25 + 17 * Math.sin(index / 4) ** 2,
+    memory_percent: 58 + index / 15, interface: "ens3", rx_bytes_per_second: 500000 + 500000 * Math.sin(index / 5) ** 2,
+    tx_bytes_per_second: 200000 + 300000 * Math.cos(index / 4) ** 2 })),
+});
+
 before(async () => {
   server = http.createServer(async (request, response) => {
     const assets = { "/": ["index.html", "text/html"], "/assets/app.js": ["app.js", "text/javascript"], "/assets/app.css": ["app.css", "text/css"] };
@@ -49,7 +58,7 @@ async function fixture(t, options = {}) {
   const errors = [];
   const state = { authenticated: true, data: snapshot(), dashboardFailure: false, logoutFailure: false, sessionFailure: false, loginLimited: false, commandFailure: false, ...options };
   state.userNames = options.userNames || ["alice", "bob", "carol"];
-  const calls = { dashboard: 0, commands: 0, logout: 0, sessions: 0, diagnostics: 0, userChanges: [] };
+  const calls = { dashboard: 0, commands: 0, logout: 0, sessions: 0, diagnostics: 0, metrics: 0, userChanges: [] };
   const session = () => ({ authenticated: state.authenticated, username: state.authenticated ? "browser-test-admin" : null, csrf_token: state.authenticated ? "browser-test-csrf" : null });
   page.on("pageerror", (error) => errors.push(error.message));
   await page.route("**/api/**", async (route) => {
@@ -76,6 +85,13 @@ async function fixture(t, options = {}) {
       if (state.loginLimited) return json({ message: "Too many failed attempts." }, 429, { "Retry-After": "120" });
       state.authenticated = true;
       return json(session());
+    }
+    if (endpoint === "/api/metrics") {
+      calls.metrics += 1;
+      if (state.metricsHold) await state.metricsHold;
+      if (!state.authenticated) return json({ message: "Sign in to continue." }, 401);
+      if (state.metricsFailure) return json({ message: "Server readings unavailable." }, 503);
+      return json(state.resourceData || resourceSnapshot());
     }
     if (endpoint === "/api/diagnostics") {
       calls.diagnostics += 1;
@@ -559,4 +575,105 @@ test("diagnostics handles unavailable status and session expiry", async (t) => {
   state.authenticated = false;
   await page.locator("#diagnostics-refresh").click();
   await page.locator("#login-view").waitFor({ state: "visible" });
+});
+
+
+test("Overview graphs show real API readings and poll only while Overview is visible", async (t) => {
+  const { page, calls } = await fixture(t);
+  await waitText(page, "#cpu-value", "42.5%");
+  await waitText(page, "#memory-value", "62.5%");
+  await waitText(page, "#memory-copy", "5 GiB used of 8 GiB");
+  await waitText(page, "#network-rx", "1 MiB/s");
+  await waitText(page, "#network-tx", "512 KiB/s");
+  assert.equal(await page.locator("#network-interface").textContent(), "ens3");
+  assert.equal(await page.locator("#cpu-chart .chart-line").count(), 1);
+  assert.equal(await page.locator("#network-chart .chart-line").count(), 2);
+  assert.match(await page.locator("#cpu-chart").getAttribute("aria-label"), /42.5%/);
+  const before = calls.metrics;
+  await page.clock.fastForward(5000);
+  await page.waitForFunction(() => !document.querySelector("#metrics-refresh").disabled);
+  assert.equal(calls.metrics, before + 1);
+  if (process.env.UI_SCREENSHOT_DIR) {
+    await fs.mkdir(process.env.UI_SCREENSHOT_DIR, { recursive: true });
+    await page.screenshot({ path: path.join(process.env.UI_SCREENSHOT_DIR, "resources-desktop.png"), fullPage: true });
+  }
+  await page.locator('[data-view="users"]').click();
+  await waitText(page, "#users-summary", "3 VPN accounts");
+  const hiddenCount = calls.metrics;
+  await page.clock.fastForward(30000);
+  assert.equal(calls.metrics, hiddenCount);
+});
+
+test("metrics keep stale readings on errors and recover without enabling service commands", async (t) => {
+  const { page, state, calls } = await fixture(t);
+  await waitText(page, "#cpu-value", "42.5%");
+  state.metricsFailure = true;
+  await page.locator("#metrics-refresh").click();
+  await waitText(page, "#metrics-error", "Last readings");
+  assert.equal(await page.locator("#cpu-value").textContent(), "42.5%");
+  assert.equal(await page.locator("#cpu-chart .chart-line").count(), 1);
+  state.metricsFailure = false;
+  await page.locator("#metrics-refresh").click();
+  await page.locator("#metrics-error").waitFor({ state: "hidden" });
+  assert.equal(calls.commands, 0);
+});
+
+test("metrics distinguish warming up, zero readings, and missing readings on mobile", async (t) => {
+  const data = resourceSnapshot();
+  data.cpu.percent = null;
+  data.network.rx_bytes_per_second = null;
+  data.network.tx_bytes_per_second = null;
+  data.history = [{ age_seconds: 0, cpu_percent: null, memory_percent: 62.5, interface: "ens3", rx_bytes_per_second: null, tx_bytes_per_second: null }];
+  const { page, state } = await fixture(t, { resourceData: data, viewport: { width: 320, height: 844 } });
+  await waitText(page, "#cpu-copy", "Collecting CPU");
+  assert.equal(await page.locator("#cpu-value").textContent(), "—");
+  assert.equal(await page.locator("#cpu-chart-empty").isVisible(), true);
+  assert.equal(await page.locator("#metrics-error").isVisible(), false);
+  state.resourceData = resourceSnapshot();
+  state.resourceData.cpu.percent = 0;
+  state.resourceData.network.rx_bytes_per_second = 0;
+  await page.locator("#metrics-refresh").click();
+  await waitText(page, "#cpu-value", "0%");
+  await waitText(page, "#network-rx", "0 B/s");
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+  if (process.env.UI_SCREENSHOT_DIR) await page.screenshot({ path: path.join(process.env.UI_SCREENSHOT_DIR, "resources-mobile.png"), fullPage: true });
+  state.resourceData.cpu.cores = null;
+  state.resourceData.cpu.percent = null;
+  state.resourceData.network.rx_bytes = null;
+  await page.locator("#metrics-refresh").click();
+  await waitText(page, "#metrics-error", "Some server readings");
+  await waitText(page, "#cpu-copy", "unavailable");
+});
+
+test("metric charts preserve missing-data gaps and never mix interface histories", async (t) => {
+  const data = resourceSnapshot();
+  data.history = [
+    { age_seconds: 30, cpu_percent: 10, memory_percent: 20, interface: "old-interface", rx_bytes_per_second: 999999999, tx_bytes_per_second: 999999999 },
+    { age_seconds: 25, cpu_percent: null, memory_percent: 20, interface: "ens3", rx_bytes_per_second: null, tx_bytes_per_second: null },
+    { age_seconds: 0, cpu_percent: 30, memory_percent: 25, interface: "ens3", rx_bytes_per_second: 1024, tx_bytes_per_second: 2048 },
+  ];
+  const { page } = await fixture(t, { resourceData: data });
+  await waitText(page, "#cpu-value", "42.5%");
+  const path = await page.locator("#cpu-chart .chart-line").getAttribute("d");
+  assert.equal((path.match(/M/g) || []).length, 2);
+  assert.equal(await page.locator("#network-scale").textContent(), "2 KiB/s");
+});
+
+test("metrics reject malformed responses and ignore results from a previous login", async (t) => {
+  const { page, state } = await fixture(t);
+  await waitText(page, "#cpu-value", "42.5%");
+  state.resourceData = { ok: true };
+  await page.locator("#metrics-refresh").click();
+  await waitText(page, "#metrics-error", "unexpected metrics");
+  let release;
+  state.metricsHold = new Promise((resolve) => { release = resolve; });
+  t.after(() => release());
+  await page.locator("#metrics-refresh").click();
+  await page.waitForFunction(() => document.querySelector("#metrics-refresh").disabled);
+  await page.locator("#logout").click();
+  await page.locator("#login-view").waitFor({ state: "visible" });
+  release();
+  await page.waitForTimeout(100);
+  assert.equal(await page.locator("#cpu-chart .chart-line").count(), 0);
+  assert.equal(await page.locator("#cpu-value").textContent(), "—");
 });

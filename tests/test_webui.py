@@ -61,6 +61,11 @@ class FakeBroker:
         return {"ok": True, "users": [{"username": "fixture-user"}], "total": 1, "matched": 1,
                 "page": 0, "pages": 1, "revision": "fixture-revision"}
 
+    def metrics(self):
+        return {"ok": True, "sampled_at": 1000, "cpu": {"percent": None, "cores": 2},
+                "memory": {"percent": 25, "used_bytes": 1024, "total_bytes": 4096},
+                "network": {"interface": "ens3"}, "history": []}
+
     def diagnostics(self):
         return {"ok": True, "checked_at": "2026-10-17T00:00:00+00:00", "checks": [
             {"id": "fixture", "label": "Fixture check", "status": "pass", "detail": "Checked.", "guidance": ""}]}
@@ -292,6 +297,19 @@ class WebServerTests(unittest.TestCase):
         self.assertEqual(response.status, 200)
         self.assertEqual(payload["status"], "ok")
         self.assertEqual(response.headers["Cache-Control"], "no-store")
+
+    def test_metrics_require_login_and_are_not_cached(self):
+        with self.assertRaises(HTTPError) as raised:
+            self.get_json("/api/metrics")
+        self.assertEqual(raised.exception.code, 401)
+        response, payload = self.get_json("/api/metrics", authenticated=True)
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+        self.assertEqual(payload["memory"]["percent"], 25)
+        with patch.object(self.broker, "metrics", side_effect=BrokerError("private state path")):
+            with self.assertRaises(HTTPError) as raised:
+                self.get_json("/api/metrics")
+        self.assertEqual(raised.exception.code, 503)
+        self.assertNotIn("private", raised.exception.read().decode())
 
     def test_diagnostics_require_login_and_are_not_cached(self):
         with self.assertRaises(HTTPError) as raised:

@@ -20,6 +20,8 @@ let pendingAction = null;
 let confirmation = null;
 let confirmationTrigger = null;
 let logoutPending = false;
+let metricsSnapshot = null;
+let metricsLoading = false;
 let diagnosticsSnapshot = null;
 let diagnosticsLoading = false;
 let sessionsSnapshot = null;
@@ -81,6 +83,7 @@ function showLogin(message = "") {
   resetUsers();
   resetSessions();
   resetDiagnostics();
+  resetMetrics();
   dashboard = null;
   dashboardFresh = false;
   dashboardLoading = false;
@@ -104,6 +107,7 @@ function showApp(session) {
   resetUsers();
   resetSessions();
   resetDiagnostics();
+  resetMetrics();
   $("#session-user").textContent = session.username;
   dashboard = null;
   dashboardFresh = false;
@@ -161,6 +165,7 @@ function syncControls() {
   syncUserControls();
   syncSessionControls();
   syncDiagnosticsControls();
+  syncMetricsControls();
   if (pendingAction) $("#action-progress").textContent = `${operationLabels[pendingAction.operation]} request for ${pendingAction.label} is running. Please wait…`;
 }
 
@@ -340,7 +345,7 @@ $(".skip-link").addEventListener("click", (event) => {
   $("#main-content").focus();
   $("#main-content").scrollIntoView({ block: "start" });
 });
-refreshButton.addEventListener("click", loadDashboard);
+refreshButton.addEventListener("click", () => { loadDashboard(); loadMetrics(); });
 services.addEventListener("click", (event) => {
   const button = event.target.closest("button[data-operation]");
   if (!button || button.disabled) return;
@@ -432,6 +437,7 @@ window.setInterval(() => {
 }, 30000);
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
+    loadMetrics();
     if (location.hash === "#diagnostics") return;
     if (location.hash === "#sessions") loadSessions();
     else loadDashboard();
@@ -471,8 +477,133 @@ function selectView() {
   if (view === "users") loadUsers();
   else if (view === "sessions") loadSessions();
   else if (view === "diagnostics") loadDiagnostics();
-  else loadDashboard();
+  else { loadDashboard(); loadMetrics(); }
 }
+
+function metricsVisible() {
+  return Boolean(csrfToken && !$("#overview").hidden && document.visibilityState === "visible");
+}
+
+function resetMetrics() {
+  metricsSnapshot = null;
+  metricsLoading = false;
+  ["#cpu-value", "#memory-value", "#network-rx", "#network-tx", "#network-interface", "#network-scale"].forEach((selector) => { $(selector).textContent = "—"; });
+  $("#cpu-copy").textContent = "Waiting for the first sample";
+  $("#memory-copy").textContent = "Waiting for memory information";
+  $("#network-copy").textContent = "Waiting for interface counters";
+  ["cpu", "memory", "network"].forEach((name) => {
+    $("#" + name + "-chart").replaceChildren();
+    $("#" + name + "-chart").setAttribute("aria-label", `${name === "cpu" ? "CPU" : name === "memory" ? "Memory" : "Network"} readings over the last five minutes. Awaiting samples.`);
+    $("#" + name + "-chart-empty").hidden = false;
+  });
+  $("#metrics-error").hidden = true;
+  $("#metrics-updated").textContent = "Awaiting first sample";
+}
+
+function syncMetricsControls() {
+  $("#metrics-refresh").disabled = !csrfToken || metricsLoading || Boolean(pendingAction || confirmation || logoutPending || userPending || userDialog.open);
+  $("#metrics-refresh").textContent = metricsLoading ? "Refreshing…" : "Refresh metrics";
+  $("#metrics-grid").setAttribute("aria-busy", String(metricsLoading));
+}
+
+function drawResourceChart(name, history, series, maximum) {
+  const svg = $("#" + name + "-chart");
+  svg.replaceChildren();
+  const element = (tag, attributes) => {
+    const item = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    Object.entries(attributes).forEach(([key, value]) => item.setAttribute(key, String(value)));
+    svg.append(item);
+    return item;
+  };
+  [8, 54, 100].forEach((y) => element("path", { d: `M8 ${y}H392`, class: "chart-grid-line" }));
+  let any = false;
+  series.forEach(([key, className]) => {
+    let path = "", last = null, latest = null;
+    history.forEach((point) => {
+      const value = point[key];
+      if (value === null) { last = null; return; }
+      const x = 8 + (1 - point.age_seconds / 300) * 384;
+      const y = 100 - Math.min(value / maximum, 1) * 92;
+      const contiguous = last !== null && last - point.age_seconds <= 15;
+      path += `${contiguous ? "L" : "M"}${x.toFixed(2)} ${y.toFixed(2)} `;
+      last = point.age_seconds;
+      latest = { x, y };
+      any = true;
+    });
+    if (path) element("path", { d: path, class: "chart-line " + className });
+    if (latest) element("circle", { cx: latest.x, cy: latest.y, r: 3, class: "chart-dot " + className });
+  });
+  $("#" + name + "-chart-empty").hidden = any;
+}
+
+function renderMetrics(data) {
+  const percent = (value) => value === null ? "—" : `${value.toLocaleString(undefined, { maximumFractionDigits: 1 })}%`;
+  const rate = (value) => value === null ? "—" : `${formatBytes(value)}/s`;
+  $("#cpu-value").textContent = percent(data.cpu.percent);
+  $("#cpu-copy").textContent = data.cpu.cores === null ? "CPU information is unavailable" : data.cpu.percent === null
+    ? "Collecting CPU samples…" : `Across ${data.cpu.cores} logical CPU${data.cpu.cores === 1 ? "" : "s"}`;
+  $("#memory-value").textContent = percent(data.memory.percent);
+  $("#memory-copy").textContent = data.memory.total_bytes === null ? "Memory information is unavailable"
+    : `${formatBytes(data.memory.used_bytes)} used of ${formatBytes(data.memory.total_bytes)}`;
+  const network = data.network;
+  $("#network-interface").textContent = network.interface || "Unavailable";
+  $("#network-rx").textContent = rate(network.rx_bytes_per_second);
+  $("#network-tx").textContent = rate(network.tx_bytes_per_second);
+  $("#network-copy").textContent = network.rx_bytes === null ? "Interface counters are unavailable"
+    : `${formatBytes(network.rx_bytes)} received · ${formatBytes(network.tx_bytes)} sent since interface counters started`;
+  const trafficHistory = data.history.map((point) => point.interface === network.interface ? point
+    : { ...point, rx_bytes_per_second: null, tx_bytes_per_second: null });
+  const peak = Math.max(1024, ...trafficHistory.flatMap((point) => [point.rx_bytes_per_second || 0, point.tx_bytes_per_second || 0]));
+  const maximum = 2 ** Math.ceil(Math.log2(peak));
+  $("#network-scale").textContent = rate(maximum);
+  drawResourceChart("cpu", data.history, [["cpu_percent", "chart-cpu"]], 100);
+  drawResourceChart("memory", data.history, [["memory_percent", "chart-memory"]], 100);
+  drawResourceChart("network", trafficHistory, [["rx_bytes_per_second", "chart-rx"], ["tx_bytes_per_second", "chart-tx"]], maximum);
+  ["cpu", "memory"].forEach((name) => $("#" + name + "-chart").setAttribute("aria-label", `${name === "cpu" ? "CPU" : "Memory"} usage: ${percent(data[name].percent)}. Last five minutes; gaps indicate missing samples.`));
+  $("#network-chart").setAttribute("aria-label", `Traffic on ${network.interface || "unavailable interface"}: ${rate(network.rx_bytes_per_second)} received, ${rate(network.tx_bytes_per_second)} sent. Last five minutes.`);
+  $("#metrics-updated").textContent = `Sampled ${new Date(data.sampled_at * 1000).toLocaleTimeString()}`;
+  const incomplete = data.cpu.cores === null || data.memory.total_bytes === null || network.rx_bytes === null;
+  $("#metrics-error").hidden = !incomplete;
+  if (incomplete) $("#metrics-error").textContent = "Some server readings are unavailable. Available readings are shown below.";
+}
+
+async function loadMetrics() {
+  if (!metricsVisible() || metricsLoading || pendingAction || confirmation || logoutPending || userPending || userDialog.open) return;
+  const version = sessionVersion;
+  metricsLoading = true;
+  syncMetricsControls();
+  try {
+    const data = await requestJson("/api/metrics");
+    if (version !== sessionVersion || !metricsVisible()) return;
+    const number = (value) => typeof value === "number" && Number.isFinite(value) && value >= 0;
+    const optional = (value) => value === null || number(value);
+    const percentage = (value) => value === null || (number(value) && value <= 100);
+    if (data.ok !== true || !number(data.sampled_at) || data.interval_seconds !== 5 || data.window_seconds !== 300
+        || !data.cpu || !data.memory || !data.network || !percentage(data.cpu.percent) || !optional(data.cpu.cores)
+        || !percentage(data.memory.percent) || !optional(data.memory.used_bytes) || !optional(data.memory.total_bytes)
+        || (data.network.interface !== null && typeof data.network.interface !== "string")
+        || !["rx_bytes", "tx_bytes", "rx_bytes_per_second", "tx_bytes_per_second"].every((key) => optional(data.network[key]))
+        || !Array.isArray(data.history) || !data.history.length || data.history.length > 61
+        || !data.history.every((point) => point && number(point.age_seconds) && point.age_seconds <= 300
+          && percentage(point.cpu_percent) && percentage(point.memory_percent)
+          && (point.interface === null || typeof point.interface === "string")
+          && optional(point.rx_bytes_per_second) && optional(point.tx_bytes_per_second))) {
+      throw new Error("The server returned an unexpected metrics response.");
+    }
+    metricsSnapshot = data;
+    renderMetrics(data);
+  } catch (error) {
+    if (version !== sessionVersion || !metricsVisible()) return;
+    if (error.status === 401) { showLogin("Your session has expired. Sign in again."); return; }
+    $("#metrics-error").hidden = false;
+    $("#metrics-error").textContent = `${error.message} ${metricsSnapshot ? "Last readings are shown and may be out of date." : "Choose Refresh metrics to try again."}`;
+  } finally {
+    if (version === sessionVersion) { metricsLoading = false; syncMetricsControls(); }
+  }
+}
+
+$("#metrics-refresh").addEventListener("click", loadMetrics);
+window.setInterval(loadMetrics, 5000);
 
 const diagnosticLabels = { pass: "Passed", warn: "Warning", fail: "Failed", unknown: "Unknown" };
 

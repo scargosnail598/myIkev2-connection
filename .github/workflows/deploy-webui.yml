@@ -3,6 +3,10 @@ name: Deploy Production Web UI
 on:
   workflow_dispatch:
     inputs:
+      verify_public_only:
+        description: Only verify the public HTTPS endpoint through Arvan from the origin server (no install)
+        type: boolean
+        default: false
       publish_arvan:
         description: Publish through unprivileged Caddy on HTTP 8080 for p.mahanfreenet.ir (Arvan peers only)
         type: boolean
@@ -89,7 +93,7 @@ jobs:
           REMOTE
 
       - name: Install or update Web UI and verify health
-        if: ${{ !inputs.inspect_origin }}
+        if: ${{ !inputs.inspect_origin && !inputs.verify_public_only }}
         shell: bash
         env:
           INITIAL_PASSWORD: ${{ secrets.PRODUCTION_WEBUI_PASSWORD }}
@@ -182,12 +186,15 @@ jobs:
             printf 'Admin login and authenticated dashboard verified.\n'
           fi
 
-      - name: Verify public HTTPS through Arvan without credentials
-        if: ${{ !inputs.inspect_origin && inputs.publish_arvan }}
+      - name: Verify public HTTPS from origin through Arvan without credentials
+        if: ${{ !inputs.inspect_origin && (inputs.publish_arvan || inputs.verify_public_only) }}
         shell: bash
         run: |
           set -Eeuo pipefail
-          python3 -B - <<'PY'
+          ssh -i "$RUNNER_TEMP/ikev2-production-key" \
+            -o "UserKnownHostsFile=$RUNNER_TEMP/ikev2-known-hosts" \
+            -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15 \
+            -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" /usr/bin/python3 -B - <<'PY'
           from urllib.error import HTTPError
           from urllib.request import urlopen
 

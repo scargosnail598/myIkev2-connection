@@ -73,6 +73,10 @@ class FakeBroker:
     def list_sessions(self, search="", page=0):
         return {"ok": True, "sessions": [], "total": 0, "matched": 0, "page": 0, "pages": 1, "running": True}
 
+    def export_user(self, payload):
+        self.calls.append(payload)
+        return {"ok": True, "uri": "ikev://import/v1/fixture", "includes_password": payload.get("include_password", False)}
+
     def manage_user(self, payload):
         self.calls.append(payload)
         return {"ok": True, "username": payload["username"], "operation": payload["operation"]}
@@ -348,6 +352,32 @@ class WebServerTests(unittest.TestCase):
                 self.get_json("/api/sessions")
         self.assertEqual(raised.exception.code, 503)
         self.assertNotIn("private", raised.exception.read().decode())
+
+    def test_exports_require_session_csrf_post_and_reject_extra_fields(self):
+        payload = {"username": "fixture-user", "revision": "fixture-revision", "include_password": True}
+        with self.assertRaises(HTTPError) as error:
+            self.post_json("/api/users/export", payload)
+        self.assertEqual(error.exception.code, 401)
+        self.login()
+        with self.assertRaises(HTTPError) as error:
+            self.post_json("/api/users/export", payload)
+        self.assertEqual(error.exception.code, 403)
+        with self.assertRaises(HTTPError) as error:
+            self.get_json("/api/users/export")
+        self.assertEqual(error.exception.code, 404)
+        headers = {"X-CSRF-Token": self.csrf_token}
+        with self.assertRaises(HTTPError) as error:
+            self.post_json("/api/users/export", {**payload, "path": "/etc/shadow"}, headers=headers)
+        self.assertEqual(error.exception.code, 400)
+        with self.post_json("/api/users/export", payload, headers=headers) as response:
+            self.assertEqual(response.headers["Cache-Control"], "no-store")
+            self.assertTrue(json.load(response)["includes_password"])
+        self.assertEqual(self.broker.calls[-1], payload)
+        with patch.object(self.broker, "export_user", side_effect=BrokerError("private detail")):
+            with self.assertRaises(HTTPError) as error:
+                self.post_json("/api/users/export", payload, headers=headers)
+            self.assertEqual(error.exception.code, 503)
+            self.assertNotIn(b"private detail", error.exception.read())
 
     def test_users_require_login_and_responses_are_not_cached(self):
         with self.assertRaises(HTTPError) as raised:

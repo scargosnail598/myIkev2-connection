@@ -48,8 +48,10 @@ jobs:
           bash -n packaging/install-webui.sh packaging/install-arvan-proxy.sh
           shellcheck packaging/install-webui.sh packaging/install-arvan-proxy.sh
           node --check webui/static/app.js
+          node --check webui/static/qrcodegen.js
           python3 -B -m unittest discover -s tests -p 'test_webui.py' -v
           python3 -B -m unittest discover -s tests -p 'test_users.py' -v
+          python3 -B -m unittest discover -s tests -p 'test_profiles.py' -v
           python3 -B -m unittest discover -s tests -p 'test_sessions.py' -v
           python3 -B -m unittest discover -s tests -p 'test_diagnostics.py' -v
           python3 -B -m unittest discover -s tests -p 'test_metrics.py' -v
@@ -152,10 +154,10 @@ jobs:
           sudo -n /usr/bin/install -o root -g root -m 0644 \
             "$source_dir/webui/__init__.py" "$source_dir/webui/app.py" \
             "$source_dir/webui/broker.py" "$source_dir/webui/manage.py" \
-            "$source_dir/webui/security.py" "$source_dir/webui/users.py" "$source_dir/webui/sessions.py" "$source_dir/webui/diagnostics.py" "$source_dir/webui/metrics.py" "$deploy_dir/webui/"
+            "$source_dir/webui/security.py" "$source_dir/webui/profiles.py" "$source_dir/webui/users.py" "$source_dir/webui/sessions.py" "$source_dir/webui/diagnostics.py" "$source_dir/webui/metrics.py" "$deploy_dir/webui/"
           sudo -n /usr/bin/install -o root -g root -m 0644 \
             "$source_dir/webui/static/index.html" "$source_dir/webui/static/app.css" \
-            "$source_dir/webui/static/app.js" "$deploy_dir/webui/static/"
+            "$source_dir/webui/static/app.js" "$source_dir/webui/static/qrcodegen.js" "$deploy_dir/webui/static/"
           sudo -n /usr/bin/install -o root -g root -m 0644 \
             "$source_dir/packaging/systemd/ikev2-web.service" \
             "$source_dir/packaging/systemd/ikev2-web-broker.service" \

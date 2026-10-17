@@ -22,7 +22,7 @@ from typing import Callable
 from webui.diagnostics import DiagnosticsReader
 from webui.metrics import MetricsReader
 from webui.sessions import SessionReader
-from webui.users import UserError, UserManager, validate_change
+from webui.users import UserError, UserManager, validate_change, validate_export
 
 
 PROTOCOL_VERSION = 1
@@ -220,7 +220,7 @@ class BrokerRequestHandler(socketserver.StreamRequestHandler):
         if action == "ping":
             installed = installation_state()
             self._reply({"ok": True, "version": PROTOCOL_VERSION, "installed": installed,
-                         "user_management": installed is True, "session_monitoring": installed is True, "diagnostics": True, "metrics": True})
+                         "user_management": installed is True, "profile_export": installed is True, "session_monitoring": installed is True, "diagnostics": True, "metrics": True})
             return
         if action == "metrics":
             if set(request) != {"version", "action"}:
@@ -240,7 +240,7 @@ class BrokerRequestHandler(socketserver.StreamRequestHandler):
                 return
             self._reply(self.server.sessions.list_sessions(request.get("search", ""), request.get("page", 0)))
             return
-        if action in {"users_list", "users_manage"}:
+        if action in {"users_list", "users_manage", "users_export"}:
             self._users(request, peer_uid)
             return
         if action != "service_control":
@@ -289,12 +289,17 @@ class BrokerRequestHandler(socketserver.StreamRequestHandler):
                 self._reply(self.server.users.list_users(request.get("search", ""), request.get("page", 0)))
                 return
             # Validate before auditing, so hostile input cannot be logged as an identity.
-            validate_change(request)
+            exporting = action == "users_export"
+            if exporting:
+                validate_export(request)
+            else:
+                validate_change(request)
             fields = {"peer_uid": peer_uid, "target": request["username"],
-                      "operation": request["operation"], "action": "user_management"}
+                      "operation": "export" if exporting else request["operation"],
+                      "action": "user_management"}
             self.server.audit.write(**fields, stage="requested", ok=None)
             try:
-                response = self.server.users.execute(request)
+                response = self.server.users.export_user(request) if exporting else self.server.users.execute(request)
             except UserError as error:
                 response = error.result()
             self.server.audit.write(**fields, stage="completed", ok=response.get("ok") is True)
@@ -419,6 +424,9 @@ class BrokerClient:
 
     def list_sessions(self, search: str = "", page: int = 0) -> dict:
         return self.request({"action": "sessions_list", "search": search, "page": page}, timeout=10)
+
+    def export_user(self, payload: dict) -> dict:
+        return self.request({**payload, "action": "users_export"})
 
     def manage_user(self, payload: dict) -> dict:
         return self.request({**payload, "action": "users_manage"}, timeout=45)

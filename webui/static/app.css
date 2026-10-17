@@ -325,3 +325,8 @@ input:read-only { color: var(--muted); }
   .network-rates strong { font-size: 20px; }
   .metrics-foot { flex-direction: column; gap: 6px; }
 }
+
+.share-dialog { width: min(580px, calc(100vw - 32px)); }
+#share-qr { display: block; width: 100%; max-width: 440px; height: auto; margin: 16px auto; image-rendering: pixelated; }
+#share-link { width: 100%; resize: vertical; margin-top: 8px; border: 1px solid #354239; border-radius: 7px; padding: 10px; background: #0f1712; color: var(--ink); overflow-wrap: anywhere; font: .875rem monospace; }
+#share-status { color: #a8b8ac; font-size: .875rem; line-height: 1.7; }

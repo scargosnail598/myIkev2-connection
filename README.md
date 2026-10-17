@@ -195,6 +195,14 @@ accept 12–128 printable ASCII characters except double quotes. Quoted secrets 
 the [StrongSwan stroke parser](https://github.com/strongswan/strongswan/blob/master/src/libcharon/plugins/stroke/stroke_cred.c)
 are literal, so backslashes are preserved rather than escaped.
 
+Use **Link & QR** beside a user to generate a copyable configuration link and
+an offline QR code, with a PNG download. **Include the current VPN password** is
+optional and off by default. Password-bearing outputs grant access to the
+account; send them privately. Links do not expire and are encoded, not encrypted.
+The new `ikev://import/v1/…` transport wraps the existing `.ikev` profile and is
+ready for future Android QR/clipboard import; existing desktop clients continue
+to use `.ikev` files. See [configuration sharing and the Android decoding contract](docs/config-sharing.md).
+
 Account changes update the installer's existing `/etc/ipsec.secrets` atomically,
 preserving other entries and file mode 0600. The EAP credentials remain in the
 root-only format required by the existing installation; the Web UI process
@@ -648,7 +656,9 @@ frozen format.
 Private-CA profiles embed the public CA certificate as single-line Base64-encoded
 DER and include its OpenSSL SHA-256 fingerprint. Let’s Encrypt profiles instead
 contain `"certificate_trust": "public"` and do not embed a CA certificate. VPN
-passwords, private keys, and other secret material are never included. Profiles are written with mode
+passwords, private keys, and other secret material are never included in CLI
+file exports. Web UI sharing can optionally include a password in a separate
+envelope; see [configuration sharing](docs/config-sharing.md). CLI profiles are written with mode
 `0600` under:
 
 ```text

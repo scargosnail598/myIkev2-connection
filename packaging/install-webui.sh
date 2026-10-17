@@ -47,6 +47,7 @@ require_source_files() {
     "webui/manage.py" \
     "webui/security.py" \
     "webui/users.py" \
+    "webui/profiles.py" \
     "webui/sessions.py" \
     "webui/diagnostics.py" \
     "webui/metrics.py" \
@@ -54,6 +55,7 @@ require_source_files() {
     "webui/static/index.html" \
     "webui/static/app.css" \
     "webui/static/app.js" \
+    "webui/static/qrcodegen.js" \
     "packaging/systemd/${BROKER_SERVICE}" \
     "packaging/systemd/${WEB_SERVICE}" \
     "packaging/systemd/ikev2-web-proxy.service" \
@@ -76,6 +78,7 @@ install_source() {
     "${SOURCE_DIR}/webui/manage.py" \
     "${SOURCE_DIR}/webui/security.py" \
     "${SOURCE_DIR}/webui/users.py" \
+    "${SOURCE_DIR}/webui/profiles.py" \
     "${SOURCE_DIR}/webui/sessions.py" \
     "${SOURCE_DIR}/webui/diagnostics.py" \
     "${SOURCE_DIR}/webui/metrics.py" \
@@ -84,6 +87,7 @@ install_source() {
     "${SOURCE_DIR}/webui/static/index.html" \
     "${SOURCE_DIR}/webui/static/app.css" \
     "${SOURCE_DIR}/webui/static/app.js" \
+    "${SOURCE_DIR}/webui/static/qrcodegen.js" \
     "${INSTALL_DIR}/webui/static/"
 }
 

@@ -6,6 +6,7 @@
     <meta name="description" content="Administration console for the IKEv2 StrongSwan server">
     <title>IKEv2 Control Plane</title>
     <link rel="stylesheet" href="/assets/app.css">
+    <script src="/assets/qrcodegen.js" defer></script>
     <script src="/assets/app.js" defer></script>
   </head>
   <body>
@@ -240,7 +241,7 @@
         <div id="user-password-fields" class="user-form">
           <label for="vpn-password">New VPN password</label><input id="vpn-password" type="password" autocomplete="new-password" minlength="12" maxlength="128">
           <label for="vpn-password-confirm">Confirm password</label><input id="vpn-password-confirm" type="password" autocomplete="new-password" minlength="12" maxlength="128">
-          <small>12–128 printable ASCII characters, excluding double quotes. Save it before closing; it cannot be retrieved later.</small>
+          <small>12–128 printable ASCII characters, excluding double quotes. Save it before closing, or explicitly include it in a configuration export later.</small>
           <div class="password-tools"><button id="user-generate" class="secondary-button" type="button">Generate password</button><button id="user-show-password" class="secondary-button" type="button" aria-pressed="false">Show password</button></div>
         </div>
         <label id="user-delete-confirm-label" class="checkbox-label" hidden><input id="user-delete-confirm" type="checkbox">Remove this account's VPN credentials.</label>
@@ -248,6 +249,25 @@
         <p id="user-form-error" class="form-error" role="alert" hidden></p>
         <div class="dialog-actions"><button id="user-cancel" class="secondary-button" type="button">Cancel</button><button id="user-save" class="primary-button" type="submit">Save</button></div>
       </form>
+    </dialog>
+    <dialog id="share-dialog" class="action-dialog share-dialog" aria-labelledby="share-title" aria-describedby="share-copy">
+      <h2 id="share-title">Share VPN configuration</h2>
+      <p id="share-copy">Create a link and QR code for the IKEv Android app when import support is available. Share only with the intended user.</p>
+      <p id="share-user"></p>
+      <div class="user-form">
+        <label class="checkbox-label"><input id="share-password" type="checkbox">Include the current VPN password</label>
+        <small>With a password included, anyone holding the link or QR code can use this account. The link is encoded, not encrypted, and does not expire. Without a password, the app must ask for it.</small>
+        <button id="share-generate" class="primary-button" type="button">Generate link &amp; QR</button>
+        <p id="share-error" class="form-error" role="alert" hidden></p>
+        <div id="share-result" hidden>
+          <canvas id="share-qr" role="img" aria-label="VPN configuration QR code"></canvas>
+          <label for="share-link">Configuration link</label>
+          <textarea id="share-link" rows="3" readonly spellcheck="false" autocomplete="off"></textarea>
+          <p id="share-status" role="status"></p>
+          <div class="password-tools"><button id="share-copy-link" class="secondary-button" type="button">Copy link</button><button id="share-download" class="secondary-button" type="button">Download QR</button></div>
+        </div>
+      </div>
+      <div class="dialog-actions"><button id="share-close" class="secondary-button" type="button" autofocus>Close</button></div>
     </dialog>
     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
   </body>

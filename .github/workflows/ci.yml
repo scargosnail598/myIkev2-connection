@@ -43,6 +43,7 @@ jobs:
       - name: Check Web UI JavaScript syntax
         run: |
           node --check webui/static/app.js
+          node --check webui/static/qrcodegen.js
           node --check tests/test_webui_browser.cjs
 
       - name: Test ACME and Web UI
@@ -70,7 +71,7 @@ jobs:
       - name: Install browser test tools
         shell: bash
         run: |
-          npm install --prefix "$RUNNER_TEMP/ikev2-ui-tools" --ignore-scripts --no-audit --no-fund playwright@1.64.1
+          npm install --prefix "$RUNNER_TEMP/ikev2-ui-tools" --ignore-scripts --no-audit --no-fund playwright@1.64.1 jsqr@1.4.0
           node "$RUNNER_TEMP/ikev2-ui-tools/node_modules/playwright/cli.js" install --with-deps firefox
 
       - name: Test dashboard behavior in Firefox with mocked APIs

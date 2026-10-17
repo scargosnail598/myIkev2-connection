@@ -1,3 +1,5 @@
+import base64
+import zlib
 import hashlib
 import json
 import os
@@ -203,6 +205,43 @@ class UserStoreTests(unittest.TestCase):
         self.assertTrue(UserManager(self.store, queue, runner).check()["checked"])
         self.assertEqual(self.path.read_bytes(), ORIGINAL)
         self.assertEqual(list(queue.iterdir()), [])
+
+    def test_export_uses_current_credentials_only_with_explicit_option_and_audits_no_secrets(self):
+        atomic_private(self.state, b"SERVER_ID=vpn.example.test\nCERT_MODE=public\n")
+        self.change("reset", "alice")
+        manager = UserManager(self.store)
+        server = BrokerServer(self.directory / "broker.sock", os.getuid(), os.getgid(),
+                              ServiceController(), AuditLogger(self.directory / "audit.log"), users=manager)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        original = self.path.read_bytes()
+        try:
+            client = BrokerClient(server.socket_path)
+            revision = client.list_users()["revision"]
+            request = {"username": "alice", "revision": revision}
+            for include in (False, True):
+                response = client.export_user({**request, "include_password": include})
+                self.assertTrue(response["ok"])
+                encoded = response["uri"].rsplit("/", 1)[1]
+                envelope = json.loads(zlib.decompress(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))))
+                self.assertEqual(envelope["profile"]["username"], "alice")
+                self.assertEqual(envelope.get("password"), FIXTURE_SECRET if include else None)
+            audit = (self.directory / "audit.log").read_text()
+            self.assertNotIn(FIXTURE_SECRET, audit)
+            self.assertNotIn("ikev://", audit)
+            self.assertEqual([item["operation"] for item in map(json.loads, audit.splitlines())], ["export"] * 4)
+            self.assertEqual(client.export_user({**request, "include_password": "yes"})["status"], 400)
+            self.assertEqual(client.export_user({**request, "path": "/etc/shadow"})["status"], 400)
+            self.assertEqual(client.export_user({**request, "username": "missing"})["status"], 404)
+            atomic_private(self.path, original + b"# external edit\n")
+            self.assertEqual(client.export_user(request)["status"], 409)
+            server.allowed_uid += 1
+            self.assertEqual(client.export_user(request)["error"], "peer_not_allowed")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=3)
+        self.assertEqual(self.path.read_bytes(), original + b"# external edit\n")
 
     def test_unix_broker_lists_users_and_denies_untrusted_peer(self):
         manager = UserManager(self.store)

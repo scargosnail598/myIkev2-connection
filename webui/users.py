@@ -1,4 +1,4 @@
-"""Fixed-path VPN user operations; never return or log stored EAP secrets."""
+"""Fixed-path VPN user operations; secrets leave the broker only on explicit export."""
 
 from __future__ import annotations
 
@@ -45,6 +45,15 @@ def validate_change(request: dict) -> None:
         password = request.get("password")
         if not isinstance(password, str) or not re.fullmatch(r"[\x20-\x7e]{12,128}", password) or '"' in password:
             raise UserError("invalid_password", "Use 12–128 printable ASCII characters, excluding double quotes.")
+
+
+def validate_export(request: dict) -> None:
+    if set(request) - {"version", "action", "username", "revision", "include_password"}:
+        raise UserError("invalid_fields", "Unsupported export fields.")
+    if not isinstance(request.get("username"), str) or not USERNAME.fullmatch(request["username"]):
+        raise UserError("invalid_username", "Invalid VPN username.")
+    if type(request.get("include_password", False)) is not bool:
+        raise UserError("invalid_confirmation", "Invalid password export option.")
 
 
 def read_private(path: Path, maximum: int = MAX_FILE_BYTES) -> bytes:
@@ -203,6 +212,28 @@ class UserManager:
                 "total": len(users), "matched": len(matching), "page": page, "pages": pages,
                 "revision": self.revision(raw)}
 
+    def export_user(self, request: dict) -> dict:
+        from webui.profiles import build_share
+
+        validate_export(request)
+        with self._exclusive():
+            raw = self.store.snapshot()
+            self._check_revision(raw, request.get("revision"))
+            lines, users = parse_users(raw)
+            username = request["username"]
+            if username not in users:
+                raise UserError("not_found", "This VPN user no longer exists. Refresh the list.", 404)
+            password = None
+            if request.get("include_password", False):
+                # parse_users already checked the entire entry; preserve literal backslashes.
+                password = lines[users[username]].split('"', 2)[1]
+            return build_share(self.store.state, username, password)
+
+    def _check_revision(self, raw: bytes, revision) -> None:
+        if (not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{64}", revision)
+                or not hmac.compare_digest(self.revision(raw), revision)):
+            raise UserError("conflict", "Accounts changed. Refresh the list before trying again.", 409)
+
     def execute(self, request: dict) -> dict:
         validate_change(request)
         return self._execute(request)
@@ -224,8 +255,8 @@ class UserManager:
             raw = self.store.snapshot()
             revision = request.get("revision")
             checking = request["operation"] == "check"
-            if not checking and (not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{64}", revision) or not hmac.compare_digest(self.revision(raw), revision)):
-                raise UserError("conflict", "Accounts changed. Refresh the list before trying again.", 409)
+            if not checking:
+                self._check_revision(raw, revision)
             self.directory.mkdir(mode=0o700, exist_ok=True)
             info = self.directory.lstat()
             if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700:

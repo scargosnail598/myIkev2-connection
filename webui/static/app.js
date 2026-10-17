@@ -34,6 +34,11 @@ let usersGeneration = 0;
 let userOperation = null;
 let userRevision = null;
 const userDialog = $("#user-dialog");
+const shareDialog = $("#share-dialog");
+let shareGeneration = 0;
+let shareTimer = null;
+let shareUsername = null;
+let shareRevision = null;
 
 async function requestJson(path, options = {}, timeout = 15000) {
   const controller = new AbortController();
@@ -147,7 +152,7 @@ function setMode(label, controlled) {
 }
 
 function syncControls() {
-  const busy = Boolean(pendingAction || confirmation || logoutPending || userPending || userDialog.open);
+  const busy = Boolean(pendingAction || confirmation || logoutPending || userPending || userDialog.open || shareDialog.open);
   const canControl = Boolean(csrfToken && dashboardFresh && dashboard?.capabilities.service_actions);
   refreshButton.disabled = !csrfToken || dashboardLoading || busy;
   refreshButton.textContent = dashboardLoading ? "Refreshing…" : "Refresh status ↻";
@@ -282,7 +287,7 @@ async function controlService(target, operation) {
 }
 
 async function loadDashboard() {
-  if (!csrfToken || dashboardLoading || pendingAction || confirmation || logoutPending || userPending || userDialog.open) return;
+  if (!csrfToken || dashboardLoading || pendingAction || confirmation || logoutPending || userPending || userDialog.open || shareDialog.open) return;
   const version = sessionVersion;
   dashboardLoading = true;
   syncControls();
@@ -451,6 +456,7 @@ function resetUsers() {
   usersLoading = false;
   userPending = false;
   closeUserDialog();
+  closeShareDialog();
   $("#users-list").replaceChildren();
   $("#users-error").hidden = true;
   $("#users-empty").hidden = true;
@@ -461,6 +467,8 @@ function resetUsers() {
 }
 
 function selectView() {
+  closeShareDialog();
+  syncControls();
   const view = ["#users", "#sessions", "#diagnostics"].includes(location.hash) ? location.hash.slice(1) : "overview";
   $("#workspace-title").textContent = { overview: "Overview", users: "Users", sessions: "Sessions", diagnostics: "Diagnostics" }[view];
   $("#overview").hidden = view !== "overview";
@@ -501,7 +509,7 @@ function resetMetrics() {
 }
 
 function syncMetricsControls() {
-  $("#metrics-refresh").disabled = !csrfToken || metricsLoading || Boolean(pendingAction || confirmation || logoutPending || userPending || userDialog.open);
+  $("#metrics-refresh").disabled = !csrfToken || metricsLoading || Boolean(pendingAction || confirmation || logoutPending || userPending || userDialog.open || shareDialog.open);
   $("#metrics-refresh").textContent = metricsLoading ? "Refreshing…" : "Refresh metrics";
   $("#metrics-grid").setAttribute("aria-busy", String(metricsLoading));
 }
@@ -568,7 +576,7 @@ function renderMetrics(data) {
 }
 
 async function loadMetrics() {
-  if (!metricsVisible() || metricsLoading || pendingAction || confirmation || logoutPending || userPending || userDialog.open) return;
+  if (!metricsVisible() || metricsLoading || pendingAction || confirmation || logoutPending || userPending || userDialog.open || shareDialog.open) return;
   const version = sessionVersion;
   metricsLoading = true;
   syncMetricsControls();
@@ -619,14 +627,14 @@ function resetDiagnostics() {
 }
 
 function syncDiagnosticsControls() {
-  $("#diagnostics-refresh").disabled = !csrfToken || diagnosticsLoading || Boolean(pendingAction || confirmation || logoutPending || userPending || userDialog.open);
+  $("#diagnostics-refresh").disabled = !csrfToken || diagnosticsLoading || Boolean(pendingAction || confirmation || logoutPending || userPending || userDialog.open || shareDialog.open);
   $("#diagnostics-refresh").textContent = diagnosticsLoading ? "Checking…" : "Run checks";
   $("#diagnostics-progress").hidden = !diagnosticsLoading;
   $("#diagnostics-list").setAttribute("aria-busy", String(diagnosticsLoading));
 }
 
 async function loadDiagnostics() {
-  if (!csrfToken || diagnosticsLoading || pendingAction || confirmation || logoutPending || userPending || userDialog.open) return;
+  if (!csrfToken || diagnosticsLoading || pendingAction || confirmation || logoutPending || userPending || userDialog.open || shareDialog.open) return;
   const version = sessionVersion;
   diagnosticsLoading = true;
   syncDiagnosticsControls();
@@ -696,7 +704,7 @@ function resetSessions() {
 }
 
 function syncSessionControls() {
-  const busy = !csrfToken || sessionsLoading || Boolean(pendingAction || confirmation || logoutPending || userPending || userDialog.open);
+  const busy = !csrfToken || sessionsLoading || Boolean(pendingAction || confirmation || logoutPending || userPending || userDialog.open || shareDialog.open);
   $("#sessions-refresh").disabled = busy;
   $("#sessions-refresh").textContent = sessionsLoading ? "Loading…" : "Refresh sessions";
   $("#sessions-search").disabled = busy;
@@ -715,7 +723,7 @@ function formatBytes(value) {
 }
 
 async function loadSessions(page = sessionsSnapshot?.page || 0) {
-  if (!csrfToken || sessionsLoading || pendingAction || confirmation || logoutPending || userPending || userDialog.open) return;
+  if (!csrfToken || sessionsLoading || pendingAction || confirmation || logoutPending || userPending || userDialog.open || shareDialog.open) return;
   const version = sessionVersion;
   sessionsLoading = true;
   syncSessionControls();
@@ -773,13 +781,13 @@ $("#sessions-previous").addEventListener("click", () => loadSessions(sessionsSna
 $("#sessions-next").addEventListener("click", () => loadSessions(sessionsSnapshot.page + 1));
 
 function syncUserControls() {
-  const busy = usersLoading || userPending || Boolean(pendingAction || confirmation || logoutPending);
+  const busy = usersLoading || userPending || userDialog.open || shareDialog.open || Boolean(pendingAction || confirmation || logoutPending);
   const writable = Boolean(csrfToken && usersFresh && dashboard?.capabilities.user_management);
   $("#user-add").disabled = !writable || busy;
   $("#users-refresh").disabled = !csrfToken || busy;
   $("#users-refresh").textContent = usersLoading ? "Loading…" : "Refresh users";
   $("#users-list").setAttribute("aria-busy", String(busy));
-  $("#users-list").querySelectorAll("button").forEach((button) => { button.disabled = !writable || busy; });
+  $("#users-list").querySelectorAll("button").forEach((button) => { button.disabled = !writable || busy || (button.dataset.userOperation === "export" && !dashboard?.capabilities.profile_export); });
   $("#users-previous").disabled = busy || !usersSnapshot || usersSnapshot.page <= 0;
   $("#users-next").disabled = busy || !usersSnapshot || usersSnapshot.page + 1 >= usersSnapshot.pages;
   $("#users-progress").hidden = !userPending;
@@ -788,7 +796,7 @@ function syncUserControls() {
 }
 
 async function loadUsers(page = usersSnapshot?.page || 0) {
-  if (!csrfToken || userPending || userDialog.open) return;
+  if (!csrfToken || userPending || userDialog.open || shareDialog.open) return;
   const version = sessionVersion;
   const generation = ++usersGeneration;
   usersLoading = true;
@@ -811,7 +819,7 @@ async function loadUsers(page = usersSnapshot?.page || 0) {
       name.textContent = user.username;
       const actions = document.createElement("td");
       actions.className = "user-row-actions";
-      [["reset", "Change password"], ["delete", "Delete"]].forEach(([operation, label]) => {
+      [["export", "Link & QR"], ["reset", "Change password"], ["delete", "Delete"]].forEach(([operation, label]) => {
         const button = document.createElement("button");
         button.type = "button";
         button.className = "secondary-button";
@@ -882,7 +890,10 @@ function openUserDialog(operation, username = "") {
 $("#user-add").addEventListener("click", () => openUserDialog("create"));
 $("#users-list").addEventListener("click", (event) => {
   const button = event.target.closest("button[data-user-operation]");
-  if (button && !button.disabled) openUserDialog(button.dataset.userOperation, button.dataset.user);
+  if (button && !button.disabled) {
+    if (button.dataset.userOperation === "export") openShareDialog(button.dataset.user);
+    else openUserDialog(button.dataset.userOperation, button.dataset.user);
+  }
 });
 $("#user-cancel").addEventListener("click", () => { closeUserDialog(); syncControls(); });
 userDialog.addEventListener("cancel", (event) => { event.preventDefault(); if (!userPending) { closeUserDialog(); syncControls(); } });
@@ -947,6 +958,111 @@ $("#user-form").addEventListener("submit", async (event) => {
       await loadUsers();
     }
   }
+});
+function clearShareResult() {
+  shareGeneration += 1;
+  window.clearTimeout(shareTimer);
+  $("#share-result").hidden = true;
+  $("#share-link").value = "";
+  $("#share-status").textContent = "";
+  $("#share-error").hidden = true;
+  const canvas = $("#share-qr");
+  canvas.width = canvas.height = 0;
+  $("#share-generate").disabled = false;
+  $("#share-generate").textContent = "Generate link & QR";
+  $("#share-password").disabled = false;
+}
+
+function closeShareDialog() {
+  clearShareResult();
+  if (shareDialog.open) shareDialog.close();
+  $("#share-password").checked = false;
+  $("#share-user").textContent = "";
+  shareUsername = shareRevision = null;
+}
+
+function openShareDialog(username) {
+  if (!csrfToken || !usersFresh || usersLoading || userPending || userDialog.open || shareDialog.open
+      || pendingAction || confirmation || logoutPending || !dashboard?.capabilities.profile_export) return;
+  closeShareDialog();
+  shareUsername = username;
+  shareRevision = usersSnapshot.revision;
+  $("#share-user").textContent = `VPN user: ${username}`;
+  shareDialog.showModal();
+  syncControls();
+}
+
+$("#share-generate").addEventListener("click", async () => {
+  if (!csrfToken || !shareDialog.open || !shareUsername || $("#share-generate").disabled) return;
+  clearShareResult();
+  const generation = shareGeneration;
+  const version = sessionVersion;
+  const includePassword = $("#share-password").checked;
+  $("#share-generate").disabled = true;
+  $("#share-password").disabled = true;
+  $("#share-generate").textContent = "Generating…";
+  try {
+    const data = await requestJson("/api/users/export", {
+      method: "POST", headers: { "Content-Type": "application/json", "X-CSRF-Token": csrfToken },
+      body: JSON.stringify({ username: shareUsername, revision: shareRevision, include_password: includePassword }),
+    });
+    if (version !== sessionVersion || generation !== shareGeneration || !shareDialog.open) return;
+    if (data.ok !== true || typeof data.uri !== "string" || !/^ikev:\/\/import\/v1\/[A-Za-z0-9_-]+$/.test(data.uri)
+        || data.uri.length > 2953 || data.includes_password !== includePassword) throw new Error("Unexpected configuration response.");
+    const qr = qrcodegen.QrCode.encodeText(data.uri, qrcodegen.QrCode.Ecc.LOW);
+    const canvas = $("#share-qr");
+    const scale = 5;
+    canvas.width = canvas.height = (qr.size + 8) * scale;
+    const context = canvas.getContext("2d");
+    context.fillStyle = "#fff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.fillStyle = "#000";
+    for (let y = 0; y < qr.size; y++) for (let x = 0; x < qr.size; x++) {
+      if (qr.getModule(x, y)) context.fillRect((x + 4) * scale, (y + 4) * scale, scale, scale);
+    }
+    $("#share-link").value = data.uri;
+    $("#share-status").textContent = includePassword
+      ? "Password included. To revoke account access, change the password or delete the user."
+      : "Password omitted. The app must ask the user for their VPN password.";
+    $("#share-result").hidden = false;
+    shareTimer = window.setTimeout(() => { closeShareDialog(); syncControls(); }, 5 * 60 * 1000);
+  } catch (error) {
+    if (version !== sessionVersion || generation !== shareGeneration) return;
+    if (error.status === 401) { showLogin("Your session has expired. Sign in again."); return; }
+    $("#share-error").textContent = error.message;
+    $("#share-error").hidden = false;
+  } finally {
+    if (version === sessionVersion && generation === shareGeneration) {
+      $("#share-generate").disabled = false;
+      $("#share-password").disabled = false;
+      $("#share-generate").textContent = "Generate link & QR";
+    }
+  }
+});
+$("#share-password").addEventListener("change", clearShareResult);
+$("#share-close").addEventListener("click", () => { closeShareDialog(); syncControls(); });
+shareDialog.addEventListener("cancel", (event) => { event.preventDefault(); closeShareDialog(); syncControls(); });
+window.addEventListener("pagehide", closeShareDialog);
+$("#share-copy-link").addEventListener("click", async () => {
+  const link = $("#share-link");
+  const generation = shareGeneration;
+  if (!link.value) return;
+  try {
+    await navigator.clipboard.writeText(link.value);
+    if (generation === shareGeneration) showToast("Configuration link copied.");
+  } catch (_error) {
+    if (generation !== shareGeneration) return;
+    link.focus();
+    link.select();
+    showToast("Copy the selected configuration link manually.");
+  }
+});
+$("#share-download").addEventListener("click", () => {
+  if (!$("#share-link").value) return;
+  const anchor = document.createElement("a");
+  anchor.download = `${shareUsername}-ikev-qr.png`;
+  anchor.href = $("#share-qr").toDataURL("image/png");
+  anchor.click();
 });
 window.addEventListener("hashchange", selectView);
 

@@ -4,6 +4,9 @@ const assert = require("node:assert/strict");
 const http = require("node:http");
 const fs = require("node:fs/promises");
 const path = require("node:path");
+const { deflateSync, inflateSync } = require("node:zlib");
+const { randomBytes } = require("node:crypto");
+const jsQR = require("jsqr");
 const { firefox } = require("playwright");
 
 let browser;
@@ -12,7 +15,7 @@ let base;
 const staticRoot = path.resolve(__dirname, "../webui/static");
 const snapshot = () => ({
   installed: true,
-  capabilities: { service_actions: true, user_management: true },
+  capabilities: { service_actions: true, user_management: true, profile_export: true },
   services: [
     { id: "ikev2", label: "IKEv2 / StrongSwan", unit: "strongswan-starter.service", state: "active" },
     { id: "firewall", label: "Firewall & NAT", unit: "ikev2-vpn-firewall.service", state: "active" },
@@ -31,7 +34,7 @@ const resourceSnapshot = () => ({
 
 before(async () => {
   server = http.createServer(async (request, response) => {
-    const assets = { "/": ["index.html", "text/html"], "/assets/app.js": ["app.js", "text/javascript"], "/assets/app.css": ["app.css", "text/css"] };
+    const assets = { "/": ["index.html", "text/html"], "/assets/app.js": ["app.js", "text/javascript"], "/assets/qrcodegen.js": ["qrcodegen.js", "text/javascript"], "/assets/app.css": ["app.css", "text/css"] };
     const asset = assets[request.url];
     if (!asset) { response.writeHead(404).end(); return; }
     response.setHeader("Content-Type", asset[1]);
@@ -58,7 +61,7 @@ async function fixture(t, options = {}) {
   const errors = [];
   const state = { authenticated: true, data: snapshot(), dashboardFailure: false, logoutFailure: false, sessionFailure: false, loginLimited: false, commandFailure: false, ...options };
   state.userNames = options.userNames || ["alice", "bob", "carol"];
-  const calls = { dashboard: 0, commands: 0, logout: 0, sessions: 0, diagnostics: 0, metrics: 0, userChanges: [] };
+  const calls = { dashboard: 0, commands: 0, logout: 0, sessions: 0, diagnostics: 0, metrics: 0, userChanges: [], exports: [] };
   const session = () => ({ authenticated: state.authenticated, username: state.authenticated ? "browser-test-admin" : null, csrf_token: state.authenticated ? "browser-test-csrf" : null });
   page.on("pageerror", (error) => errors.push(error.message));
   await page.route("**/api/**", async (route) => {
@@ -128,6 +131,21 @@ async function fixture(t, options = {}) {
         total: state.userNames.length, matched: names.length, page, pages: Math.max(1, Math.ceil(names.length / 20)), revision: "1".repeat(64) });
     }
     assert.equal(request.headers()["x-csrf-token"], "browser-test-csrf");
+    if (endpoint === "/api/users/export") {
+      const payload = request.postDataJSON();
+      calls.exports.push(payload);
+      if (state.exportHold) await state.exportHold;
+      if (state.exportFailure) return json({ message: "Accounts changed. Refresh users before exporting." }, state.exportFailure);
+      if (state.exportMalformed) return json({ ok: true, uri: "https://unexpected.example", includes_password: false });
+      const profile = { format: "ikev-profile", version: 1, name: "alice@vpn.example.test", server: "vpn.example.test",
+        remote_id: "vpn.example.test", username: payload.username, authentication: "eap-mschapv2", certificate_trust: "private-ca",
+        ca_certificate: { encoding: "der-base64", data: state.fixtureCertificate || "RkFLRQ==", sha256: "00:11:22" },
+        connection: { mode: "full-tunnel", ipv6: true }, server_profile: "secure", proxy: { enabled: false } };
+      const envelope = { format: "ikev-share", version: 1, profile };
+      if (payload.include_password) envelope.password = "browser-fixture-password-only";
+      state.exportUri = `ikev://import/v1/${deflateSync(JSON.stringify(envelope), { level: 9 }).toString("base64url")}`;
+      return json({ ok: true, uri: state.exportUri, includes_password: payload.include_password });
+    }
     if (endpoint.startsWith("/api/users/")) {
       const payload = request.postDataJSON();
       calls.userChanges.push({ operation: endpoint.split("/").at(-1), ...payload });
@@ -676,4 +694,120 @@ test("metrics reject malformed responses and ignore results from a previous logi
   await page.waitForTimeout(100);
   assert.equal(await page.locator("#cpu-chart .chart-line").count(), 0);
   assert.equal(await page.locator("#cpu-value").textContent(), "—");
+});
+
+
+test("configuration QR scans back to the same link and optional password; PNG downloads", async (t) => {
+  const { page, state, calls } = await fixture(t, { fixtureCertificate: randomBytes(1450).toString("base64") });
+  await page.goto(`${base}/#users`);
+  await page.getByRole("button", { name: "Link & QR: alice", exact: true }).click();
+  assert.equal(await page.locator("#share-password").isChecked(), false);
+  assert.equal(calls.exports.length, 0);
+  await page.locator("#share-generate").click();
+  await page.locator("#share-result").waitFor({ state: "visible" });
+  const uri = await page.locator("#share-link").inputValue();
+  assert.equal(uri, state.exportUri);
+  const pixels = await page.locator("#share-qr").evaluate((canvas) => ({ width: canvas.width, height: canvas.height,
+    data: Array.from(canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height).data) }));
+  const decoded = jsQR(Uint8ClampedArray.from(pixels.data), pixels.width, pixels.height);
+  assert.ok(decoded, "The generated QR image must scan successfully");
+  assert.equal(decoded.data, uri);
+  const envelope = JSON.parse(inflateSync(Buffer.from(uri.split("/").at(-1), "base64url")));
+  assert.equal(envelope.profile.username, "alice");
+  assert.equal(envelope.password, undefined);
+  const downloadPromise = page.waitForEvent("download");
+  await page.locator("#share-download").click();
+  assert.equal((await downloadPromise).suggestedFilename(), "alice-ikev-qr.png");
+  await page.locator("#share-password").check();
+  assert.equal(await page.locator("#share-link").inputValue(), "");
+  assert.equal(await page.locator("#share-result").isHidden(), true);
+  await page.locator("#share-generate").click();
+  await page.locator("#share-result").waitFor({ state: "visible" });
+  const secretUri = await page.locator("#share-link").inputValue();
+  const withPassword = JSON.parse(inflateSync(Buffer.from(secretUri.split("/").at(-1), "base64url")));
+  assert.equal(withPassword.password, "browser-fixture-password-only");
+  await page.evaluate(() => Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
+    writeText: async (value) => { window.copiedConfig = value; },
+  } }));
+  await page.locator("#share-copy-link").click();
+  assert.equal(await page.evaluate(() => window.copiedConfig), secretUri);
+  await page.locator("#share-close").click();
+  assert.equal(await page.locator("#share-link").inputValue(), "");
+  assert.equal(await page.locator("#share-qr").getAttribute("width"), "0");
+  assert.equal(await page.locator("#share-password").isChecked(), false);
+  assert.equal(calls.exports.length, 2);
+});
+
+test("closing a pending export discards the delayed sensitive response", async (t) => {
+  let release;
+  const hold = new Promise((resolve) => { release = resolve; });
+  const { page, calls } = await fixture(t, { exportHold: hold });
+  await page.goto(`${base}/#users`);
+  await page.getByRole("button", { name: "Link & QR: alice", exact: true }).click();
+  await page.locator("#share-password").check();
+  await page.locator("#share-generate").click();
+  await page.waitForFunction(() => document.querySelector("#share-generate").disabled);
+  await page.locator("#share-close").click();
+  const response = page.waitForResponse((response) => response.url().endsWith("/api/users/export"));
+  release();
+  await response;
+  await page.getByRole("button", { name: "Link & QR: bob", exact: true }).click();
+  assert.equal(await page.locator("#share-link").inputValue(), "");
+  assert.equal(await page.locator("#share-result").isHidden(), true);
+  assert.equal(calls.exports.length, 1);
+});
+
+test("export errors and malformed responses leave no shareable output; expired session closes dialog", async (t) => {
+  const { page, state } = await fixture(t, { exportFailure: 409 });
+  await page.goto(`${base}/#users`);
+  await page.getByRole("button", { name: "Link & QR: alice", exact: true }).click();
+  await page.locator("#share-generate").click();
+  await waitText(page, "#share-error", "Refresh users");
+  assert.equal(await page.locator("#share-link").inputValue(), "");
+  state.exportFailure = false;
+  state.exportMalformed = true;
+  await page.locator("#share-generate").click();
+  await waitText(page, "#share-error", "Unexpected configuration");
+  assert.equal(await page.locator("#share-result").isHidden(), true);
+  state.exportMalformed = false;
+  state.exportFailure = 401;
+  await page.locator("#share-generate").click();
+  await page.locator("#login-view").waitFor({ state: "visible" });
+  assert.equal(await page.locator("#share-dialog").evaluate((dialog) => dialog.open), false);
+  assert.equal(await page.locator("#share-link").inputValue(), "");
+});
+
+test("sharing fits mobile screens and clipboard failure selects the link for manual copy", async (t) => {
+  const { page } = await fixture(t, { viewport: { width: 375, height: 812 } });
+  await page.goto(`${base}/#users`);
+  await page.getByRole("button", { name: "Link & QR: alice", exact: true }).click();
+  await page.locator("#share-generate").click();
+  await page.locator("#share-result").waitFor({ state: "visible" });
+  await page.evaluate(() => Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined }));
+  await page.locator("#share-copy-link").click();
+  await waitText(page, "#toast", "manually");
+  assert.equal(await page.locator("#share-link").evaluate((input) => input.selectionEnd - input.selectionStart),
+    (await page.locator("#share-link").inputValue()).length);
+  assert.equal(await page.locator("#share-dialog").evaluate((dialog) => dialog.scrollWidth <= dialog.clientWidth), true);
+  await page.keyboard.press("Escape");
+  assert.equal(await page.locator("#share-link").inputValue(), "");
+});
+
+
+test("share view clears after five minutes and older brokers disable configuration export", async (t) => {
+  const { page, state, calls } = await fixture(t);
+  await page.goto(`${base}/#users`);
+  await page.getByRole("button", { name: "Link & QR: alice", exact: true }).click();
+  await page.locator("#share-generate").click();
+  await page.locator("#share-result").waitFor({ state: "visible" });
+  await page.clock.fastForward(5 * 60 * 1000 + 1);
+  assert.equal(await page.locator("#share-dialog").evaluate((dialog) => dialog.open), false);
+  assert.equal(await page.locator("#share-link").inputValue(), "");
+  assert.equal(await page.locator("#share-qr").getAttribute("width"), "0");
+  delete state.data.capabilities.profile_export;
+  await page.goto(base);
+  await waitText(page, "#running-services", "2 / 3");
+  await page.locator('[data-view="users"]').click();
+  assert.equal(await page.getByRole("button", { name: "Link & QR: alice", exact: true }).isDisabled(), true);
+  assert.equal(calls.exports.length, 1);
 });

@@ -87,6 +87,16 @@ jobs:
           done
           printf 'Web service state:\n'
           systemctl is-active nginx.service caddy.service apache2.service ikev2-web.service ikev2-web-proxy.service || true
+          if systemctl is-active --quiet ikev2-web-proxy.service; then
+            systemctl show ikev2-web-proxy.service -p User -p Group -p NoNewPrivileges \
+              -p CapabilityBoundingSet -p UnitFileState -p ActiveState
+            [[ $(systemctl show ikev2-web-proxy.service -p User --value) == ikev2-proxy ]]
+            systemctl is-enabled --quiet ikev2-web-proxy.service
+            curl --fail --silent --show-error --max-time 5 \
+              --header 'Host: p.mahanfreenet.ir' --header 'X-Forwarded-Proto: https' \
+              http://127.0.0.1:8080/api/health
+            printf '\nCaddy runtime identity, autostart and loopback proxy health verified.\n'
+          fi
           printf 'Public origin HTTPS health:\n'
           curl --silent --show-error --max-time 5 --resolve p.mahanfreenet.ir:443:127.0.0.1 \
             --output /dev/null --write-out 'HTTP %{http_code}\n' https://p.mahanfreenet.ir/api/health || true
@@ -197,6 +207,7 @@ jobs:
             -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" /usr/bin/python3 -B - <<'PY'
           from urllib.error import HTTPError
           from urllib.request import urlopen
+          import json
           import socket
           import subprocess
 
@@ -204,14 +215,21 @@ jobs:
           try:
               response = urlopen(base + "/api/health", timeout=30)
           except HTTPError as error:
+              origin_denial = error.read(80) == b"Forbidden"
               print("CDN health error:", error.code, "server:", error.headers.get("Server"),
                     "type:", error.headers.get("Content-Type"),
-                    "origin_denial:", error.read(80) == b"Forbidden")
+                    "origin_denial:", origin_denial)
+              if (error.code == 403 and error.headers.get("Server", "").lower() == "arvancloud"
+                      and error.headers.get("Content-Type", "").lower().startswith("text/html")
+                      and not origin_denial):
+                  print("::warning::Arvan denied this probe before reaching the origin. Public HTTPS checks were skipped; verify from a permitted visitor network. CDN restrictions were preserved.")
+                  raise SystemExit(0)
               print("CDN DNS:", sorted({entry[4][0] for entry in socket.getaddrinfo("p.mahanfreenet.ir", 443)}))
               subprocess.run(["ss", "-Hnt", "sport = :8080"], check=False)
               raise SystemExit("Public CDN health failed; access restrictions were preserved")
           with response:
               assert response.status == 200
+              assert json.load(response).get("status") == "ok"
               assert "no-store" in response.headers.get("Cache-Control", "")
               assert response.headers.get("X-Cache", "").upper() not in ("HIT", "STALE"), "Disable CDN caching"
           try:

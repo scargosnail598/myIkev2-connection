@@ -116,6 +116,26 @@ reset it. The SSH user needs passwordless sudo for `/usr/bin/install` and the
 fixed, root-owned Web UI installer. See [deployment permissions](PRODUCTION_DEPLOYMENT.md#web-ui-deployment)
 for the exact sudoers rule.
 
+If login fails because an older authentication config was preserved, run the
+workflow with **reset_admin_password** enabled. This explicitly sets the username
+to `admin` and replaces its password with `PRODUCTION_WEBUI_PASSWORD`, retaining
+cookie and session settings. It restarts only the Web UI, signs out existing
+sessions, clears login throttling, and verifies login plus authenticated dashboard
+access. Normal deployments continue to preserve credentials.
+
+To reset a password interactively on the VPN server instead:
+
+```bash
+cd /opt/ikev2
+sudo python3 -m webui.manage reset-password --config /etc/ikev2-web/config.json --username admin
+sudo systemctl restart ikev2-web.service
+```
+
+The password is entered twice without echo; no password is placed in command
+arguments. The configuration is replaced atomically with mode `0600` and retains
+its owner and other settings. Password resets invalidate the previous login
+password and sessions; rolling back application files does not restore them.
+
 This workflow installs only the Web UI and its broker. It starts neither a VPN
 installation nor a VPN restart. The frontend stays unprivileged, and the broker
 checks the root-only installer state. Without broker access in development mode,

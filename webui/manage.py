@@ -9,14 +9,12 @@ import json
 import os
 from pathlib import Path
 import sys
+import tempfile
 
-from webui.security import hash_password
+from webui.security import AuthConfig, hash_password
 
 
-def create_config(args: argparse.Namespace) -> None:
-    output = args.output.resolve()
-    if output.exists():
-        raise SystemExit(f"Refusing to overwrite existing config: {output}")
+def read_password_hash(args: argparse.Namespace) -> str:
     if args.password_stdin:
         password = sys.stdin.read(4097)
         if len(password) > 4096:
@@ -26,11 +24,19 @@ def create_config(args: argparse.Namespace) -> None:
         confirmation = getpass.getpass("Confirm Web UI password: ")
         if password != confirmation:
             raise SystemExit("Passwords do not match.")
+    if "\n" in password or "\r" in password:
+        raise SystemExit("Password must not contain newline characters. Supply stdin without a trailing newline.")
     try:
-        password_hash = hash_password(password)
+        return hash_password(password)
     except ValueError as error:
         raise SystemExit(str(error)) from error
 
+
+def create_config(args: argparse.Namespace) -> None:
+    output = args.output.resolve()
+    if output.exists():
+        raise SystemExit(f"Refusing to overwrite existing config: {output}")
+    password_hash = read_password_hash(args)
     payload = {
         "username": args.username,
         "password_hash": password_hash,
@@ -46,6 +52,36 @@ def create_config(args: argparse.Namespace) -> None:
     print(f"Created {output} with mode 0600.")
     if args.allow_http:
         print("Warning: Secure cookies are disabled. Use this config only for loopback HTTP testing.")
+
+
+def reset_password(args: argparse.Namespace) -> None:
+    path = args.config.resolve()
+    try:
+        AuthConfig.from_file(path)
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if args.username is not None:
+        if not 1 <= len(args.username) <= 64:
+            raise SystemExit("Username must contain between 1 and 64 characters.")
+        payload["username"] = args.username
+    payload["password_hash"] = read_password_hash(args)
+    original = path.stat()
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as config_file:
+            # Root may reset a config owned by the dedicated Web UI account.
+            os.fchown(config_file.fileno(), original.st_uid, original.st_gid)
+            os.fchmod(config_file.fileno(), 0o600)
+            json.dump(payload, config_file, indent=2)
+            config_file.write("\n")
+            config_file.flush()
+            os.fsync(config_file.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+    print("Web UI credentials updated. Restart ikev2-web.service to apply and invalidate existing sessions.")
 
 
 def parse_args() -> argparse.Namespace:
@@ -64,6 +100,10 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="disable the Secure cookie flag for loopback-only development",
     )
+    reset = subparsers.add_parser("reset-password", help="replace credentials in an existing config")
+    reset.add_argument("--config", type=Path, required=True)
+    reset.add_argument("--username", help="optionally replace the existing username")
+    reset.add_argument("--password-stdin", action="store_true", help="read the exact new password from stdin")
     return parser.parse_args()
 
 
@@ -71,6 +111,8 @@ def main() -> None:
     args = parse_args()
     if args.command == "create-config":
         create_config(args)
+    elif args.command == "reset-password":
+        reset_password(args)
 
 
 if __name__ == "__main__":

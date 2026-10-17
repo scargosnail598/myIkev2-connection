@@ -275,6 +275,16 @@ mode `0600`. On subsequent runs the existing account and password are preserved;
 the secret can be removed once initial provisioning is complete. Deployment
 requires passwordless sudo and restarts only `ikev2-web` and `ikev2-web-broker`.
 
+If the existing login password is unknown, set `PRODUCTION_WEBUI_PASSWORD` to the
+desired password and run the workflow with `reset_admin_password` enabled. It
+restores the username `admin`, replaces only the credential fields, and preserves
+cookie/session settings. The temporary credential file and login cookies are
+kept in the SSH user's mode-0700 staging directory, removed on exit, and never
+printed. The Web UI restarts to invalidate old sessions and login throttling;
+the workflow then verifies an actual login and authenticated dashboard request.
+Ordinary deployments leave existing credentials intact. Rolling back application
+files does not restore a previous password.
+
 The listener remains private. With the example server above, connect using:
 
 ```bash

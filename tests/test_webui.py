@@ -354,6 +354,69 @@ class WebServerTests(unittest.TestCase):
 
 
 class ConfigCommandTests(unittest.TestCase):
+    def reset_password(self, path, password, *options):
+        return subprocess.run(
+            [sys.executable, "-B", "-m", "webui.manage", "reset-password",
+             "--config", str(path), "--password-stdin", *options],
+            input=password, text=True, capture_output=True, cwd=REPO, check=False,
+        )
+
+    def test_reset_replaces_password_and_preserves_config_settings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            payload = {"username": "operator", "password_hash": PASSWORD_HASH,
+                       "secure_cookie": True, "session_ttl_seconds": 7200, "extra": "preserved"}
+            path.write_text(json.dumps(payload))
+            path.chmod(0o600)
+            original = path.stat()
+            new_password = "new secret for admin"
+            result = self.reset_password(path, new_password)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            config = AuthConfig.from_file(path)
+            self.assertTrue(verify_password(new_password, config.password_hash))
+            self.assertFalse(verify_password(PASSWORD, config.password_hash))
+            self.assertEqual(config.username, "operator")
+            self.assertTrue(config.secure_cookie)
+            self.assertEqual(config.session_ttl_seconds, 7200)
+            self.assertEqual(json.loads(path.read_text())["extra"], "preserved")
+            self.assertEqual(path.stat().st_uid, original.st_uid)
+            self.assertEqual(path.stat().st_gid, original.st_gid)
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            self.assertNotIn(new_password, path.read_text() + result.stdout + result.stderr)
+            self.assertEqual(len(list(path.parent.iterdir())), 1)
+
+    def test_reset_can_restore_admin_username(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            self.assertEqual(self.create_config(path, PASSWORD).returncode, 0)
+            payload = json.loads(path.read_text())
+            payload["username"] = "operator"
+            path.write_text(json.dumps(payload))
+            result = self.reset_password(path, PASSWORD, "--username", "admin")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(AuthConfig.from_file(path).username, "admin")
+
+    def test_invalid_reset_keeps_existing_config(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            self.assertEqual(self.create_config(path, PASSWORD).returncode, 0)
+            original = path.read_bytes()
+            for password, options in [("short", ()), (PASSWORD + "\n", ()), (PASSWORD, ("--username", ""))]:
+                result = self.reset_password(path, password, *options)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(path.read_bytes(), original)
+
+    def test_reset_requires_existing_private_config(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            self.assertNotEqual(self.reset_password(path, PASSWORD).returncode, 0)
+            self.assertFalse(path.exists())
+            path.write_text(json.dumps({"username": "admin", "password_hash": PASSWORD_HASH}))
+            path.chmod(0o644)
+            original = path.read_bytes()
+            self.assertNotEqual(self.reset_password(path, PASSWORD).returncode, 0)
+            self.assertEqual(path.read_bytes(), original)
+
     def create_config(self, path, password):
         return subprocess.run(
             [sys.executable, "-B", "-m", "webui.manage", "create-config",

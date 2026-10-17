@@ -2,6 +2,11 @@ name: Deploy Production Web UI
 
 on:
   workflow_dispatch:
+    inputs:
+      reset_admin_password:
+        description: Reset the admin account to PRODUCTION_WEBUI_PASSWORD and sign out existing sessions
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -53,6 +58,7 @@ jobs:
         shell: bash
         env:
           INITIAL_PASSWORD: ${{ secrets.PRODUCTION_WEBUI_PASSWORD }}
+          RESET_ADMIN_PASSWORD: ${{ inputs.reset_admin_password }}
         run: |
           # Staging paths are deliberately expanded locally after validation.
           # shellcheck disable=SC2029
@@ -66,6 +72,10 @@ jobs:
             -p "$DEPLOY_PORT"
           )
           remote="$DEPLOY_USER@$DEPLOY_HOST"
+          if [[ "$RESET_ADMIN_PASSWORD" == "true" && ${#INITIAL_PASSWORD} -lt 12 ]]; then
+            printf 'Set PRODUCTION_WEBUI_PASSWORD to at least 12 characters before resetting credentials.\n' >&2
+            exit 1
+          fi
           # Report the effective deployment policy before changing server files.
           ssh "${ssh_args[@]}" "$remote" 'sudo -n -l'
           remote_stage=$(ssh "${ssh_args[@]}" "$remote" 'mktemp -d /tmp/ikev2-web.XXXXXXXX')
@@ -103,6 +113,28 @@ jobs:
           # On updates the installer preserves the existing authentication config.
           printf '%s' "$INITIAL_PASSWORD" | ssh "${ssh_args[@]}" "$remote" \
             'sudo -n /opt/ikev2-web-deploy/packaging/install-webui.sh install --password-stdin'
+
+          if [[ "$RESET_ADMIN_PASSWORD" == "true" ]]; then
+            # Keep the credential file within the mode-0700 SSH staging directory.
+            # Preserve cookie/session settings and replace only the admin credentials.
+            ssh "${ssh_args[@]}" "$remote" bash -s -- "$remote_stage/auth.json" <<'RESET'
+          set -Eeuo pipefail
+          sudo -n /usr/bin/install -o "$(id -u)" -g "$(id -g)" -m 0600 /etc/ikev2-web/config.json "$1"
+          RESET
+            printf '%s' "$INITIAL_PASSWORD" | ssh "${ssh_args[@]}" "$remote" \
+              "cd /opt/ikev2 && /usr/bin/python3 -B -m webui.manage reset-password --config '$remote_stage/auth.json' --username admin --password-stdin"
+            ssh "${ssh_args[@]}" "$remote" \
+              "sudo -n /usr/bin/install -o ikev2-web -g ikev2-web -m 0600 '$remote_stage/auth.json' /etc/ikev2-web/config.json && sudo -n /usr/bin/systemctl restart ikev2-web.service"
+            ssh "${ssh_args[@]}" "$remote" \
+              'curl --fail --silent --show-error --retry 10 --retry-connrefused --retry-delay 1 --max-time 3 --output /dev/null http://127.0.0.1:8787/api/health'
+            # Verify the real login and authenticated dashboard without logging credentials or tokens.
+            python3 -c 'import json, os; print(json.dumps({"username": "admin", "password": os.environ["INITIAL_PASSWORD"]}))' | \
+              ssh "${ssh_args[@]}" "$remote" \
+                "umask 077; curl --fail --silent --show-error --max-time 10 --output /dev/null --cookie-jar '$remote_stage/cookies' --header 'Content-Type: application/json' --data-binary @- http://127.0.0.1:8787/api/auth/login"
+            ssh "${ssh_args[@]}" "$remote" \
+              "curl --fail --silent --show-error --max-time 15 --output /dev/null --cookie '$remote_stage/cookies' http://127.0.0.1:8787/api/dashboard"
+            printf 'Admin login and authenticated dashboard verified.\n'
+          fi
 
       - name: Remove SSH credentials from runner
         if: always()

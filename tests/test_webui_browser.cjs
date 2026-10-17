@@ -15,7 +15,7 @@ let base;
 const staticRoot = path.resolve(__dirname, "../webui/static");
 const snapshot = () => ({
   installed: true,
-  capabilities: { service_actions: true, user_management: true, profile_export: true },
+  capabilities: { service_actions: true, user_management: true, profile_export: true, user_limits: true },
   services: [
     { id: "ikev2", label: "IKEv2 / StrongSwan", unit: "strongswan-starter.service", state: "active" },
     { id: "firewall", label: "Firewall & NAT", unit: "ikev2-vpn-firewall.service", state: "active" },
@@ -61,7 +61,10 @@ async function fixture(t, options = {}) {
   const errors = [];
   const state = { authenticated: true, data: snapshot(), dashboardFailure: false, logoutFailure: false, sessionFailure: false, loginLimited: false, commandFailure: false, ...options };
   state.userNames = options.userNames || ["alice", "bob", "carol"];
-  const calls = { dashboard: 0, commands: 0, logout: 0, sessions: 0, diagnostics: 0, metrics: 0, userChanges: [], exports: [] };
+  state.userLimits = options.userLimits || {};
+  const limitsFor = (username) => state.userLimits[username] || { byte_limit: null, validity_seconds: null,
+    used_bytes: 0, first_connected_at: null, reset_at: 1792238400, blocked: null, suspended: false };
+  const calls = { dashboard: 0, commands: 0, logout: 0, sessions: 0, diagnostics: 0, metrics: 0, userChanges: [], exports: [], limitChanges: [] };
   const session = () => ({ authenticated: state.authenticated, username: state.authenticated ? "browser-test-admin" : null, csrf_token: state.authenticated ? "browser-test-csrf" : null });
   page.on("pageerror", (error) => errors.push(error.message));
   await page.route("**/api/**", async (route) => {
@@ -127,10 +130,22 @@ async function fixture(t, options = {}) {
       const query = new URL(request.url()).searchParams;
       const names = state.userNames.filter((name) => name.includes(query.get("search") || ""));
       const page = Math.min(Number(query.get("page") || 0), Math.max(0, Math.ceil(names.length / 20) - 1));
-      return json({ ok: true, users: names.slice(page * 20, page * 20 + 20).map((username) => ({ username })),
-        total: state.userNames.length, matched: names.length, page, pages: Math.max(1, Math.ceil(names.length / 20)), revision: "1".repeat(64) });
+      return json({ ok: true, users: names.slice(page * 20, page * 20 + 20).map((username) => ({ username, limits: limitsFor(username) })),
+        total: state.userNames.length, matched: names.length, page, pages: Math.max(1, Math.ceil(names.length / 20)), revision: "1".repeat(64),
+        limits_revision: "2".repeat(32), limits_healthy: state.limitsHealthy !== false, limits_sampled_at: 1792238400 });
     }
     assert.equal(request.headers()["x-csrf-token"], "browser-test-csrf");
+    if (["/api/users/limits_set", "/api/users/usage_reset"].includes(endpoint)) {
+      const payload = request.postDataJSON();
+      calls.limitChanges.push({ operation: endpoint.split("/").at(-1), ...payload });
+      if (state.limitChangeHold) await state.limitChangeHold;
+      if (state.limitChangeFailure) return json({ message: "Limits changed. Refresh users before retrying." }, state.limitChangeFailure);
+      const limits = { ...limitsFor(payload.username) };
+      if (endpoint.endsWith("limits_set")) Object.assign(limits, { byte_limit: payload.byte_limit, validity_seconds: payload.validity_seconds });
+      else Object.assign(limits, { used_bytes: 0, first_connected_at: null, blocked: null, suspended: false });
+      state.userLimits[payload.username] = limits;
+      return json({ ok: true, enforcement_pending: state.enforcementPending === true });
+    }
     if (endpoint === "/api/users/export") {
       const payload = request.postDataJSON();
       calls.exports.push(payload);
@@ -810,4 +825,104 @@ test("share view clears after five minutes and older brokers disable configurati
   await page.locator('[data-view="users"]').click();
   assert.equal(await page.getByRole("button", { name: "Link & QR: alice", exact: true }).isDisabled(), true);
   assert.equal(calls.exports.length, 1);
+});
+
+
+test("per-user traffic and first-connection validity allow independent unlimited values", async (t) => {
+  const { page, calls } = await fixture(t);
+  await page.goto(`${base}/#users`);
+  await waitText(page, "#users-list", "Validity: Unlimited");
+  await page.getByRole("button", { name: "Limits: alice", exact: true }).click();
+  assert.equal(await page.locator("#limit-traffic-unlimited").isChecked(), true);
+  assert.equal(await page.locator("#limit-time-unlimited").isChecked(), true);
+  await page.locator("#limit-traffic-unlimited").uncheck();
+  await page.locator("#limit-time-unlimited").uncheck();
+  await page.locator("#limit-traffic").fill("0");
+  await page.locator("#limit-time").fill("30");
+  await page.locator("#limits-save").click();
+  await waitText(page, "#limits-form-error", "positive");
+  assert.equal(calls.limitChanges.length, 0);
+  await page.locator("#limit-traffic").fill("50");
+  await page.locator("#limits-save").click();
+  await waitText(page, "#users-list", "50 GiB");
+  await waitText(page, "#users-list", "30 days · starts on first connection");
+  assert.equal(calls.limitChanges[0].byte_limit, 50 * 1024 ** 3);
+  assert.equal(calls.limitChanges[0].validity_seconds, 30 * 86400);
+  assert.equal(calls.limitChanges[0].limits_revision, "2".repeat(32));
+  assert.equal("password" in calls.limitChanges[0], false);
+  await page.getByRole("button", { name: "Limits: alice", exact: true }).click();
+  await page.locator("#limit-traffic-unlimited").check();
+  await page.locator("#limits-save").click();
+  await page.waitForFunction(() => !document.querySelector("#limits-dialog").open);
+  assert.equal(calls.limitChanges[1].byte_limit, null);
+  assert.equal(calls.limitChanges[1].validity_seconds, 30 * 86400);
+});
+
+test("reset traffic and validity requires confirmation and preserves configured limits", async (t) => {
+  const { page, state, calls } = await fixture(t, { userLimits: { alice: {
+    byte_limit: 10 * 1024 ** 3, validity_seconds: 30 * 86400, used_bytes: 2 * 1024 ** 3,
+    first_connected_at: 1792238400, reset_at: 1792238400, blocked: "expired", suspended: true,
+  } } });
+  await page.goto(`${base}/#users`);
+  await waitText(page, "#users-list", "validity expired");
+  await page.getByRole("button", { name: "Reset usage: alice", exact: true }).click();
+  await waitText(page, "#limits-copy", "next connection");
+  await page.locator("#limits-save").click();
+  assert.equal(calls.limitChanges.length, 0);
+  await page.locator("#limits-reset-confirm").check();
+  await page.locator("#limits-save").click();
+  await waitText(page, "#toast", "validity reset");
+  await waitText(page, "#users-list", "30 days · starts on first connection");
+  assert.equal(state.userLimits.alice.byte_limit, 10 * 1024 ** 3);
+  assert.equal(state.userLimits.alice.validity_seconds, 30 * 86400);
+  assert.equal(state.userLimits.alice.used_bytes, 0);
+  assert.equal(state.userLimits.alice.first_connected_at, null);
+  assert.deepEqual(Object.keys(calls.limitChanges[0]).sort(), ["limits_revision", "operation", "revision", "username"]);
+});
+
+test("limit writes send once, pause polling, and report conflicts without automatic retry", async (t) => {
+  let release;
+  const hold = new Promise((resolve) => { release = resolve; });
+  const { page, calls, state } = await fixture(t, { limitChangeHold: hold });
+  await page.goto(`${base}/#users`);
+  await page.getByRole("button", { name: "Limits: alice", exact: true }).click();
+  await page.locator("#limits-save").click();
+  await page.waitForFunction(() => document.querySelector("#limits-save").disabled);
+  await page.locator("#limits-form").evaluate((form) => { form.requestSubmit(); form.requestSubmit(); });
+  await page.clock.fastForward(31000);
+  assert.equal(calls.limitChanges.length, 1);
+  release();
+  await page.waitForFunction(() => !document.querySelector("#limits-dialog").open);
+  state.limitChangeHold = null;
+  state.limitChangeFailure = 409;
+  await page.getByRole("button", { name: "Limits: alice", exact: true }).click();
+  await page.locator("#limits-save").click();
+  await waitText(page, "#toast", "not confirmed");
+  assert.equal(calls.limitChanges.length, 2);
+});
+
+test("limits fit mobile and stale accounting and expired sessions are visible", async (t) => {
+  const { page, state } = await fixture(t, { viewport: { width: 375, height: 812 }, limitsHealthy: false });
+  await page.goto(`${base}/#users`);
+  await page.locator("#limits-notice").waitFor({ state: "visible" });
+  await page.getByRole("button", { name: "Limits: alice", exact: true }).click();
+  assert.equal(await page.locator("#limits-dialog").evaluate((dialog) => dialog.scrollWidth <= dialog.clientWidth), true);
+  await page.keyboard.press("Escape");
+  state.limitChangeFailure = 401;
+  await page.getByRole("button", { name: "Limits: alice", exact: true }).click();
+  await page.locator("#limits-save").click();
+  await page.locator("#login-view").waitFor({ state: "visible" });
+  assert.equal(await page.locator("#limits-dialog").evaluate((dialog) => dialog.open), false);
+});
+
+test("older brokers disable limits and reset controls", async (t) => {
+  const data = snapshot();
+  delete data.capabilities.user_limits;
+  const { page, calls } = await fixture(t, { data });
+  await page.goto(`${base}/#users`);
+  const button = page.getByRole("button", { name: "Limits: alice", exact: true });
+  await button.waitFor();
+  assert.equal(await button.isDisabled(), true);
+  assert.equal(await page.getByRole("button", { name: "Reset usage: alice", exact: true }).isDisabled(), true);
+  assert.equal(calls.limitChanges.length, 0);
 });

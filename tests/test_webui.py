@@ -77,6 +77,10 @@ class FakeBroker:
         self.calls.append(payload)
         return {"ok": True, "uri": "ikev://import/v1/fixture", "includes_password": payload.get("include_password", False)}
 
+    def manage_limits(self, payload):
+        self.calls.append(payload)
+        return {"ok": True, "username": payload["username"], "operation": payload["operation"]}
+
     def manage_user(self, payload):
         self.calls.append(payload)
         return {"ok": True, "username": payload["username"], "operation": payload["operation"]}
@@ -352,6 +356,27 @@ class WebServerTests(unittest.TestCase):
                 self.get_json("/api/sessions")
         self.assertEqual(raised.exception.code, 503)
         self.assertNotIn("private", raised.exception.read().decode())
+
+    def test_limits_and_usage_resets_require_session_csrf_and_fixed_fields(self):
+        payload = {"username": "fixture-user", "revision": "fixture-revision", "limits_revision": "2" * 32,
+                   "byte_limit": 1024, "validity_seconds": 30 * 86400}
+        for operation in ("limits_set", "usage_reset"):
+            body = payload if operation == "limits_set" else {key: value for key, value in payload.items() if key not in {"byte_limit", "validity_seconds"}}
+            self.cookies.clear()
+            with self.assertRaises(HTTPError) as error:
+                self.post_json(f"/api/users/{operation}", body)
+            self.assertEqual(error.exception.code, 401)
+            self.login()
+            with self.assertRaises(HTTPError) as error:
+                self.post_json(f"/api/users/{operation}", body)
+            self.assertEqual(error.exception.code, 403)
+            with self.assertRaises(HTTPError) as error:
+                self.post_json(f"/api/users/{operation}", {**body, "command": "restart"}, headers={"X-CSRF-Token": self.csrf_token})
+            self.assertEqual(error.exception.code, 400)
+            with self.post_json(f"/api/users/{operation}", body, headers={"X-CSRF-Token": self.csrf_token}) as response:
+                self.assertTrue(json.load(response)["ok"])
+                self.assertEqual(response.headers["Cache-Control"], "no-store")
+            self.assertEqual(self.broker.calls[-1], {**body, "operation": operation})
 
     def test_exports_require_session_csrf_post_and_reject_extra_fields(self):
         payload = {"username": "fixture-user", "revision": "fixture-revision", "include_password": True}

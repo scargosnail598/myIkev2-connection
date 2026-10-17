@@ -71,6 +71,7 @@ class SystemStatusProvider:
         broker_available = False
         user_management = False
         profile_export = False
+        user_limits = False
         session_monitoring = False
         diagnostics = False
         metrics = False
@@ -81,6 +82,7 @@ class SystemStatusProvider:
                 metrics = broker_available and status.get("metrics") is True
                 diagnostics = broker_available and status.get("diagnostics") is True
                 session_monitoring = broker_available and status.get("session_monitoring") is True
+                user_limits = broker_available and status.get("user_limits") is True
                 profile_export = broker_available and status.get("profile_export") is True
                 user_management = broker_available and status.get("user_management") is True
                 if broker_available and isinstance(status.get("installed"), bool):
@@ -95,6 +97,7 @@ class SystemStatusProvider:
                 "service_actions": broker_available,
                 "user_management": user_management,
                 "profile_export": profile_export,
+                "user_limits": user_limits,
                 "session_management": False,
                 "session_monitoring": session_monitoring,
                 "diagnostics": diagnostics,
@@ -231,7 +234,7 @@ class Ikev2RequestHandler(BaseHTTPRequestHandler):
             return
         parts = path.strip("/").split("/")
         if len(parts) == 3 and parts[:2] == ["api", "users"]:
-            if parts[2] not in {"create", "reset", "delete", "export"}:
+            if parts[2] not in {"create", "reset", "delete", "export", "limits_set", "usage_reset"}:
                 self._send_json({"message": "Unsupported user operation."}, HTTPStatus.BAD_REQUEST)
                 return
             try:
@@ -240,11 +243,19 @@ class Ikev2RequestHandler(BaseHTTPRequestHandler):
                 self._send_json({"message": str(error)}, HTTPStatus.BAD_REQUEST)
                 return
             exporting = parts[2] == "export"
-            allowed = {"username", "revision", "include_password"} if exporting else {"username", "password", "revision", "allow_last"}
+            limiting = parts[2] in {"limits_set", "usage_reset"}
+            if limiting:
+                allowed = {"username", "revision", "limits_revision"}
+                if parts[2] == "limits_set":
+                    allowed |= {"byte_limit", "validity_seconds"}
+            else:
+                allowed = {"username", "revision", "include_password"} if exporting else {"username", "password", "revision", "allow_last"}
             if set(payload) - allowed:
                 self._send_json({"message": "Unsupported user fields."}, HTTPStatus.BAD_REQUEST)
                 return
-            if exporting:
+            if limiting:
+                self._user_result(lambda: self.broker.manage_limits({**payload, "operation": parts[2]}))
+            elif exporting:
                 self._user_result(lambda: self.broker.export_user(payload))
             else:
                 self._user_result(lambda: self.broker.manage_user({**payload, "operation": parts[2]}))

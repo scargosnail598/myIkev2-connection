@@ -1,0 +1,11 @@
+[Unit]
+Description=Check VPN user traffic and validity limits every five seconds
+
+[Timer]
+OnBootSec=5s
+OnUnitInactiveSec=5s
+AccuracySec=1s
+Unit=ikev2-web-limits.service
+
+[Install]
+WantedBy=timers.target

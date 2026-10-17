@@ -18,7 +18,7 @@ ProtectHome=true
 ProtectSystem=strict
 # Atomic replacement needs write access to the parent directory, not a bind
 # mount of the individual file. This access exists only in this oneshot unit.
-ReadWritePaths=/etc /run/ikev2-web
+ReadWritePaths=/etc /run/ikev2-web /var/lib/ikev2-web
 InaccessiblePaths=-/etc/ssh -/etc/sudoers -/etc/sudoers.d -/etc/passwd -/etc/shadow -/etc/group -/etc/gshadow -/etc/systemd -/etc/ipsec.d/private
 ProtectKernelTunables=true
 ProtectKernelModules=true

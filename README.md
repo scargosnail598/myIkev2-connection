@@ -203,6 +203,16 @@ The new `ikev://import/v1/…` transport wraps the existing `.ikev` profile and 
 ready for future Android QR/clipboard import; existing desktop clients continue
 to use `.ikev` files. See [configuration sharing and the Android decoding contract](docs/config-sharing.md).
 
+Use **Limits** to set a per-account traffic allowance in GiB and validity in
+days from its first connection. Each can independently be **Unlimited**; all
+existing and new accounts start unlimited. Validity continues while offline.
+**Reset usage** resets traffic and restarts validity while keeping the limits.
+When an allowance is exhausted, the worker disables authentication and disconnects
+that user's sessions. The Users page shows usage, pending activation, expiry and
+suspension; it refreshes every 30 seconds. Accounting is sampled every five
+seconds and can miss traffic/short sessions between samples, so it is unsuitable
+for exact billing. See [user limits, enforcement and rollback](docs/user-limits.md).
+
 Account changes update the installer's existing `/etc/ipsec.secrets` atomically,
 preserving other entries and file mode 0600. The EAP credentials remain in the
 root-only format required by the existing installation; the Web UI process
@@ -210,9 +220,11 @@ cannot read that file. The same accounts remain visible in the CLI installer.
 Duplicate identities, includes, and nonstandard EAP entries require manual
 management and are refused by this page. Avoid editing accounts through the CLI
 and Web UI simultaneously: Web UI writes are serialized and stale snapshots are
-rejected, but the older CLI does not participate in the Web UI lock.
+rejected. The current CLI recognizes suspended users and uses the shared lock;
+update the separately deployed CLI script before using it alongside quotas.
+Older CLI versions do not participate in this lock.
 
-After a change, the helper runs only `ipsec rereadsecrets` when StrongSwan is
+After a credential change, the helper runs only `ipsec rereadsecrets` when StrongSwan is
 active. It does not restart the VPN or disconnect existing sessions; password
 changes/deletion apply at the next authentication. If the VPN is stopped, the
 file is saved for its next start. Reload failure restores the previous file and
@@ -222,8 +234,11 @@ automatically. Rolling back the application does not undo account changes.
 The long-lived broker keeps its existing read-only `/etc` sandbox. A new root
 oneshot unit, `ikev2-web-users-apply.service`, reads a mode-0600 request in a
 root-only runtime directory and applies only validated create/reset/delete
-operations to the fixed secrets file. Atomic replacement requires write access
-to parent `/etc`, granted only to this short-lived unit. It has no capabilities,
+operations to the fixed secrets file, plus validated limits edits and usage resets.
+The short-lived `ikev2-web-limits.service` also suspends/restores credentials and
+disconnects accounts at their limits. Both units have write access to their
+private limits state directory. Atomic replacement requires write access to
+parent `/etc`, granted only to these short-lived units. It has no capabilities,
 IP network sockets, shell command input, or write access to home directories; SSH,
 sudoers, account databases, systemd configuration and private key directories
 are inaccessible inside its namespace. Requests/results are deleted after use;
@@ -233,13 +248,15 @@ secrets. To block user mutations while retaining monitoring, move
 `/etc/systemd/system/ikev2-web-users-apply.service` to the same path with a
 `.disabled` suffix and run `sudo systemctl daemon-reload`. A subsequent Web UI
 deployment reinstalls the unit. Existing accounts survive application rollback
-or removal of this helper unit.
+or removal of this helper unit. Quota suspensions require the explicit
+[limits rollback procedure](docs/user-limits.md#deployment-and-rollback) before
+deploying an older application.
 
 Optional browser regression checks run against a local static server with mocked
 APIs, so no VPN service commands or production credentials are used:
 
 ```bash
-npm install --prefix /tmp/ikev2-ui-tools --ignore-scripts --no-audit --no-fund playwright@1.64.1
+npm install --prefix /tmp/ikev2-ui-tools --ignore-scripts --no-audit --no-fund playwright@1.64.1 jsqr@1.4.0
 PLAYWRIGHT_BROWSERS_PATH=/tmp/ikev2-ui-browsers node /tmp/ikev2-ui-tools/node_modules/playwright/cli.js install firefox
 NODE_PATH=/tmp/ikev2-ui-tools/node_modules PLAYWRIGHT_BROWSERS_PATH=/tmp/ikev2-ui-browsers node --test tests/test_webui_browser.cjs
 ```
@@ -297,7 +314,7 @@ arguments. The configuration is replaced atomically with mode `0600` and retains
 its owner and other settings. Password resets invalidate the previous login
 password and sessions; rolling back application files does not restore them.
 
-This workflow installs only the Web UI and its broker. It starts neither a VPN
+This workflow installs the Web UI, its broker and its limits worker/timer. It starts neither a VPN
 installation nor a VPN restart. The frontend stays unprivileged, and the broker
 checks the root-only installer state. Without broker access in development mode,
 the dashboard reports `Unknown` if it cannot inspect that state.
@@ -370,7 +387,7 @@ broker is running. Use the installer above when commands must work.
 
 The Web UI process remains unprivileged. A separate root broker accepts only
 fixed start, stop, and restart operations for the managed StrongSwan, firewall,
-and proxy systemd units. It does not invoke a shell or accept arbitrary command
+and proxy systemd units, plus allowlisted account, profile-export and limits operations. It does not invoke a shell or accept arbitrary command
 arguments. Linux peer credentials restrict the Unix socket to the configured
 Web UI user, and requested/completed operations are appended to
 `/var/log/ikev2-web/audit.log` with mode `0600`.

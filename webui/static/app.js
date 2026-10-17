@@ -35,6 +35,11 @@ let userOperation = null;
 let userRevision = null;
 const userDialog = $("#user-dialog");
 const shareDialog = $("#share-dialog");
+const limitsDialog = $("#limits-dialog");
+let limitOperation = null;
+let limitUsername = null;
+let limitAccountRevision = null;
+let limitRevision = null;
 let shareGeneration = 0;
 let shareTimer = null;
 let shareUsername = null;
@@ -152,7 +157,7 @@ function setMode(label, controlled) {
 }
 
 function syncControls() {
-  const busy = Boolean(pendingAction || confirmation || logoutPending || userPending || userDialog.open || shareDialog.open);
+  const busy = Boolean(pendingAction || confirmation || logoutPending || userPending || userDialog.open || shareDialog.open || limitsDialog.open);
   const canControl = Boolean(csrfToken && dashboardFresh && dashboard?.capabilities.service_actions);
   refreshButton.disabled = !csrfToken || dashboardLoading || busy;
   refreshButton.textContent = dashboardLoading ? "Refreshing…" : "Refresh status ↻";
@@ -287,7 +292,7 @@ async function controlService(target, operation) {
 }
 
 async function loadDashboard() {
-  if (!csrfToken || dashboardLoading || pendingAction || confirmation || logoutPending || userPending || userDialog.open || shareDialog.open) return;
+  if (!csrfToken || dashboardLoading || pendingAction || confirmation || logoutPending || userPending || userDialog.open || shareDialog.open || limitsDialog.open) return;
   const version = sessionVersion;
   dashboardLoading = true;
   syncControls();
@@ -437,7 +442,9 @@ window.setInterval(() => {
   if (document.visibilityState === "visible") {
     if (location.hash === "#diagnostics") return;
     if (location.hash === "#sessions") loadSessions();
-    else if (!services.contains(document.activeElement)) loadDashboard();
+    else if (location.hash === "#users") {
+      if (!$("#users-list").contains(document.activeElement) && document.activeElement !== $("#users-search")) loadUsers();
+    } else if (!services.contains(document.activeElement)) loadDashboard();
   }
 }, 30000);
 document.addEventListener("visibilitychange", () => {
@@ -445,6 +452,7 @@ document.addEventListener("visibilitychange", () => {
     loadMetrics();
     if (location.hash === "#diagnostics") return;
     if (location.hash === "#sessions") loadSessions();
+    else if (location.hash === "#users") loadUsers();
     else loadDashboard();
   }
 });
@@ -457,6 +465,8 @@ function resetUsers() {
   userPending = false;
   closeUserDialog();
   closeShareDialog();
+  closeLimitsDialog();
+  $("#limits-notice").hidden = true;
   $("#users-list").replaceChildren();
   $("#users-error").hidden = true;
   $("#users-empty").hidden = true;
@@ -468,6 +478,7 @@ function resetUsers() {
 
 function selectView() {
   closeShareDialog();
+  closeLimitsDialog();
   syncControls();
   const view = ["#users", "#sessions", "#diagnostics"].includes(location.hash) ? location.hash.slice(1) : "overview";
   $("#workspace-title").textContent = { overview: "Overview", users: "Users", sessions: "Sessions", diagnostics: "Diagnostics" }[view];
@@ -509,7 +520,7 @@ function resetMetrics() {
 }
 
 function syncMetricsControls() {
-  $("#metrics-refresh").disabled = !csrfToken || metricsLoading || Boolean(pendingAction || confirmation || logoutPending || userPending || userDialog.open || shareDialog.open);
+  $("#metrics-refresh").disabled = !csrfToken || metricsLoading || Boolean(pendingAction || confirmation || logoutPending || userPending || userDialog.open || shareDialog.open || limitsDialog.open);
   $("#metrics-refresh").textContent = metricsLoading ? "Refreshing…" : "Refresh metrics";
   $("#metrics-grid").setAttribute("aria-busy", String(metricsLoading));
 }
@@ -576,7 +587,7 @@ function renderMetrics(data) {
 }
 
 async function loadMetrics() {
-  if (!metricsVisible() || metricsLoading || pendingAction || confirmation || logoutPending || userPending || userDialog.open || shareDialog.open) return;
+  if (!metricsVisible() || metricsLoading || pendingAction || confirmation || logoutPending || userPending || userDialog.open || shareDialog.open || limitsDialog.open) return;
   const version = sessionVersion;
   metricsLoading = true;
   syncMetricsControls();
@@ -627,14 +638,14 @@ function resetDiagnostics() {
 }
 
 function syncDiagnosticsControls() {
-  $("#diagnostics-refresh").disabled = !csrfToken || diagnosticsLoading || Boolean(pendingAction || confirmation || logoutPending || userPending || userDialog.open || shareDialog.open);
+  $("#diagnostics-refresh").disabled = !csrfToken || diagnosticsLoading || Boolean(pendingAction || confirmation || logoutPending || userPending || userDialog.open || shareDialog.open || limitsDialog.open);
   $("#diagnostics-refresh").textContent = diagnosticsLoading ? "Checking…" : "Run checks";
   $("#diagnostics-progress").hidden = !diagnosticsLoading;
   $("#diagnostics-list").setAttribute("aria-busy", String(diagnosticsLoading));
 }
 
 async function loadDiagnostics() {
-  if (!csrfToken || diagnosticsLoading || pendingAction || confirmation || logoutPending || userPending || userDialog.open || shareDialog.open) return;
+  if (!csrfToken || diagnosticsLoading || pendingAction || confirmation || logoutPending || userPending || userDialog.open || shareDialog.open || limitsDialog.open) return;
   const version = sessionVersion;
   diagnosticsLoading = true;
   syncDiagnosticsControls();
@@ -704,7 +715,7 @@ function resetSessions() {
 }
 
 function syncSessionControls() {
-  const busy = !csrfToken || sessionsLoading || Boolean(pendingAction || confirmation || logoutPending || userPending || userDialog.open || shareDialog.open);
+  const busy = !csrfToken || sessionsLoading || Boolean(pendingAction || confirmation || logoutPending || userPending || userDialog.open || shareDialog.open || limitsDialog.open);
   $("#sessions-refresh").disabled = busy;
   $("#sessions-refresh").textContent = sessionsLoading ? "Loading…" : "Refresh sessions";
   $("#sessions-search").disabled = busy;
@@ -723,7 +734,7 @@ function formatBytes(value) {
 }
 
 async function loadSessions(page = sessionsSnapshot?.page || 0) {
-  if (!csrfToken || sessionsLoading || pendingAction || confirmation || logoutPending || userPending || userDialog.open || shareDialog.open) return;
+  if (!csrfToken || sessionsLoading || pendingAction || confirmation || logoutPending || userPending || userDialog.open || shareDialog.open || limitsDialog.open) return;
   const version = sessionVersion;
   sessionsLoading = true;
   syncSessionControls();
@@ -781,13 +792,18 @@ $("#sessions-previous").addEventListener("click", () => loadSessions(sessionsSna
 $("#sessions-next").addEventListener("click", () => loadSessions(sessionsSnapshot.page + 1));
 
 function syncUserControls() {
-  const busy = usersLoading || userPending || userDialog.open || shareDialog.open || Boolean(pendingAction || confirmation || logoutPending);
+  const busy = usersLoading || userPending || userDialog.open || shareDialog.open || limitsDialog.open || Boolean(pendingAction || confirmation || logoutPending);
   const writable = Boolean(csrfToken && usersFresh && dashboard?.capabilities.user_management);
   $("#user-add").disabled = !writable || busy;
   $("#users-refresh").disabled = !csrfToken || busy;
   $("#users-refresh").textContent = usersLoading ? "Loading…" : "Refresh users";
   $("#users-list").setAttribute("aria-busy", String(busy));
-  $("#users-list").querySelectorAll("button").forEach((button) => { button.disabled = !writable || busy || (button.dataset.userOperation === "export" && !dashboard?.capabilities.profile_export); });
+  $("#users-list").querySelectorAll("button").forEach((button) => {
+    const operation = button.dataset.userOperation;
+    const missingLimits = ["limits_set", "usage_reset"].includes(operation)
+      && (!dashboard?.capabilities.user_limits || !/^[0-9a-f]{32}$/.test(usersSnapshot?.limits_revision || ""));
+    button.disabled = !writable || busy || missingLimits || (operation === "export" && !dashboard?.capabilities.profile_export);
+  });
   $("#users-previous").disabled = busy || !usersSnapshot || usersSnapshot.page <= 0;
   $("#users-next").disabled = busy || !usersSnapshot || usersSnapshot.page + 1 >= usersSnapshot.pages;
   $("#users-progress").hidden = !userPending;
@@ -796,7 +812,7 @@ function syncUserControls() {
 }
 
 async function loadUsers(page = usersSnapshot?.page || 0) {
-  if (!csrfToken || userPending || userDialog.open || shareDialog.open) return;
+  if (!csrfToken || usersLoading || userPending || userDialog.open || shareDialog.open || limitsDialog.open) return;
   const version = sessionVersion;
   const generation = ++usersGeneration;
   usersLoading = true;
@@ -807,9 +823,12 @@ async function loadUsers(page = usersSnapshot?.page || 0) {
     if (version !== sessionVersion || generation !== usersGeneration) return;
     if (!Array.isArray(data.users) || typeof data.revision !== "string" || !Number.isInteger(data.total)
         || !data.users.every((user) => typeof user?.username === "string")) throw new Error("Unexpected account list response.");
+    if (data.users.some((user) => user.limits !== undefined && !validUserLimits(user.limits))) throw new Error("Unexpected user limits response.");
     usersSnapshot = data;
     usersFresh = true;
     $("#users-error").hidden = true;
+    $("#limits-notice").hidden = !dashboard?.capabilities.user_limits || data.limits_healthy === true;
+    $("#limits-notice").textContent = "Usage accounting is delayed or enforcement needs attention. Values may be stale; check the VPN limits service and refresh users.";
     $("#users-summary").textContent = `${data.total} VPN accounts · ${data.matched} matching`;
     $("#users-page").textContent = `Page ${data.page + 1} of ${data.pages}`;
     $("#users-empty").hidden = data.users.length > 0;
@@ -817,9 +836,27 @@ async function loadUsers(page = usersSnapshot?.page || 0) {
       const row = document.createElement("tr");
       const name = document.createElement("td");
       name.textContent = user.username;
+      const usage = document.createElement("td");
+      usage.className = "user-usage";
+      if (user.limits) {
+        const limits = user.limits;
+        const traffic = document.createElement("span");
+        traffic.textContent = `Traffic: ${formatBytes(limits.used_bytes)} / ${limits.byte_limit === null ? "Unlimited" : formatBytes(limits.byte_limit)}`;
+        const online = document.createElement("span");
+        online.textContent = limits.validity_seconds === null ? "Validity: Unlimited"
+          : limits.first_connected_at === null ? `Validity: ${formatValidity(limits.validity_seconds)} · starts on first connection`
+            : `Expires: ${new Date((limits.first_connected_at + limits.validity_seconds) * 1000).toLocaleString()}`;
+        usage.append(traffic, online);
+        if (limits.suspended || limits.blocked) {
+          const blocked = document.createElement("span");
+          blocked.className = "limit-blocked";
+          blocked.textContent = limits.blocked ? `Limit reached: ${limits.blocked === "traffic" ? "traffic" : "validity expired"}` : "Suspended; check limits service";
+          usage.append(blocked);
+        }
+      } else usage.textContent = "Usage unavailable";
       const actions = document.createElement("td");
       actions.className = "user-row-actions";
-      [["export", "Link & QR"], ["reset", "Change password"], ["delete", "Delete"]].forEach(([operation, label]) => {
+      [["export", "Link & QR"], ["limits_set", "Limits"], ["usage_reset", "Reset usage"], ["reset", "Change password"], ["delete", "Delete"]].forEach(([operation, label]) => {
         const button = document.createElement("button");
         button.type = "button";
         button.className = "secondary-button";
@@ -829,7 +866,7 @@ async function loadUsers(page = usersSnapshot?.page || 0) {
         button.setAttribute("aria-label", `${label}: ${user.username}`);
         actions.append(button);
       });
-      row.append(name, actions);
+      row.append(name, usage, actions);
       return row;
     }));
     $("#users-updated").textContent = `Updated ${new Date().toLocaleTimeString()}`;
@@ -892,6 +929,7 @@ $("#users-list").addEventListener("click", (event) => {
   const button = event.target.closest("button[data-user-operation]");
   if (button && !button.disabled) {
     if (button.dataset.userOperation === "export") openShareDialog(button.dataset.user);
+    else if (["limits_set", "usage_reset"].includes(button.dataset.userOperation)) openLimitsDialog(button.dataset.userOperation, button.dataset.user);
     else openUserDialog(button.dataset.userOperation, button.dataset.user);
   }
 });
@@ -959,6 +997,107 @@ $("#user-form").addEventListener("submit", async (event) => {
     }
   }
 });
+function validUserLimits(limits) {
+  return limits && typeof limits === "object" && ["byte_limit", "validity_seconds"].every((key) =>
+    limits[key] === null || (Number.isSafeInteger(limits[key]) && limits[key] > 0))
+    && Number.isSafeInteger(limits.used_bytes) && limits.used_bytes >= 0
+    && (limits.first_connected_at === null || (Number.isFinite(limits.first_connected_at) && limits.first_connected_at >= 0))
+    && typeof limits.suspended === "boolean" && [null, "traffic", "expired"].includes(limits.blocked);
+}
+
+function formatValidity(seconds) {
+  return `${(seconds / 86400).toLocaleString(undefined, { maximumFractionDigits: 3 })} days`;
+}
+
+function syncLimitInputs() {
+  $("#limit-traffic").disabled = $("#limit-traffic-unlimited").checked;
+  $("#limit-time").disabled = $("#limit-time-unlimited").checked;
+}
+
+function closeLimitsDialog() {
+  if (limitsDialog.open) limitsDialog.close();
+  $("#limits-form").reset();
+  $("#limits-form").querySelectorAll("input, button").forEach((element) => { element.disabled = false; });
+  $("#limits-reset-confirm").required = false;
+  syncLimitInputs();
+  limitOperation = limitUsername = limitAccountRevision = limitRevision = null;
+}
+
+function openLimitsDialog(operation, username) {
+  if (!csrfToken || !usersFresh || usersLoading || userPending || userDialog.open || shareDialog.open || limitsDialog.open
+      || pendingAction || confirmation || logoutPending || !dashboard?.capabilities.user_limits) return;
+  const limits = usersSnapshot?.users.find((user) => user.username === username)?.limits;
+  if (!validUserLimits(limits) || !/^[0-9a-f]{32}$/.test(usersSnapshot?.limits_revision || "")) return;
+  closeLimitsDialog();
+  limitOperation = operation;
+  limitUsername = username;
+  limitAccountRevision = usersSnapshot.revision;
+  limitRevision = usersSnapshot.limits_revision;
+  const resetting = operation === "usage_reset";
+  $("#limits-title").textContent = `${resetting ? "Reset usage" : "Limits"}: ${username}`;
+  $("#limits-copy").textContent = resetting
+    ? "Reset traffic and start a new validity period with the current limits. If online, the new period starts now; otherwise, it starts on the next connection. A suspended account can reconnect after resetting."
+    : "Choose a traffic allowance and validity after first connection, or leave each unlimited. Validity runs while offline too. Reaching either limit disconnects the account and blocks new connections. Reducing a limit may disconnect it immediately.";
+  $("#limits-current").textContent = `Traffic used: ${formatBytes(limits.used_bytes)}\nValidity: ${limits.validity_seconds === null ? "Unlimited" : limits.first_connected_at === null ? "Awaiting first connection" : `Started ${new Date(limits.first_connected_at * 1000).toLocaleString()}`}`;
+  $("#limits-fields").hidden = resetting;
+  $("#limits-reset-label").hidden = !resetting;
+  $("#limits-reset-confirm").required = resetting;
+  $("#limit-traffic-unlimited").checked = limits.byte_limit === null;
+  $("#limit-time-unlimited").checked = limits.validity_seconds === null;
+  $("#limit-traffic").value = limits.byte_limit === null ? "" : limits.byte_limit / 1024 ** 3;
+  $("#limit-time").value = limits.validity_seconds === null ? "" : limits.validity_seconds / 86400;
+  $("#limits-save").textContent = resetting ? "Reset usage" : "Save limits";
+  $("#limits-form-error").hidden = true;
+  syncLimitInputs();
+  limitsDialog.showModal();
+  syncControls();
+}
+
+["#limit-traffic-unlimited", "#limit-time-unlimited"].forEach((selector) => $(selector).addEventListener("change", syncLimitInputs));
+$("#limits-cancel").addEventListener("click", () => { closeLimitsDialog(); syncControls(); });
+limitsDialog.addEventListener("cancel", (event) => { event.preventDefault(); if (!userPending) { closeLimitsDialog(); syncControls(); } });
+$("#limits-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!csrfToken || userPending || !usersFresh || !limitOperation || !limitsDialog.open) return;
+  const operation = limitOperation;
+  const payload = { username: limitUsername, revision: limitAccountRevision, limits_revision: limitRevision };
+  if (operation === "limits_set") {
+    payload.byte_limit = $("#limit-traffic-unlimited").checked ? null : Math.round(Number($("#limit-traffic").value) * 1024 ** 3);
+    payload.validity_seconds = $("#limit-time-unlimited").checked ? null : Math.round(Number($("#limit-time").value) * 86400);
+    if ([payload.byte_limit, payload.validity_seconds].some((value) => value !== null && (!Number.isSafeInteger(value) || value <= 0))
+        || payload.validity_seconds > 36600 * 86400) {
+      $("#limits-form-error").textContent = "Enter positive allowances, or select Unlimited. Validity may be at most 36,600 days; the minimum is one second.";
+      $("#limits-form-error").hidden = false;
+      return;
+    }
+  } else if (!$("#limits-reset-confirm").checked) return;
+  const version = sessionVersion;
+  userPending = true;
+  $("#limits-form").querySelectorAll("input, button").forEach((element) => { element.disabled = true; });
+  syncControls();
+  try {
+    const result = await requestJson(`/api/users/${operation}`, {
+      method: "POST", headers: { "Content-Type": "application/json", "X-CSRF-Token": csrfToken }, body: JSON.stringify(payload),
+    }, 60000);
+    if (version !== sessionVersion) return;
+    if (result.ok !== true) throw new Error("The server did not confirm this change.");
+    showToast(result.enforcement_pending ? "Limits saved; enforcement needs another attempt. Refresh users to check the service."
+      : operation === "usage_reset" ? "Traffic usage and validity reset. Limits preserved." : "VPN user limits saved.", result.enforcement_pending === true);
+  } catch (error) {
+    if (version !== sessionVersion) return;
+    if (error.status === 401) { showLogin("Your session has expired. Sign in again."); return; }
+    showToast(`Limits change was not confirmed. ${error.message} Refresh before trying again.`, true);
+  } finally {
+    if (version === sessionVersion) {
+      userPending = false;
+      closeLimitsDialog();
+      usersFresh = false;
+      syncControls();
+      await loadUsers();
+    }
+  }
+});
+
 function clearShareResult() {
   shareGeneration += 1;
   window.clearTimeout(shareTimer);
@@ -982,7 +1121,7 @@ function closeShareDialog() {
 }
 
 function openShareDialog(username) {
-  if (!csrfToken || !usersFresh || usersLoading || userPending || userDialog.open || shareDialog.open
+  if (!csrfToken || !usersFresh || usersLoading || userPending || userDialog.open || shareDialog.open || limitsDialog.open
       || pendingAction || confirmation || logoutPending || !dashboard?.capabilities.profile_export) return;
   closeShareDialog();
   shareUsername = username;

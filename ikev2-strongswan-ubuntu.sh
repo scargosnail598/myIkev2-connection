@@ -2248,7 +2248,7 @@ require_managed_installation() {
 get_vpn_users() {
   [[ -r "$IPSEC_SECRETS" ]] || return 0
 
-  awk '$1 ~ /^[A-Za-z0-9._@-]+$/ && length($1) <= 64 && $2 == ":" && $3 == "EAP" && substr($4, 1, 1) == "\"" {print $1}' "$IPSEC_SECRETS"
+  awk '{sub(/^# ikev2-web-limit /, "")} $1 ~ /^[A-Za-z0-9._@-]+$/ && length($1) <= 64 && $2 == ":" && $3 == "EAP" && substr($4, 1, 1) == "\"" {print $1}' "$IPSEC_SECRETS"
 }
 
 vpn_user_exists() {
@@ -2989,7 +2989,14 @@ list_vpn_users() {
   printf 'Online users : %s\n' "$online_count"
 }
 
-add_vpn_user() {
+lock_web_accounts() {
+  local web_account_lock_fd
+  [[ -d /var/lib/ikev2-web ]] || return 0
+  exec {web_account_lock_fd}>/var/lib/ikev2-web/apply.lock
+  flock -x -w 10 "$web_account_lock_fd" || die "Account accounting is busy. Retry shortly."
+}
+
+add_vpn_user() (
   local username=""
   local escaped_password
 
@@ -3015,7 +3022,12 @@ add_vpn_user() {
 
   collect_new_vpn_password 'Password (empty = generate): '
   escaped_password=$(escape_secret "$NEW_VPN_PASSWORD")
+  lock_web_accounts
 
+  if vpn_user_exists "$username"; then
+    warn "VPN user '${username}' already exists."
+    return 0
+  fi
   if ! printf '%s : EAP "%s"\n' "$username" "$escaped_password" >> "$IPSEC_SECRETS"; then
     warn "Could not add VPN user '${username}'."
     return 0
@@ -3031,12 +3043,12 @@ add_vpn_user() {
   else
     log "VPN user '${username}' added successfully."
   fi
-}
+)
 
-change_vpn_user_password() {
+change_vpn_user_password() (
   local escaped_password
   local temp_file
-  local line entry_username separator secret_type
+  local line entry_username separator secret_type normalized_line limit_prefix
 
   require_managed_installation
   if [[ ! -f "$IPSEC_SECRETS" ]]; then
@@ -3053,6 +3065,7 @@ change_vpn_user_password() {
 
   collect_new_vpn_password 'New password (empty = generate): '
   escaped_password=$(escape_secret "$NEW_VPN_PASSWORD")
+  lock_web_accounts
   if ! temp_file=$(mktemp "${IPSEC_SECRETS}.tmp.XXXXXX"); then
     warn "Could not create a temporary VPN secrets file."
     return 0
@@ -3063,9 +3076,12 @@ change_vpn_user_password() {
       entry_username=""
       separator=""
       secret_type=""
-      IFS=$' \t' read -r entry_username separator secret_type _ <<< "$line"
+      normalized_line="${line#\# ikev2-web-limit }"
+      limit_prefix=""
+      [[ "$normalized_line" == "$line" ]] || limit_prefix="# ikev2-web-limit "
+      IFS=$' \t' read -r entry_username separator secret_type _ <<< "$normalized_line"
       if [[ "$entry_username" == "$SELECTED_VPN_USER" && "$separator" == ":" && "$secret_type" == "EAP" ]]; then
-        printf '%s : EAP "%s"\n' "$SELECTED_VPN_USER" "$escaped_password"
+        printf '%s%s : EAP "%s"\n' "$limit_prefix" "$SELECTED_VPN_USER" "$escaped_password"
       else
         printf '%s\n' "$line"
       fi
@@ -3087,12 +3103,12 @@ change_vpn_user_password() {
   if [[ "$VPN_PASSWORD_WAS_GENERATED" == "yes" ]]; then
     printf 'Generated password: %s\n' "$NEW_VPN_PASSWORD"
   fi
-}
+)
 
-remove_vpn_user() {
+remove_vpn_user() (
   local user_count
   local temp_file
-  local line entry_username separator secret_type
+  local line entry_username separator secret_type normalized_line limit_prefix
 
   require_managed_installation
   if [[ ! -f "$IPSEC_SECRETS" ]]; then
@@ -3122,6 +3138,7 @@ remove_vpn_user() {
     }
   fi
 
+  lock_web_accounts
   if ! temp_file=$(mktemp "${IPSEC_SECRETS}.tmp.XXXXXX"); then
     warn "Could not create a temporary VPN secrets file."
     return 0
@@ -3132,7 +3149,10 @@ remove_vpn_user() {
       entry_username=""
       separator=""
       secret_type=""
-      IFS=$' \t' read -r entry_username separator secret_type _ <<< "$line"
+      normalized_line="${line#\# ikev2-web-limit }"
+      limit_prefix=""
+      [[ "$normalized_line" == "$line" ]] || limit_prefix="# ikev2-web-limit "
+      IFS=$' \t' read -r entry_username separator secret_type _ <<< "$normalized_line"
       if [[ "$entry_username" == "$SELECTED_VPN_USER" && "$separator" == ":" && "$secret_type" == "EAP" ]]; then
         continue
       fi
@@ -3153,7 +3173,7 @@ remove_vpn_user() {
   reload_vpn_secrets
   log "VPN user '${SELECTED_VPN_USER}' removed successfully."
   info "Existing sessions for this user may remain active until disconnected or renegotiated."
-}
+)
 
 active_ikev2_sa_count() {
   if ! command_exists ipsec; then

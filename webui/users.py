@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fcntl
 from contextlib import contextmanager
 import hashlib
 import hmac
@@ -22,6 +21,7 @@ REQUEST_DIR = Path("/run/ikev2-web/users")
 APPLY_SERVICE = "ikev2-web-users-apply.service"
 MAX_FILE_BYTES = 2 * 1024 * 1024
 USERNAME = re.compile(r"[A-Za-z0-9._@-]{1,64}\Z")
+SUSPENDED_PREFIX = "# ikev2-web-limit "
 ENTRY = re.compile(r'^([A-Za-z0-9._@-]{1,64})[ \t]+:[ \t]+EAP[ \t]+"[^"\r\n]*"[ \t]*(?:#.*)?$')
 
 
@@ -76,6 +76,9 @@ def parse_users(raw: bytes) -> tuple[list[str], dict[str, int]]:
     users = {}
     for index, line in enumerate(lines):
         text = line.rstrip("\r\n")
+        suspended = text.startswith(SUSPENDED_PREFIX)
+        if suspended:
+            text = text[len(SUSPENDED_PREFIX):]
         if not text.strip() or text.lstrip().startswith("#"):
             continue
         entry = ENTRY.fullmatch(text)
@@ -83,7 +86,7 @@ def parse_users(raw: bytes) -> tuple[list[str], dict[str, int]]:
             if entry[1] in users:
                 raise UserError("duplicate_storage", "Duplicate VPN account entries require manual review.", 503)
             users[entry[1]] = index
-        elif re.match(r"\s*include\b", text, re.I) or re.search(r":\s*EAP\b", text, re.I):
+        elif suspended or re.match(r"\s*include\b", text, re.I) or re.search(r":\s*EAP\b", text, re.I):
             raise UserError("unsupported_storage", "Included or nonstandard EAP entries require management through the installer.", 503)
     return lines, users
 
@@ -107,8 +110,14 @@ def atomic_private(path: Path, raw: bytes) -> None:
 
 
 class UserStore:
-    def __init__(self, path: Path = SECRETS_FILE, state: Path = STATE_FILE, runner=subprocess.run):
+    def __init__(self, path: Path = SECRETS_FILE, state: Path = STATE_FILE, runner=subprocess.run,
+                 limits_path: Path = Path("/var/lib/ikev2-web/limits.json")):
         self.path, self.state, self.runner = path, state, runner
+        self.limits_path = limits_path
+
+    def limits_store(self):
+        from webui.limits import LimitsStore
+        return LimitsStore(self.limits_path)
 
     def snapshot(self) -> bytes:
         if not self.state.is_file():
@@ -135,6 +144,8 @@ class UserStore:
             password = request["password"]
             entry = f'{username} : EAP "{password}"\n'
             if operation == "reset":
+                if lines[users[username]].startswith(SUSPENDED_PREFIX):
+                    entry = SUSPENDED_PREFIX + entry
                 lines[users[username]] = entry
             else:
                 if lines and not lines[-1].endswith("\n"):
@@ -167,6 +178,8 @@ class UserStore:
                     pass
                 raise UserError("reload_failed", "The original account file was restored. Runtime reload could not be confirmed.", 503) from error
             raise UserError("conflict", "An external account edit occurred. Refresh and check the server before retrying.", 409) from error
+        if operation in {"create", "delete"}:
+            self.limits_store().forget(username)
         return {"ok": True, "operation": operation, "username": username,
                 "applies_on_start": active.returncode != 0}
 
@@ -204,13 +217,15 @@ class UserManager:
         if not isinstance(search, str) or len(search) > 64 or type(page) is not int or not 0 <= page <= 100000:
             raise UserError("invalid_query", "Invalid user search or page.")
         raw = self.store.snapshot()
-        _, users = parse_users(raw)
+        lines, users = parse_users(raw)
         matching = sorted((name for name in users if search.casefold() in name.casefold()), key=str.casefold)
         pages = max(1, (len(matching) + 19) // 20)
         page = min(page, pages - 1)
-        return {"ok": True, "users": [{"username": name} for name in matching[page * 20:(page + 1) * 20]],
+        visible = matching[page * 20:(page + 1) * 20]
+        limits = self.store.limits_store().catalog(visible, lines, users)
+        return {"ok": True, "users": [{"username": name, "limits": limits["limits"][name]} for name in visible],
                 "total": len(users), "matched": len(matching), "page": page, "pages": pages,
-                "revision": self.revision(raw)}
+                "revision": self.revision(raw), **{key: value for key, value in limits.items() if key != "limits"}}
 
     def export_user(self, request: dict) -> dict:
         from webui.profiles import build_share
@@ -238,6 +253,11 @@ class UserManager:
         validate_change(request)
         return self._execute(request)
 
+    def manage_limits(self, request: dict) -> dict:
+        from webui.limits import validate_limits
+        validate_limits(request)
+        return self._execute(request)
+
     def check(self) -> dict:
         return self._execute({"operation": "check"})
 
@@ -261,7 +281,7 @@ class UserManager:
             info = self.directory.lstat()
             if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700:
                 raise UserError("unsafe_queue", "Private account operation storage is unavailable.", 503)
-            payload = {key: request[key] for key in ("operation", "username", "password", "allow_last") if key in request}
+            payload = {key: request[key] for key in ("operation", "username", "password", "allow_last", "limits_revision", "byte_limit", "validity_seconds") if key in request}
             payload["expected_digest"] = hashlib.sha256(raw).hexdigest()
             payload["request_id"] = secrets.token_hex(16)
             request_path, result_path = self.directory / "request.json", self.directory / "result.json"
@@ -282,7 +302,8 @@ class UserManager:
                     if checking:
                         return {"ok": True, "checked": response.get("checked") is True}
                     return {"ok": True, "username": request["username"], "operation": request["operation"],
-                            "applies_on_start": response.get("applies_on_start") is True}
+                            "applies_on_start": response.get("applies_on_start") is True,
+                            "enforcement_pending": response.get("enforcement_pending") is True}
                 return {"ok": False, "error": response.get("error", "apply_failed"),
                         "message": response.get("message", "Account update failed."), "status": response.get("status", 503)}
             except (OSError, ValueError, subprocess.TimeoutExpired) as error:
@@ -300,8 +321,8 @@ def apply_queued_request() -> None:
     directory_info = REQUEST_DIR.lstat()
     if not stat.S_ISDIR(directory_info.st_mode) or directory_info.st_uid != 0 or stat.S_IMODE(directory_info.st_mode) != 0o700:
         raise SystemExit("Private account queue is unavailable.")
-    with open(REQUEST_DIR / "apply.lock", "a", encoding="utf-8") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    from webui.limits import LimitsController, account_lock
+    with account_lock():
         request = None
         try:
             request = json.loads(read_private(REQUEST_DIR / "request.json", 4096))
@@ -309,6 +330,8 @@ def apply_queued_request() -> None:
                 raise ValueError("Invalid request")
             if request.get("operation") == "check":
                 result = UserStore().check()
+            elif request.get("operation") in {"limits_set", "usage_reset"}:
+                result = LimitsController().cycle(request)
             else:
                 result = UserStore().apply(request)
         except UserError as error:
@@ -320,4 +343,7 @@ def apply_queued_request() -> None:
 
 
 if __name__ == "__main__":
-    apply_queued_request()
+    # Limits imports this module too. Use one canonical UserError class in the
+    # worker so validation failures return their intended status, including 409.
+    from webui.users import apply_queued_request as apply_request
+    apply_request()

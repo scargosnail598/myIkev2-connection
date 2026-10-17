@@ -52,6 +52,17 @@ class SessionTests(unittest.TestCase):
         self.assertEqual((session["rx_bytes"], session["tx_bytes"]), (1034, 2068))
         self.assertEqual(session["vpn_addresses"], ["10.10.10.1", "fd00::1"])
 
+    def test_accounting_snapshot_exposes_individual_children_including_final_rekey_counters(self):
+        output = STATUS.split(" other[", 1)[0] + """
+ ikev2-eap{12}: REKEYED, TUNNEL, reqid 1
+ ikev2-eap{12}: AES_CBC_256, 10 bytes_i, 20 bytes_o
+"""
+        snapshot = parse_sessions(output, accounting=True)[0]
+        self.assertEqual(snapshot["children"], [{"id": "9", "rx_bytes": 1024, "tx_bytes": 2048},
+                                                {"id": "12", "rx_bytes": 10, "tx_bytes": 20}])
+        self.assertEqual((snapshot["rx_bytes"], snapshot["tx_bytes"]), (1024, 2048))
+        self.assertNotIn("children", parse_sessions(output)[0])
+
     def test_missing_counters_are_unknown_and_invalid_addresses_are_hidden(self):
         output = STATUS.replace("198.51.100.2[alice]", "bad-address[alice]")
         output = output.replace("1024 bytes_i", "unavailable bytes_i")

@@ -21,6 +21,7 @@ from typing import Callable
 
 from webui.diagnostics import DiagnosticsReader
 from webui.metrics import MetricsReader
+from webui.limits import validate_limits
 from webui.sessions import SessionReader
 from webui.users import UserError, UserManager, validate_change, validate_export
 
@@ -220,7 +221,7 @@ class BrokerRequestHandler(socketserver.StreamRequestHandler):
         if action == "ping":
             installed = installation_state()
             self._reply({"ok": True, "version": PROTOCOL_VERSION, "installed": installed,
-                         "user_management": installed is True, "profile_export": installed is True, "session_monitoring": installed is True, "diagnostics": True, "metrics": True})
+                         "user_management": installed is True, "profile_export": installed is True, "user_limits": installed is True, "session_monitoring": installed is True, "diagnostics": True, "metrics": True})
             return
         if action == "metrics":
             if set(request) != {"version", "action"}:
@@ -240,7 +241,7 @@ class BrokerRequestHandler(socketserver.StreamRequestHandler):
                 return
             self._reply(self.server.sessions.list_sessions(request.get("search", ""), request.get("page", 0)))
             return
-        if action in {"users_list", "users_manage", "users_export"}:
+        if action in {"users_list", "users_manage", "users_export", "users_limits"}:
             self._users(request, peer_uid)
             return
         if action != "service_control":
@@ -290,8 +291,11 @@ class BrokerRequestHandler(socketserver.StreamRequestHandler):
                 return
             # Validate before auditing, so hostile input cannot be logged as an identity.
             exporting = action == "users_export"
+            limiting = action == "users_limits"
             if exporting:
                 validate_export(request)
+            elif limiting:
+                validate_limits(request)
             else:
                 validate_change(request)
             fields = {"peer_uid": peer_uid, "target": request["username"],
@@ -299,7 +303,12 @@ class BrokerRequestHandler(socketserver.StreamRequestHandler):
                       "action": "user_management"}
             self.server.audit.write(**fields, stage="requested", ok=None)
             try:
-                response = self.server.users.export_user(request) if exporting else self.server.users.execute(request)
+                if exporting:
+                    response = self.server.users.export_user(request)
+                elif limiting:
+                    response = self.server.users.manage_limits(request)
+                else:
+                    response = self.server.users.execute(request)
             except UserError as error:
                 response = error.result()
             self.server.audit.write(**fields, stage="completed", ok=response.get("ok") is True)
@@ -427,6 +436,9 @@ class BrokerClient:
 
     def export_user(self, payload: dict) -> dict:
         return self.request({**payload, "action": "users_export"})
+
+    def manage_limits(self, payload: dict) -> dict:
+        return self.request({**payload, "action": "users_limits"}, timeout=45)
 
     def manage_user(self, payload: dict) -> dict:
         return self.request({**payload, "action": "users_manage"}, timeout=45)

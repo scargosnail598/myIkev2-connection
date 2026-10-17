@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import patch
 
 from webui.users import UserError, UserManager, UserStore, atomic_private, parse_users
-from webui.broker import AuditLogger, BrokerClient, BrokerServer, ServiceController
+from webui.broker import AuditLogger, BrokerClient, BrokerServer, ServiceController, MAX_RESPONSE_BYTES
 
 FIXTURE_SECRET = "test secret with 'quote' and \\slash"
 ORIGINAL = b'# Keep server identity\n: RSA "server-key.pem"\nalice : EAP "fixture-password-only"\n'
@@ -36,7 +36,7 @@ class UserStoreTests(unittest.TestCase):
             code = 0 if (self.active if "is-active" in command else self.reload_ok) else 3
             return subprocess.CompletedProcess(command, code)
 
-        self.store = UserStore(self.path, self.state, runner)
+        self.store = UserStore(self.path, self.state, runner, self.directory / "limits.json")
 
     def change(self, operation="create", username="bob", **extra):
         payload = {"operation": operation, "username": username, "password": FIXTURE_SECRET,
@@ -120,6 +120,21 @@ class UserStoreTests(unittest.TestCase):
         self.assertEqual(error.exception.code, "conflict")
         self.assertEqual(self.path.read_bytes(), ORIGINAL)
 
+    def test_helper_module_entrypoint_uses_canonical_user_errors(self):
+        script = """
+import runpy
+import warnings
+from unittest.mock import patch
+import webui.users
+# Running with -m creates __main__. Import callbacks must keep canonical errors.
+with patch.object(webui.users, 'apply_queued_request') as apply_request:
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', RuntimeWarning)
+        runpy.run_module('webui.users', run_name='__main__')
+    assert apply_request.call_count == 1
+"""
+        subprocess.run([__import__("sys").executable, "-c", script], check=True)
+
     def test_ambiguous_entries_require_manual_management(self):
         for raw in [ORIGINAL + b'include /etc/other.secrets\n', ORIGINAL + b'alice : EAP "duplicate-secret"\n',
                     ORIGINAL + b'"quoted-user" : EAP "fixture-only"\n']:
@@ -132,10 +147,10 @@ class UserStoreTests(unittest.TestCase):
         first = manager.list_users()
         self.assertEqual(len(first["users"]), 20)
         self.assertEqual(first["total"], 91)
-        self.assertLess(len(json.dumps(first).encode()), 4096)
+        self.assertLess(len(json.dumps(first).encode()), MAX_RESPONSE_BYTES)
         self.assertNotEqual(first["revision"], hashlib.sha256(self.path.read_bytes()).hexdigest())
         self.assertNotIn("fixture-only-password", json.dumps(first))
-        self.assertEqual(manager.list_users("USER089")["users"], [{"username": "user089"}])
+        self.assertEqual([item["username"] for item in manager.list_users("USER089")["users"]], ["user089"])
         self.assertEqual(manager.list_users("absent")["matched"], 0)
         self.assertEqual(manager.list_users(page=999)["page"], first["pages"] - 1)
 
@@ -252,7 +267,7 @@ class UserStoreTests(unittest.TestCase):
         try:
             client = BrokerClient(server.socket_path)
             result = client.list_users()
-            self.assertEqual(result["users"], [{"username": "alice"}])
+            self.assertEqual([item["username"] for item in result["users"]], ["alice"])
             self.assertNotIn("fixture-password-only", json.dumps(result))
             invalid = client.manage_user({"operation": "create", "username": "../../etc/shadow", "password": FIXTURE_SECRET})
             self.assertFalse(invalid["ok"])

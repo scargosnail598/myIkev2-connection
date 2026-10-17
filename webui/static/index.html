@@ -171,15 +171,16 @@
           <button id="users-refresh" class="secondary-button" type="button">Refresh users</button>
         </div>
         <p id="users-summary" class="muted list-summary" role="status">Loading VPN accounts…</p>
+        <p id="limits-notice" class="broker-notice" role="status" hidden></p>
         <div id="users-error" class="broker-notice" role="alert" hidden></div>
         <p id="users-progress" class="action-progress" role="status" hidden>Applying account change. Please wait…</p>
         <div class="users-table-wrap"><table class="users-table" aria-label="Configured VPN users">
-          <thead><tr><th scope="col">Username</th><th scope="col">Account actions</th></tr></thead>
+          <thead><tr><th scope="col">Username</th><th scope="col">Usage &amp; limits</th><th scope="col">Account actions</th></tr></thead>
           <tbody id="users-list"></tbody>
         </table></div>
         <p id="users-empty" class="empty-state" hidden>No matching VPN accounts.</p>
         <div class="users-pagination"><button id="users-previous" class="secondary-button" type="button" disabled>Previous</button><span id="users-page"></span><button id="users-next" class="secondary-button" type="button" disabled>Next</button></div>
-        <footer><span>Passwords are never displayed in the account list</span><span id="users-updated">Awaiting first update</span></footer>
+        <footer><span>Usage refreshes every 30 seconds. Passwords are never displayed in the account list.</span><span id="users-updated">Awaiting first update</span></footer>
       </main>
       <main id="sessions-view" hidden>
         <header>
@@ -248,6 +249,26 @@
         <label id="user-last-confirm-label" class="checkbox-label" hidden><input id="user-last-confirm" type="checkbox">I understand this removes the last VPN account.</label>
         <p id="user-form-error" class="form-error" role="alert" hidden></p>
         <div class="dialog-actions"><button id="user-cancel" class="secondary-button" type="button">Cancel</button><button id="user-save" class="primary-button" type="submit">Save</button></div>
+      </form>
+    </dialog>
+    <dialog id="limits-dialog" class="action-dialog" aria-labelledby="limits-title" aria-describedby="limits-copy">
+      <h2 id="limits-title">User limits</h2>
+      <p id="limits-copy"></p>
+      <p id="limits-current" class="limits-current"></p>
+      <form id="limits-form" class="user-form">
+        <div id="limits-fields" class="user-form">
+          <label class="checkbox-label"><input id="limit-traffic-unlimited" type="checkbox" checked>Unlimited traffic</label>
+          <label for="limit-traffic">Total traffic allowance (GiB)</label>
+          <input id="limit-traffic" type="number" min="0" step="any" inputmode="decimal" disabled>
+          <small>Download + upload, across all devices. 1 GiB = 1024 MiB.</small>
+          <label class="checkbox-label"><input id="limit-time-unlimited" type="checkbox" checked>Unlimited validity</label>
+          <label for="limit-time">Validity after first connection (days)</label>
+          <input id="limit-time" type="number" min="0" step="any" inputmode="decimal" disabled>
+          <small>Validity starts on the first connection and continues while offline. 1 day = 24 hours.</small>
+        </div>
+        <label id="limits-reset-label" class="checkbox-label" hidden><input id="limits-reset-confirm" type="checkbox">Reset traffic usage and restart validity. Keep the current limits.</label>
+        <p id="limits-form-error" class="form-error" role="alert" hidden></p>
+        <div class="dialog-actions"><button id="limits-cancel" class="secondary-button" type="button">Cancel</button><button id="limits-save" class="primary-button" type="submit">Save limits</button></div>
       </form>
     </dialog>
     <dialog id="share-dialog" class="action-dialog share-dialog" aria-labelledby="share-title" aria-describedby="share-copy">

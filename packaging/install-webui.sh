@@ -48,10 +48,13 @@ require_source_files() {
     "webui/security.py" \
     "webui/users.py" \
     "webui/profiles.py" \
+    "webui/limits.py" \
     "webui/sessions.py" \
     "webui/diagnostics.py" \
     "webui/metrics.py" \
     "packaging/systemd/ikev2-web-users-apply.service" \
+    "packaging/systemd/ikev2-web-limits.service" \
+    "packaging/systemd/ikev2-web-limits.timer" \
     "webui/static/index.html" \
     "webui/static/app.css" \
     "webui/static/app.js" \
@@ -79,6 +82,7 @@ install_source() {
     "${SOURCE_DIR}/webui/security.py" \
     "${SOURCE_DIR}/webui/users.py" \
     "${SOURCE_DIR}/webui/profiles.py" \
+    "${SOURCE_DIR}/webui/limits.py" \
     "${SOURCE_DIR}/webui/sessions.py" \
     "${SOURCE_DIR}/webui/diagnostics.py" \
     "${SOURCE_DIR}/webui/metrics.py" \
@@ -135,6 +139,11 @@ ensure_config() {
 }
 
 install_units() {
+  install -d -o root -g root -m 0700 /var/lib/ikev2-web
+  install -o root -g root -m 0644 \
+    "${SOURCE_DIR}/packaging/systemd/ikev2-web-limits.service" \
+    "${SOURCE_DIR}/packaging/systemd/ikev2-web-limits.timer" \
+    "${SYSTEMD_DIR}/"
   install -o root -g root -m 0644 \
     "${SOURCE_DIR}/packaging/systemd/ikev2-web-users-apply.service" \
     "${SYSTEMD_DIR}/ikev2-web-users-apply.service"
@@ -147,6 +156,7 @@ install_units() {
   systemctl daemon-reload
   systemctl enable "$BROKER_SERVICE" "$WEB_SERVICE"
   systemctl restart "$BROKER_SERVICE"
+  systemctl enable --now ikev2-web-limits.timer
   if ! systemctl restart "$WEB_SERVICE"; then
     if command -v ss >/dev/null 2>&1 && ss -H -lnt 'sport = :8787' | grep -q .; then
       printf 'Port 8787 is already in use. Stop the manually started Web UI and retry.\n' >&2
@@ -166,6 +176,13 @@ show_status() {
       failed="yes"
     fi
   done
+
+  if systemctl is-active --quiet ikev2-web-limits.timer; then
+    printf '%-32s active\n' "VPN limits timer"
+  else
+    printf '%-32s inactive/failed\n' "VPN limits timer"
+    failed="yes"
+  fi
 
   if [[ -S /run/ikev2-web/broker.sock ]]; then
     printf '%-32s available\n' "broker socket"
@@ -200,7 +217,14 @@ if metrics_valid:
     print("Read-only metrics: cpu={}, memory={}, network={}".format(
         metrics["cpu"].get("cores") is not None, metrics["memory"].get("total_bytes") is not None,
         metrics["network"].get("rx_bytes") is not None))
-sys.exit(0 if status["capabilities"]["service_actions"] and isinstance(status["installed"], bool) and valid and metrics_valid else 1)
+limits_valid = True
+if status["installed"]:
+    catalog = broker.list_users()
+    limits_valid = (status["capabilities"].get("user_limits") is True and catalog.get("ok") is True
+                    and isinstance(catalog.get("limits_revision"), str) and len(catalog["limits_revision"]) == 32
+                    and isinstance(catalog.get("limits_sampled_at"), (int, float)))
+    print("VPN quota accounting: sample={}, healthy={}".format(limits_valid, catalog.get("limits_healthy") is True))
+sys.exit(0 if status["capabilities"]["service_actions"] and isinstance(status["installed"], bool) and valid and metrics_valid and limits_valid else 1)
 '; then
       printf '%-32s verified\n' "unprivileged dashboard/broker"
     else
@@ -268,6 +292,8 @@ install_webui() {
       /usr/bin/python3 -B -c 'from webui.users import UserManager; result=UserManager().check(); assert result.get("checked") is True, "Account helper read-only check failed"; print("Account helper namespace and private storage verified (no credential changes).")'
     )
   fi
+
+  systemctl start ikev2-web-limits.service
 
   # Type=simple units may be active before the HTTP listener is ready.
   local attempt

@@ -1,0 +1,28 @@
+[Unit]
+Description=Account for VPN usage and enforce per-user limits
+After=strongswan-starter.service
+ConditionPathExists=/var/lib/ikev2-easy-installer/state.env
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/ikev2
+ExecStart=/usr/bin/python3 -B -m webui.limits
+TimeoutStartSec=35
+UMask=0077
+NoNewPrivileges=true
+CapabilityBoundingSet=
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=strict
+# Atomic replacement needs write access to the parent directory, not a bind
+# mount of the individual file. This access exists only in this oneshot unit.
+ReadWritePaths=/etc /var/lib/ikev2-web
+InaccessiblePaths=-/etc/ssh -/etc/sudoers -/etc/sudoers.d -/etc/passwd -/etc/shadow -/etc/group -/etc/gshadow -/etc/systemd -/etc/ipsec.d/private
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX

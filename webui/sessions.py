@@ -21,7 +21,7 @@ def address(value: str) -> str | None:
         return None
 
 
-def parse_sessions(output: str) -> list[dict]:
+def parse_sessions(output: str, accounting: bool = False) -> list[dict]:
     """Return established managed SAs only; never expose raw daemon output."""
     sessions = []
     current = None
@@ -35,6 +35,9 @@ def parse_sessions(output: str) -> list[dict]:
             values = [child.get(key) for child in installed]
             current[key] = sum(values) if values and all(value is not None for value in values) else None
         current["vpn_addresses"] = sorted({ip for child in installed for ip in child.get("addresses", [])})
+        if accounting:
+            current["children"] = [{"id": number, "rx_bytes": child.get("rx_bytes"), "tx_bytes": child.get("tx_bytes")}
+                                   for number, child in children.items() if child.get("accountable")]
         sessions.append(current)
 
     for raw in output.splitlines():
@@ -63,6 +66,8 @@ def parse_sessions(output: str) -> list[dict]:
             continue
         number, detail = child_match.groups()
         child = children.setdefault(number, {})
+        if detail.startswith(("INSTALLED,", "REKEYED,")):
+            child["accountable"] = True
         if detail.startswith("INSTALLED,"):
             child["installed"] = True
         counters = re.search(r"(\d+) bytes_i\b.*?([0-9]+) bytes_o\b", detail)
@@ -89,6 +94,19 @@ class SessionReader:
     def list_sessions(self, search: str = "", page: int = 0) -> dict:
         if not isinstance(search, str) or len(search) > 64 or type(page) is not int or not 0 <= page <= 100000:
             return {"ok": False, "status": 400, "message": "Invalid session search or page."}
+        snapshot = self.snapshot()
+        if snapshot.get("ok") is not True:
+            return snapshot
+        sessions, running = snapshot["sessions"], snapshot["running"]
+        sessions.sort(key=lambda item: (item["username"].casefold(), item["id"]))
+        matched = [item for item in sessions if search.casefold() in item["username"].casefold()]
+        pages = max(1, (len(matched) + PAGE_SIZE - 1) // PAGE_SIZE)
+        page = min(page, pages - 1)
+        return {"ok": True, "sessions": matched[page * PAGE_SIZE:(page + 1) * PAGE_SIZE],
+                "total": len(sessions), "matched": len(matched), "page": page, "pages": pages,
+                "running": running}
+
+    def snapshot(self, accounting: bool = False) -> dict:
         try:
             state = self.runner(["/usr/bin/systemctl", "is-active", "strongswan-starter.service"],
                                 capture_output=True, text=True, check=False, timeout=3)
@@ -100,15 +118,9 @@ class SessionReader:
                                      env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C"})
                 if result.returncode != 0 or len(result.stdout.encode()) > MAX_OUTPUT_BYTES or "Security Associations (" not in result.stdout:
                     raise ValueError("Invalid session status")
-                sessions, running = parse_sessions(result.stdout), True
+                sessions, running = parse_sessions(result.stdout, accounting=accounting), True
             else:
                 raise ValueError("Unknown service status")
         except (OSError, subprocess.TimeoutExpired, ValueError):
             return {"ok": False, "status": 503, "message": "VPN session status is unavailable. Try refreshing."}
-        sessions.sort(key=lambda item: (item["username"].casefold(), item["id"]))
-        matched = [item for item in sessions if search.casefold() in item["username"].casefold()]
-        pages = max(1, (len(matched) + PAGE_SIZE - 1) // PAGE_SIZE)
-        page = min(page, pages - 1)
-        return {"ok": True, "sessions": matched[page * PAGE_SIZE:(page + 1) * PAGE_SIZE],
-                "total": len(sessions), "matched": len(matched), "page": page, "pages": pages,
-                "running": running}
+        return {"ok": True, "sessions": sessions, "running": running}

@@ -9,6 +9,7 @@
     <script src="/assets/app.js" defer></script>
   </head>
   <body>
+    <a class="skip-link" href="#main-content" hidden>Skip to content</a>
     <section id="connection-view" class="login-view" aria-labelledby="connection-title">
       <div class="login-panel connection-panel" role="status">
         <span class="brand-mark login-mark" aria-hidden="true"><span></span></span>
@@ -21,8 +22,8 @@
       <div class="login-panel">
         <span class="brand-mark login-mark" aria-hidden="true"><span></span></span>
         <p class="eyebrow">SECURE ADMINISTRATION</p>
-        <h1 id="login-title">Enter the<br><span>control plane.</span></h1>
-        <p class="login-copy">Sign in to manage this IKEv2 server. Failed attempts are rate-limited.</p>
+        <h1 id="login-title">Welcome back<span>.</span></h1>
+        <p class="login-copy">Your network, under control. Sign in to manage your VPN server.</p>
         <form id="login-form">
           <label for="username">Username</label>
           <input id="username" name="username" autocomplete="username" required maxlength="64">
@@ -31,6 +32,7 @@
           <p id="login-error" class="form-error" role="alert" hidden></p>
           <button type="submit">Sign in <span>→</span></button>
         </form>
+        <p class="login-footnote">Administrator access · Protected sign-in</p>
       </div>
     </section>
 
@@ -40,23 +42,29 @@
           <span class="brand-mark" aria-hidden="true"><span></span></span>
           <span><strong>IKEv2</strong><small>CONTROL PLANE</small></span>
         </a>
+        <p class="sidebar-label">WORKSPACE</p>
         <nav aria-label="Primary navigation">
-          <a class="nav-item active" href="#overview" data-view="overview" aria-current="page"><span>01</span>Overview</a>
-          <a class="nav-item" href="#users" data-view="users"><span>02</span>Users</a>
-          <button class="nav-item" disabled><span>03</span>Sessions<em>Next</em></button>
-          <button class="nav-item" disabled><span>04</span>Diagnostics<em>Next</em></button>
+          <a class="nav-item active" href="#overview" data-view="overview" aria-current="page"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z"/></svg><span class="nav-label">Overview</span></a>
+          <a class="nav-item" href="#users" data-view="users"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2 M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8 M22 21v-2a4 4 0 0 0-3-3.87 M16 3.13a4 4 0 0 1 0 7.75"/></svg><span class="nav-label">Users</span></a>
+          <a class="nav-item" href="#sessions" data-view="sessions"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12h4l3-8 6 16 3-8h4"/></svg><span class="nav-label">Sessions</span></a>
+          <button class="nav-item" disabled><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6 M12 3v4 M5 7l2 2 M19 7l-2 2 M12 13l3-3 M20 15a8 8 0 1 1-16 0 8 8 0 0 1 16 0"/></svg><span class="nav-label">Diagnostics</span><em>Next</em></button>
         </nav>
         <button id="logout" class="sidebar-foot" type="button" aria-label="Sign out" title="Sign out">
           <span class="pulse"></span>
           <svg class="logout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M9 5H4v14h5M13 7l5 5-5 5M8 12h10"/></svg>
-          <div><strong id="session-user">Authenticated</strong><small>Sign out of this session</small></div>
+          <div><strong id="session-user">Authenticated</strong><small>Administrator · Sign out</small></div>
         </button>
       </aside>
 
+      <div id="main-content" class="workspace" tabindex="-1">
+        <div class="workspace-bar">
+          <div class="workspace-path"><span class="workspace-dot" aria-hidden="true"></span>Workspace<span class="path-divider" aria-hidden="true">/</span><strong id="workspace-title">Overview</strong></div>
+          <span class="workspace-product">IKEv2 VPN <span>CONTROL PLANE</span></span>
+        </div>
       <main id="overview">
         <header>
           <div>
-            <p class="eyebrow">SERVER OPERATIONS / OVERVIEW</p>
+            <p class="eyebrow">NETWORK OPERATIONS</p>
             <h1 class="overview-title">Server overview</h1>
             <p class="overview-copy">Monitor your VPN and manage its services.</p>
           </div>
@@ -66,21 +74,19 @@
         <section class="hero-grid" aria-label="System summary">
           <article class="primary-card">
             <div class="card-head">
-              <div><p>MANAGED INSTALLATION</p><h2 id="installation-state">Checking…</h2></div>
-              <span class="radar" aria-hidden="true"><i></i></span>
+              <div><p>VPN INSTALLATION</p><h2 id="installation-state">Checking…</h2></div>
+              <span class="installation-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3 3 7v5c0 5 9 9 9 9s9-4 9-9V7z M8 12l3 3 5-6"/></svg></span>
             </div>
             <p id="installation-copy" class="muted">Contacting the local status API.</p>
-            <div class="signal" aria-hidden="true">
-              <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
-            </div>
+            <span class="card-caption">StrongSwan · IKEv2</span>
           </article>
           <article class="metric-card">
-            <p>RUNNING SERVICES</p>
+            <div class="metric-heading"><p>RUNNING SERVICES</p><span class="metric-symbol" aria-hidden="true">↗</span></div>
             <strong id="running-services">—</strong>
             <small id="services-summary">Waiting for status</small>
           </article>
           <article id="attention-card" class="metric-card accent">
-            <p>FAILED / UNKNOWN</p>
+            <div class="metric-heading"><p>FAILED / UNKNOWN</p><span class="metric-symbol attention-symbol" aria-hidden="true">!</span></div>
             <strong id="attention-services">—</strong>
             <small id="control-state">Waiting for status</small>
           </article>
@@ -88,7 +94,7 @@
 
         <section class="services-section">
           <div class="section-title">
-            <div><p>LIVE SIGNAL</p><h2>Service health</h2></div>
+            <div><p>YOUR INFRASTRUCTURE</p><h2>Service health</h2></div>
             <button id="refresh" type="button">Refresh status <span>↻</span></button>
           </div>
           <div id="status-notice" class="broker-notice" role="alert" hidden>
@@ -114,7 +120,7 @@
       </main>
       <main id="users-view" hidden>
         <header>
-          <div><p class="eyebrow">SERVER OPERATIONS / USERS</p><h1 class="overview-title">VPN users</h1>
+          <div><p class="eyebrow">ACCESS MANAGEMENT</p><h1 class="overview-title">VPN users</h1>
             <p class="overview-copy">Manage the accounts that can connect to this VPN.</p></div>
           <button id="user-add" class="primary-button" type="button" disabled>Add user</button>
         </header>
@@ -125,7 +131,7 @@
           </form>
           <button id="users-refresh" class="secondary-button" type="button">Refresh users</button>
         </div>
-        <p id="users-summary" class="muted" role="status">Loading VPN accounts…</p>
+        <p id="users-summary" class="muted list-summary" role="status">Loading VPN accounts…</p>
         <div id="users-error" class="broker-notice" role="alert" hidden></div>
         <p id="users-progress" class="action-progress" role="status" hidden>Applying account change. Please wait…</p>
         <div class="users-table-wrap"><table class="users-table" aria-label="Configured VPN users">
@@ -136,6 +142,29 @@
         <div class="users-pagination"><button id="users-previous" class="secondary-button" type="button" disabled>Previous</button><span id="users-page"></span><button id="users-next" class="secondary-button" type="button" disabled>Next</button></div>
         <footer><span>Passwords are never displayed in the account list</span><span id="users-updated">Awaiting first update</span></footer>
       </main>
+      <main id="sessions-view" hidden>
+        <header>
+          <div><p class="eyebrow">CONNECTION MONITORING</p><h1 class="overview-title">Active VPN sessions</h1>
+            <p class="overview-copy">View connected users, addresses and traffic reported by the VPN server.</p></div>
+          <button id="sessions-refresh" class="secondary-button" type="button">Refresh sessions</button>
+        </header>
+        <div class="users-toolbar">
+          <form id="sessions-search-form" role="search">
+            <label for="sessions-search">Search connected usernames</label>
+            <div class="search-fields"><input id="sessions-search" type="search" maxlength="64" autocomplete="off"><button class="secondary-button" type="submit">Search</button></div>
+          </form>
+        </div>
+        <p id="sessions-summary" class="muted list-summary" role="status">Loading VPN sessions…</p>
+        <div id="sessions-error" class="broker-notice" role="alert" hidden></div>
+        <div class="users-table-wrap"><table class="users-table sessions-table" aria-label="Active VPN sessions">
+          <thead><tr><th scope="col">Username / session</th><th scope="col">VPN addresses</th><th scope="col">Public IP</th><th scope="col">Connected</th><th scope="col">Received / sent</th></tr></thead>
+          <tbody id="sessions-list"></tbody>
+        </table></div>
+        <p id="sessions-empty" class="empty-state" hidden>No active VPN sessions.</p>
+        <div class="users-pagination"><button id="sessions-previous" class="secondary-button" type="button" disabled>Previous</button><span id="sessions-page"></span><button id="sessions-next" class="secondary-button" type="button" disabled>Next</button></div>
+        <footer><span>Refreshes every 30 seconds. Traffic is received / sent by the server and resets on rekey or reconnect. Missing values show N/A.</span><span id="sessions-updated">Awaiting first update</span></footer>
+      </main>
+      </div>
     </div>
     <dialog id="action-dialog" class="action-dialog" aria-labelledby="action-title" aria-describedby="action-copy">
       <p class="eyebrow">SERVICE CONTROL</p>

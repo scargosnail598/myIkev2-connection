@@ -18,7 +18,10 @@ let dashboardFresh = false;
 let dashboardLoading = false;
 let pendingAction = null;
 let confirmation = null;
+let confirmationTrigger = null;
 let logoutPending = false;
+let sessionsSnapshot = null;
+let sessionsLoading = false;
 let usersSnapshot = null;
 let usersFresh = false;
 let usersLoading = false;
@@ -65,6 +68,8 @@ function finishConfirmation(accepted) {
   confirmation = null;
   syncControls();
   if (actionDialog.open) actionDialog.close();
+  if (confirmationTrigger?.isConnected && !confirmationTrigger.disabled) confirmationTrigger.focus();
+  confirmationTrigger = null;
   if (resolve) resolve(accepted);
 }
 
@@ -72,6 +77,7 @@ function showLogin(message = "") {
   sessionVersion += 1;
   csrfToken = null;
   resetUsers();
+  resetSessions();
   dashboard = null;
   dashboardFresh = false;
   dashboardLoading = false;
@@ -81,6 +87,7 @@ function showLogin(message = "") {
   appShell.hidden = true;
   connectionView.hidden = true;
   loginView.hidden = false;
+  $(".skip-link").hidden = true;
   $("#toast").hidden = true;
   $("#login-error").textContent = message;
   $("#login-error").hidden = !message;
@@ -92,6 +99,7 @@ function showApp(session) {
   sessionVersion += 1;
   csrfToken = session.csrf_token;
   resetUsers();
+  resetSessions();
   $("#session-user").textContent = session.username;
   dashboard = null;
   dashboardFresh = false;
@@ -100,6 +108,7 @@ function showApp(session) {
   loginView.hidden = true;
   connectionView.hidden = true;
   appShell.hidden = false;
+  $(".skip-link").hidden = false;
   $("#status-notice").hidden = true;
   $("#broker-notice").hidden = true;
   services.replaceChildren();
@@ -146,6 +155,7 @@ function syncControls() {
   });
   $("#action-progress").hidden = !pendingAction;
   syncUserControls();
+  syncSessionControls();
   if (pendingAction) $("#action-progress").textContent = `${operationLabels[pendingAction.operation]} request for ${pendingAction.label} is running. Please wait…`;
 }
 
@@ -161,10 +171,37 @@ function renderServices(items) {
     const state = Object.hasOwn(stateLabels, service.state) ? service.state : "unknown";
     status.className = `status ${state}`;
     status.textContent = stateLabels[state];
-    top.append(title, status);
+    const icon = document.createElement("span");
+    icon.className = "service-icon";
+    icon.setAttribute("aria-hidden", "true");
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    const iconPaths = {
+      ikev2: "M4 3h16v7H4z M4 14h16v7H4z M8 6.5h.01 M8 17.5h.01 M12 6.5h4 M12 17.5h4",
+      firewall: "M12 3 3 7v5c0 5 9 9 9 9s9-4 9-9V7z M8 12l3 3 5-6",
+      proxy: "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0 M3 12h18 M12 3c-5 5-5 13 0 18 M12 3c5 5 5 13 0 18",
+    };
+    path.setAttribute("d", iconPaths[service.id] || iconPaths.ikev2);
+    svg.append(path);
+    icon.append(svg);
+    top.append(icon, status);
     const unit = document.createElement("code");
     unit.textContent = service.unit;
-    card.append(top, unit);
+    const description = document.createElement("p");
+    description.className = "service-description";
+    description.textContent = {
+      ikev2: "Encrypted connections for your VPN clients.",
+      firewall: "Network access rules and VPN traffic forwarding.",
+      proxy: "Private SOCKS5 access through the VPN tunnel.",
+    }[service.id] || "Managed server service.";
+    card.append(top, title, unit, description);
+    if (service.id === "firewall") {
+      const note = document.createElement("p");
+      note.className = "service-note";
+      note.textContent = "Starts with the VPN service";
+      card.append(note);
+    }
     if (["ikev2", "proxy"].includes(service.id)) {
       const actions = document.createElement("div");
       actions.className = "service-actions";
@@ -184,6 +221,7 @@ function renderServices(items) {
 }
 
 function confirmAction(service, operation) {
+  confirmationTrigger = services.querySelector(`button[data-target="${service.id}"][data-operation="${operation}"]`);
   const disruptive = operation !== "start";
   $("#action-title").textContent = `${operationLabels[operation]} ${service.label}?`;
   $("#action-copy").textContent = disruptive
@@ -292,6 +330,11 @@ async function loadDashboard() {
   }
 }
 
+$(".skip-link").addEventListener("click", (event) => {
+  event.preventDefault();
+  $("#main-content").focus();
+  $("#main-content").scrollIntoView({ block: "start" });
+});
 refreshButton.addEventListener("click", loadDashboard);
 services.addEventListener("click", (event) => {
   const button = event.target.closest("button[data-operation]");
@@ -376,10 +419,16 @@ async function initialize() {
 
 connectionRetry.addEventListener("click", initialize);
 window.setInterval(() => {
-  if (document.visibilityState === "visible" && !services.contains(document.activeElement)) loadDashboard();
+  if (document.visibilityState === "visible") {
+    if (location.hash === "#sessions") loadSessions();
+    else if (!services.contains(document.activeElement)) loadDashboard();
+  }
 }, 30000);
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") loadDashboard();
+  if (document.visibilityState === "visible") {
+    if (location.hash === "#sessions") loadSessions();
+    else loadDashboard();
+  }
 });
 
 function resetUsers() {
@@ -399,18 +448,111 @@ function resetUsers() {
 }
 
 function selectView() {
-  const usersView = location.hash === "#users";
-  $("#overview").hidden = usersView;
-  $("#users-view").hidden = !usersView;
+  const view = ["#users", "#sessions"].includes(location.hash) ? location.hash.slice(1) : "overview";
+  $("#workspace-title").textContent = { overview: "Overview", users: "Users", sessions: "Sessions" }[view];
+  $("#overview").hidden = view !== "overview";
+  $("#users-view").hidden = view !== "users";
+  $("#sessions-view").hidden = view !== "sessions";
   document.querySelectorAll("[data-view]").forEach((link) => {
-    const active = (link.dataset.view === "users") === usersView;
+    const active = link.dataset.view === view;
     link.classList.toggle("active", active);
     if (active) link.setAttribute("aria-current", "page");
     else link.removeAttribute("aria-current");
   });
-  if (csrfToken && usersView) loadUsers();
-  else if (csrfToken) loadDashboard();
+  if (!csrfToken) return;
+  if (view === "users") loadUsers();
+  else if (view === "sessions") loadSessions();
+  else loadDashboard();
 }
+
+function resetSessions() {
+  sessionsSnapshot = null;
+  sessionsLoading = false;
+  $("#sessions-list").replaceChildren();
+  $("#sessions-error").hidden = true;
+  $("#sessions-empty").hidden = true;
+  $("#sessions-search").value = "";
+  $("#sessions-page").textContent = "";
+  $("#sessions-summary").textContent = "Loading VPN sessions…";
+  $("#sessions-updated").textContent = "Awaiting first update";
+}
+
+function syncSessionControls() {
+  const busy = !csrfToken || sessionsLoading || Boolean(pendingAction || confirmation || logoutPending || userPending || userDialog.open);
+  $("#sessions-refresh").disabled = busy;
+  $("#sessions-refresh").textContent = sessionsLoading ? "Loading…" : "Refresh sessions";
+  $("#sessions-search").disabled = busy;
+  $("#sessions-search-form button").disabled = busy;
+  $("#sessions-previous").disabled = busy || !sessionsSnapshot || sessionsSnapshot.page <= 0;
+  $("#sessions-next").disabled = busy || !sessionsSnapshot || sessionsSnapshot.page + 1 >= sessionsSnapshot.pages;
+  $("#sessions-list").setAttribute("aria-busy", String(sessionsLoading));
+}
+
+function formatBytes(value) {
+  if (value === null) return "N/A";
+  const units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit += 1; }
+  return `${value.toLocaleString(undefined, { maximumFractionDigits: unit ? 1 : 0 })} ${units[unit]}`;
+}
+
+async function loadSessions(page = sessionsSnapshot?.page || 0) {
+  if (!csrfToken || sessionsLoading || pendingAction || confirmation || logoutPending || userPending || userDialog.open) return;
+  const version = sessionVersion;
+  sessionsLoading = true;
+  syncSessionControls();
+  try {
+    const query = new URLSearchParams({ search: $("#sessions-search").value, page: String(page) });
+    const data = await requestJson(`/api/sessions?${query}`);
+    if (version !== sessionVersion) return;
+    const counter = (value) => value === null || (Number.isSafeInteger(value) && value >= 0);
+    if (data.ok !== true || !Array.isArray(data.sessions) || typeof data.running !== "boolean"
+        || !["total", "matched", "page", "pages"].every((key) => Number.isInteger(data[key]) && data[key] >= 0)
+        || data.pages < 1 || data.page >= data.pages || data.matched > data.total
+        || !data.sessions.every((item) => item && ["id", "username", "duration"].every((key) => typeof item[key] === "string")
+          && (item.public_ip === null || typeof item.public_ip === "string") && Array.isArray(item.vpn_addresses)
+          && item.vpn_addresses.every((ip) => typeof ip === "string") && counter(item.rx_bytes) && counter(item.tx_bytes))) {
+      throw new Error("Unexpected VPN session response.");
+    }
+    sessionsSnapshot = data;
+    $("#sessions-error").hidden = true;
+    $("#sessions-summary").textContent = data.running ? `${data.total} active VPN sessions · ${data.matched} matching` : "VPN service is stopped. No active sessions.";
+    $("#sessions-page").textContent = `Page ${data.page + 1} of ${data.pages}`;
+    $("#sessions-empty").hidden = data.sessions.length > 0;
+    $("#sessions-empty").textContent = data.total && !data.matched ? "No matching VPN sessions." : "No active VPN sessions.";
+    $("#sessions-list").replaceChildren(...data.sessions.map((item) => {
+      const row = document.createElement("tr");
+      const values = [item.username, item.vpn_addresses.join(", ") || "N/A", item.public_ip || "N/A", item.duration,
+        `${formatBytes(item.rx_bytes)} / ${formatBytes(item.tx_bytes)}`];
+      values.forEach((value, index) => {
+        const cell = document.createElement("td");
+        cell.textContent = value;
+        if (index === 0) {
+          const id = document.createElement("small");
+          id.className = "session-id";
+          id.textContent = item.id;
+          cell.append(id);
+        }
+        row.append(cell);
+      });
+      return row;
+    }));
+    $("#sessions-updated").textContent = `Updated ${new Date().toLocaleTimeString()}`;
+  } catch (error) {
+    if (version !== sessionVersion) return;
+    if (error.status === 401) { showLogin("Your session has expired. Sign in again."); return; }
+    $("#sessions-error").hidden = false;
+    $("#sessions-error").textContent = `${error.message} ${sessionsSnapshot ? "The previous snapshot is shown and may be out of date." : "Refresh sessions to try again."}`;
+    if (!sessionsSnapshot) $("#sessions-summary").textContent = "VPN session status unavailable";
+  } finally {
+    if (version === sessionVersion) { sessionsLoading = false; syncSessionControls(); }
+  }
+}
+
+$("#sessions-refresh").addEventListener("click", () => loadSessions());
+$("#sessions-search-form").addEventListener("submit", (event) => { event.preventDefault(); loadSessions(0); });
+$("#sessions-previous").addEventListener("click", () => loadSessions(sessionsSnapshot.page - 1));
+$("#sessions-next").addEventListener("click", () => loadSessions(sessionsSnapshot.page + 1));
 
 function syncUserControls() {
   const busy = usersLoading || userPending || Boolean(pendingAction || confirmation || logoutPending);

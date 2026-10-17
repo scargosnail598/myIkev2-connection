@@ -90,14 +90,39 @@ has no third-party runtime dependencies and always binds to a loopback address.
 Passwords are stored as scrypt hashes, sessions expire, login attempts are
 throttled, and all POST requests after login require a CSRF token.
 
-The overview shows running-service counts and highlights failed or unknown
-services. It refreshes every 30 seconds while the tab is visible, pausing during
+The dashboard uses a responsive dark interface with persistent workspace
+navigation, service icons, compact health cards, and consistent account forms.
+Tables scroll horizontally on small screens, and a keyboard skip link moves
+focus directly to the workspace. The overview shows running-service counts and
+highlights failed or unknown services. It refreshes every 30 seconds while the tab is visible, pausing during
 service commands and confirmations. Failed refreshes retain the last received
 status with a stale-data notice and disable commands until a successful refresh.
 Service commands require a confirmation explaining their connection impact,
 show progress, and are never automatically retried. A failed sign-out keeps the
-dashboard visible until the server confirms logout. Sessions and Diagnostics
-remain planned sections for later steps.
+dashboard visible until the server confirms logout. Diagnostics remains a planned section for a later step.
+
+The **Sessions** page shows established `ikev2-eap` connections with the
+VPN username, session ID, assigned IPv4/IPv6 addresses, public peer IP, connection
+age, and received/sent traffic from the server's perspective. It prefers the
+remote EAP identity when it differs from the IKE identity. Search usernames and
+browse 20 connections per page; multiple connections for one user remain separate.
+Snapshots refresh every 30 seconds while this section and the tab are visible,
+pausing during service commands, account dialogs, and sign-out. A failed refresh
+keeps the previous snapshot with a stale-data warning. A stopped service shows
+an empty list; unavailable or unrecognized status is reported as an error.
+
+Session monitoring requires the installed root broker. It runs only fixed,
+read-only `systemctl is-active` and `ipsec statusall ikev2-eap` commands, returns
+selected fields instead of raw output, and keeps the existing broker sandbox.
+It changes no VPN, firewall, routing, DNS, or CA settings and cannot disconnect
+users. Redeploy both Web UI components with `sudo ./packaging/install-webui.sh install`
+to enable it on an existing server. Rolling back application files removes this
+view without changing VPN sessions or account credentials.
+
+Traffic values are summed across currently installed CHILD_SAs, as exposed by
+[StrongSwan's status output](https://github.com/strongswan/strongswan/blob/master/src/libcharon/plugins/stroke/stroke_list.c).
+They reset on rekey or reconnect and are distinct from the CLI's persisted
+per-user cumulative totals. Missing counters or unassigned addresses show `N/A`.
 
 The **Users** page lists and searches configured VPN usernames, with 20 accounts
 per page. Admins can add accounts, change passwords, and delete accounts after

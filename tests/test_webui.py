@@ -61,6 +61,9 @@ class FakeBroker:
         return {"ok": True, "users": [{"username": "fixture-user"}], "total": 1, "matched": 1,
                 "page": 0, "pages": 1, "revision": "fixture-revision"}
 
+    def list_sessions(self, search="", page=0):
+        return {"ok": True, "sessions": [], "total": 0, "matched": 0, "page": 0, "pages": 1, "running": True}
+
     def manage_user(self, payload):
         self.calls.append(payload)
         return {"ok": True, "username": payload["username"], "operation": payload["operation"]}
@@ -285,6 +288,25 @@ class WebServerTests(unittest.TestCase):
         self.assertEqual(response.status, 200)
         self.assertEqual(payload["status"], "ok")
         self.assertEqual(response.headers["Cache-Control"], "no-store")
+
+    def test_sessions_require_login_and_responses_are_not_cached(self):
+        with self.assertRaises(HTTPError) as raised:
+            self.get_json("/api/sessions")
+        self.assertEqual(raised.exception.code, 401)
+        response, payload = self.get_json("/api/sessions", authenticated=True)
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+        self.assertEqual(payload["sessions"], [])
+        with self.assertRaises(HTTPError) as raised:
+            self.get_json("/api/sessions?page=invalid")
+        self.assertEqual(raised.exception.code, 400)
+
+    def test_sessions_broker_failure_is_unavailable(self):
+        self.login()
+        with patch.object(self.broker, "list_sessions", side_effect=BrokerError("private path")):
+            with self.assertRaises(HTTPError) as raised:
+                self.get_json("/api/sessions")
+        self.assertEqual(raised.exception.code, 503)
+        self.assertNotIn("private", raised.exception.read().decode())
 
     def test_users_require_login_and_responses_are_not_cached(self):
         with self.assertRaises(HTTPError) as raised:

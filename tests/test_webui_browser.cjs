@@ -49,7 +49,7 @@ async function fixture(t, options = {}) {
   const errors = [];
   const state = { authenticated: true, data: snapshot(), dashboardFailure: false, logoutFailure: false, sessionFailure: false, loginLimited: false, commandFailure: false, ...options };
   state.userNames = options.userNames || ["alice", "bob", "carol"];
-  const calls = { dashboard: 0, commands: 0, logout: 0, userChanges: [] };
+  const calls = { dashboard: 0, commands: 0, logout: 0, sessions: 0, userChanges: [] };
   const session = () => ({ authenticated: state.authenticated, username: state.authenticated ? "browser-test-admin" : null, csrf_token: state.authenticated ? "browser-test-csrf" : null });
   page.on("pageerror", (error) => errors.push(error.message));
   await page.route("**/api/**", async (route) => {
@@ -76,6 +76,19 @@ async function fixture(t, options = {}) {
       if (state.loginLimited) return json({ message: "Too many failed attempts." }, 429, { "Retry-After": "120" });
       state.authenticated = true;
       return json(session());
+    }
+    if (endpoint === "/api/sessions") {
+      calls.sessions += 1;
+      if (!state.authenticated) return json({ message: "Sign in to continue." }, 401);
+      if (state.sessionsFailure) return json({ message: "VPN session status unavailable." }, 503);
+      if (state.sessionsHold) await state.sessionsHold;
+      const all = state.vpnSessions || [{ id: "ikev2-eap[7]", username: "alice", public_ip: "198.51.100.2", duration: "2 minutes ago",
+        vpn_addresses: ["10.10.10.1", "fd00::1"], rx_bytes: 1024, tx_bytes: null }];
+      const query = new URL(request.url()).searchParams;
+      const matching = all.filter((item) => item.username.includes(query.get("search") || ""));
+      const pages = Math.max(1, Math.ceil(matching.length / 20));
+      const page = Math.min(Number(query.get("page") || 0), pages - 1);
+      return json({ ok: true, sessions: matching.slice(page * 20, page * 20 + 20), total: all.length, matched: matching.length, page, pages, running: state.vpnRunning !== false });
     }
     if (endpoint === "/api/users") {
       if (state.userFailure) return json({ message: "Account list unavailable." }, 503);
@@ -383,4 +396,77 @@ test("users list and password dialog fit mobile with long usernames", async (t) 
   await page.getByRole("button", { name: `Change password: ${"a".repeat(64)}`, exact: true }).click();
   const bounds = await page.getByRole("dialog").boundingBox();
   assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= 320);
+});
+
+
+test("sessions show dual-stack addresses and unknown counters, refresh, and keep stale data", async (t) => {
+  const { page, state, calls } = await fixture(t);
+  await page.locator('[data-view="sessions"]').click();
+  await waitText(page, "#sessions-summary", "1 active VPN sessions");
+  await waitText(page, "#sessions-list", "1 KiB / N/A");
+  assert.match(await page.locator("#sessions-list").textContent(), /10\.10\.10\.1, fd00::1/);
+  assert.equal(await page.locator('[data-view="sessions"]').getAttribute("aria-current"), "page");
+  await page.clock.fastForward(30000);
+  await page.waitForFunction(() => !document.querySelector("#sessions-refresh").disabled);
+  assert.equal(calls.sessions, 2);
+  state.sessionsFailure = true;
+  await page.locator("#sessions-refresh").click();
+  await waitText(page, "#sessions-error", "previous snapshot");
+  assert.equal(await page.locator("#sessions-list tr").count(), 1);
+  state.sessionsFailure = false;
+  state.vpnSessions = [];
+  await page.locator("#sessions-refresh").click();
+  await waitText(page, "#sessions-summary", "0 active VPN sessions");
+  assert.equal(await page.locator("#sessions-empty").isVisible(), true);
+  assert.equal(await page.locator("#sessions-error").isVisible(), false);
+  assert.equal(calls.commands, 0);
+});
+
+test("sessions support pagination and search with safe text on mobile", async (t) => {
+  const all = Array.from({ length: 21 }, (_, index) => ({ id: `ikev2-eap[${index}]`, username: index === 20 ? '<img src=x onerror="alert(1)">' : `user${index}`,
+    public_ip: "198.51.100.2", duration: "1 minute ago", vpn_addresses: ["10.10.10.1"], rx_bytes: 0, tx_bytes: 0 }));
+  const { page } = await fixture(t, { viewport: { width: 320, height: 844 }, vpnSessions: all });
+  await page.locator('[data-view="sessions"]').click();
+  await waitText(page, "#sessions-page", "Page 1 of 2");
+  assert.equal(await page.locator("#sessions-list tr").count(), 20);
+  await page.locator("#sessions-next").click();
+  await waitText(page, "#sessions-page", "Page 2 of 2");
+  assert.equal(await page.locator("#sessions-list tr").count(), 1);
+  assert.equal(await page.locator("#sessions-list img").count(), 0);
+  assert.match(await page.locator("#sessions-list").textContent(), /onerror/);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+  await page.locator("#sessions-search").fill("missing");
+  await page.locator("#sessions-search-form button").click();
+  await waitText(page, "#sessions-empty", "No matching");
+  await waitText(page, "#sessions-page", "Page 1 of 1");
+});
+
+test("sessions distinguish unavailable status from stopped service and expire cleanly", async (t) => {
+  const { page, state } = await fixture(t, { sessionsFailure: true });
+  await page.locator('[data-view="sessions"]').click();
+  await waitText(page, "#sessions-summary", "unavailable");
+  assert.equal(await page.locator("#sessions-empty").isVisible(), false);
+  state.sessionsFailure = false;
+  state.vpnRunning = false;
+  state.vpnSessions = [];
+  await page.locator("#sessions-refresh").click();
+  await waitText(page, "#sessions-summary", "VPN service is stopped");
+  state.authenticated = false;
+  await page.locator("#sessions-refresh").click();
+  await page.locator("#login-view").waitFor({ state: "visible" });
+  assert.equal(await page.locator("#sessions-list tr").count(), 0);
+});
+
+test("sessions ignore a response arriving after sign out", async (t) => {
+  const { page, state } = await fixture(t);
+  let release;
+  state.sessionsHold = new Promise((resolve) => { release = resolve; });
+  t.after(() => release());
+  await page.locator('[data-view="sessions"]').click();
+  await page.waitForFunction(() => document.querySelector("#sessions-refresh").disabled);
+  await page.locator("#logout").click();
+  await page.locator("#login-view").waitFor({ state: "visible" });
+  release();
+  await page.waitForTimeout(100);
+  assert.equal(await page.locator("#sessions-list tr").count(), 0);
 });

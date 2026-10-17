@@ -19,11 +19,13 @@ import subprocess
 import threading
 from typing import Callable
 
+from webui.sessions import SessionReader
 from webui.users import UserError, UserManager, validate_change
 
 
 PROTOCOL_VERSION = 1
 MAX_MESSAGE_BYTES = 4096
+MAX_RESPONSE_BYTES = 65536
 DEFAULT_SOCKET = Path("/run/ikev2-web/broker.sock")
 DEFAULT_AUDIT_LOG = Path("/var/log/ikev2-web/audit.log")
 SYSTEMCTL = "/usr/bin/systemctl"
@@ -216,7 +218,13 @@ class BrokerRequestHandler(socketserver.StreamRequestHandler):
         if action == "ping":
             installed = installation_state()
             self._reply({"ok": True, "version": PROTOCOL_VERSION, "installed": installed,
-                         "user_management": installed is True})
+                         "user_management": installed is True, "session_monitoring": installed is True})
+            return
+        if action == "sessions_list":
+            if set(request) - {"version", "action", "search", "page"}:
+                self._reply({"ok": False, "status": 400, "message": "Unsupported session fields."})
+                return
+            self._reply(self.server.sessions.list_sessions(request.get("search", ""), request.get("page", 0)))
             return
         if action in {"users_list", "users_manage"}:
             self._users(request, peer_uid)
@@ -298,12 +306,14 @@ class BrokerServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
         controller: ServiceController,
         audit: AuditLogger,
         users: UserManager | None = None,
+        sessions: SessionReader | None = None,
     ):
         self.socket_path = socket_path
         self.allowed_uid = allowed_uid
         self.controller = controller
         self.audit = audit
         self.users = users or UserManager()
+        self.sessions = sessions or SessionReader()
         self._prepare_socket_path(socket_gid)
         super().__init__(str(socket_path), BrokerRequestHandler)
         os.chown(socket_path, 0 if os.geteuid() == 0 else os.geteuid(), socket_gid)
@@ -353,10 +363,10 @@ class BrokerClient:
                 connection.connect(str(self.socket_path))
                 connection.sendall(message)
                 reader = connection.makefile("rb")
-                raw = reader.readline(MAX_MESSAGE_BYTES + 1)
+                raw = reader.readline(MAX_RESPONSE_BYTES + 1)
         except (OSError, TimeoutError) as error:
             raise BrokerError("Privileged broker is unavailable.") from error
-        if not raw or len(raw) > MAX_MESSAGE_BYTES or not raw.endswith(b"\n"):
+        if not raw or len(raw) > MAX_RESPONSE_BYTES or not raw.endswith(b"\n"):
             raise BrokerError("Privileged broker returned an invalid response.")
         try:
             response = json.loads(raw)
@@ -380,6 +390,9 @@ class BrokerClient:
 
     def list_users(self, search: str = "", page: int = 0) -> dict:
         return self.request({"action": "users_list", "search": search, "page": page})
+
+    def list_sessions(self, search: str = "", page: int = 0) -> dict:
+        return self.request({"action": "sessions_list", "search": search, "page": page}, timeout=10)
 
     def manage_user(self, payload: dict) -> dict:
         return self.request({**payload, "action": "users_manage"}, timeout=45)

@@ -47,6 +47,7 @@ require_source_files() {
     "webui/manage.py" \
     "webui/security.py" \
     "webui/users.py" \
+    "webui/sessions.py" \
     "packaging/systemd/ikev2-web-users-apply.service" \
     "webui/static/index.html" \
     "webui/static/app.css" \
@@ -73,6 +74,7 @@ install_source() {
     "${SOURCE_DIR}/webui/manage.py" \
     "${SOURCE_DIR}/webui/security.py" \
     "${SOURCE_DIR}/webui/users.py" \
+    "${SOURCE_DIR}/webui/sessions.py" \
     "${INSTALL_DIR}/webui/"
   install -o root -g root -m 0644 \
     "${SOURCE_DIR}/webui/static/index.html" \

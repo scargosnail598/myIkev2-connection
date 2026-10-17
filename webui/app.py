@@ -70,10 +70,12 @@ class SystemStatusProvider:
         ]
         broker_available = False
         user_management = False
+        session_monitoring = False
         if self._broker:
             try:
                 status = self._broker.status()
                 broker_available = status.get("ok") is True
+                session_monitoring = broker_available and status.get("session_monitoring") is True
                 user_management = broker_available and status.get("user_management") is True
                 if broker_available and isinstance(status.get("installed"), bool):
                     installed = status["installed"]
@@ -87,6 +89,7 @@ class SystemStatusProvider:
                 "service_actions": broker_available,
                 "user_management": user_management,
                 "session_management": False,
+                "session_monitoring": session_monitoring,
             },
         }
 
@@ -123,6 +126,26 @@ class Ikev2RequestHandler(BaseHTTPRequestHandler):
             if self._require_session() is None:
                 return
             self._send_json(self.provider.dashboard())
+            return
+        if path == "/api/sessions":
+            if self._require_session() is None:
+                return
+            query = parse_qs(urlparse(self.path).query)
+            try:
+                page = int(query.get("page", ["0"])[0])
+            except ValueError:
+                self._send_json({"message": "Invalid session page."}, HTTPStatus.BAD_REQUEST)
+                return
+            try:
+                result = self.broker.list_sessions(query.get("search", [""])[0], page)
+            except BrokerError:
+                self._send_json({"message": "VPN session monitoring is unavailable."}, HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            if result.get("ok") is True:
+                self._send_json(result)
+            else:
+                self._send_json({"message": result.get("message", "VPN session monitoring is unavailable.")},
+                                400 if result.get("status") == 400 else 503)
             return
         if path == "/api/users":
             if self._require_session() is None:

@@ -71,10 +71,12 @@ class SystemStatusProvider:
         broker_available = False
         user_management = False
         session_monitoring = False
+        diagnostics = False
         if self._broker:
             try:
                 status = self._broker.status()
                 broker_available = status.get("ok") is True
+                diagnostics = broker_available and status.get("diagnostics") is True
                 session_monitoring = broker_available and status.get("session_monitoring") is True
                 user_management = broker_available and status.get("user_management") is True
                 if broker_available and isinstance(status.get("installed"), bool):
@@ -90,6 +92,7 @@ class SystemStatusProvider:
                 "user_management": user_management,
                 "session_management": False,
                 "session_monitoring": session_monitoring,
+                "diagnostics": diagnostics,
             },
         }
 
@@ -126,6 +129,20 @@ class Ikev2RequestHandler(BaseHTTPRequestHandler):
             if self._require_session() is None:
                 return
             self._send_json(self.provider.dashboard())
+            return
+        if path == "/api/diagnostics":
+            if self._require_session() is None:
+                return
+            try:
+                result = self.broker.diagnostics()
+            except BrokerError:
+                self._send_json({"message": "Server diagnostics are unavailable. Check the broker and try again."},
+                                HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            if result.get("ok") is True:
+                self._send_json(result)
+            else:
+                self._send_json({"message": "Server diagnostics could not be completed."}, HTTPStatus.SERVICE_UNAVAILABLE)
             return
         if path == "/api/sessions":
             if self._require_session() is None:

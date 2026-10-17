@@ -48,6 +48,7 @@ require_source_files() {
     "webui/security.py" \
     "webui/users.py" \
     "webui/sessions.py" \
+    "webui/diagnostics.py" \
     "packaging/systemd/ikev2-web-users-apply.service" \
     "webui/static/index.html" \
     "webui/static/app.css" \
@@ -75,6 +76,7 @@ install_source() {
     "${SOURCE_DIR}/webui/security.py" \
     "${SOURCE_DIR}/webui/users.py" \
     "${SOURCE_DIR}/webui/sessions.py" \
+    "${SOURCE_DIR}/webui/diagnostics.py" \
     "${INSTALL_DIR}/webui/"
   install -o root -g root -m 0644 \
     "${SOURCE_DIR}/webui/static/index.html" \
@@ -172,8 +174,19 @@ import sys
 sys.path.insert(0, "/opt/ikev2")
 from webui.app import SystemStatusProvider
 from webui.broker import BrokerClient
-status = SystemStatusProvider(broker=BrokerClient()).dashboard()
-sys.exit(0 if status["capabilities"]["service_actions"] and isinstance(status["installed"], bool) else 1)
+broker = BrokerClient()
+status = SystemStatusProvider(broker=broker).dashboard()
+report = broker.diagnostics()
+checks = report.get("checks", [])
+expected = {"installation", "vpn_service", "firewall_service", "proxy_service", "connection", "udp_ports", "ipv4_forwarding", "server_certificate"}
+valid = (report.get("ok") is True and isinstance(checks, list) and len(checks) == 8
+         and all(isinstance(item, dict) for item in checks)
+         and {item.get("id") for item in checks} == expected
+         and all(item.get("status") in {"pass", "warn", "fail", "unknown"} for item in checks))
+if valid:
+    print("Read-only diagnostics: " + ", ".join("{}={}".format(state, sum(item["status"] == state for item in checks))
+                                            for state in ("pass", "warn", "fail", "unknown")))
+sys.exit(0 if status["capabilities"]["service_actions"] and isinstance(status["installed"], bool) and valid else 1)
 '; then
       printf '%-32s verified\n' "unprivileged dashboard/broker"
     else

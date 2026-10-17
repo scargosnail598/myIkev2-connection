@@ -47,7 +47,7 @@
           <a class="nav-item active" href="#overview" data-view="overview" aria-current="page"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z"/></svg><span class="nav-label">Overview</span></a>
           <a class="nav-item" href="#users" data-view="users"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2 M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8 M22 21v-2a4 4 0 0 0-3-3.87 M16 3.13a4 4 0 0 1 0 7.75"/></svg><span class="nav-label">Users</span></a>
           <a class="nav-item" href="#sessions" data-view="sessions"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12h4l3-8 6 16 3-8h4"/></svg><span class="nav-label">Sessions</span></a>
-          <button class="nav-item" disabled><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6 M12 3v4 M5 7l2 2 M19 7l-2 2 M12 13l3-3 M20 15a8 8 0 1 1-16 0 8 8 0 0 1 16 0"/></svg><span class="nav-label">Diagnostics</span><em>Next</em></button>
+          <a class="nav-item" href="#diagnostics" data-view="diagnostics"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6 M12 3v4 M5 7l2 2 M19 7l-2 2 M12 13l3-3 M20 15a8 8 0 1 1-16 0 8 8 0 0 1 16 0"/></svg><span class="nav-label">Diagnostics</span></a>
         </nav>
         <button id="logout" class="sidebar-foot" type="button" aria-label="Sign out" title="Sign out">
           <span class="pulse"></span>
@@ -163,6 +163,25 @@
         <p id="sessions-empty" class="empty-state" hidden>No active VPN sessions.</p>
         <div class="users-pagination"><button id="sessions-previous" class="secondary-button" type="button" disabled>Previous</button><span id="sessions-page"></span><button id="sessions-next" class="secondary-button" type="button" disabled>Next</button></div>
         <footer><span>Refreshes every 30 seconds. Traffic is received / sent by the server and resets on rekey or reconnect. Missing values show N/A.</span><span id="sessions-updated">Awaiting first update</span></footer>
+      </main>
+      <main id="diagnostics-view" hidden>
+        <header>
+          <div><p class="eyebrow">SERVER HEALTH</p><h1 class="overview-title">Diagnostics</h1>
+            <p class="overview-copy">Check the VPN server and find the next step when something needs attention.</p></div>
+          <button id="diagnostics-refresh" class="primary-button" type="button">Run checks</button>
+        </header>
+        <p class="diagnostics-scope">A local snapshot of VPN services, ports, forwarding and certificate dates. Review warnings below, then confirm Internet access from a VPN client.</p>
+        <p id="diagnostics-progress" class="action-progress" role="status" hidden>Checking server health. This may take up to 25 seconds…</p>
+        <div id="diagnostics-error" class="broker-notice" role="alert" hidden></div>
+        <p id="diagnostics-summary" class="muted list-summary" role="status">Run checks to inspect server health.</p>
+        <dl id="diagnostics-counts" class="diagnostics-counts" hidden>
+          <div><dt>Passed</dt><dd id="diagnostics-pass">—</dd></div>
+          <div><dt>Warnings</dt><dd id="diagnostics-warn">—</dd></div>
+          <div><dt>Failed</dt><dd id="diagnostics-fail">—</dd></div>
+          <div><dt>Unknown</dt><dd id="diagnostics-unknown">—</dd></div>
+        </dl>
+        <div id="diagnostics-list" class="diagnostics-list" aria-busy="false"></div>
+        <footer><span>Checks run on opening or on request. Local checks do not confirm DNS, public reachability or client routing. Certificate checks cover dates only.</span><span id="diagnostics-updated">Awaiting first check</span></footer>
       </main>
       </div>
     </div>

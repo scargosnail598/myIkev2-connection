@@ -49,7 +49,7 @@ async function fixture(t, options = {}) {
   const errors = [];
   const state = { authenticated: true, data: snapshot(), dashboardFailure: false, logoutFailure: false, sessionFailure: false, loginLimited: false, commandFailure: false, ...options };
   state.userNames = options.userNames || ["alice", "bob", "carol"];
-  const calls = { dashboard: 0, commands: 0, logout: 0, sessions: 0, userChanges: [] };
+  const calls = { dashboard: 0, commands: 0, logout: 0, sessions: 0, diagnostics: 0, userChanges: [] };
   const session = () => ({ authenticated: state.authenticated, username: state.authenticated ? "browser-test-admin" : null, csrf_token: state.authenticated ? "browser-test-csrf" : null });
   page.on("pageerror", (error) => errors.push(error.message));
   await page.route("**/api/**", async (route) => {
@@ -76,6 +76,19 @@ async function fixture(t, options = {}) {
       if (state.loginLimited) return json({ message: "Too many failed attempts." }, 429, { "Retry-After": "120" });
       state.authenticated = true;
       return json(session());
+    }
+    if (endpoint === "/api/diagnostics") {
+      calls.diagnostics += 1;
+      if (!state.authenticated) return json({ message: "Sign in to continue." }, 401);
+      if (state.diagnosticsHold) await state.diagnosticsHold;
+      if (state.diagnosticsFailure) return json({ message: "Broker is unavailable." }, 503);
+      if (state.diagnosticsMalformed) return json({ ok: true, checks: [] });
+      return json({ ok: true, checked_at: "2026-10-17T12:00:00+00:00", checks: state.diagnosticChecks || [
+        { id: "vpn", label: "VPN service", status: "pass", detail: "Service state: active.", guidance: "" },
+        { id: "cert", label: "Server certificate dates", status: "warn", detail: "Certificate expires in 13 days.", guidance: "Review certificate renewal before it expires." },
+        { id: "udp", label: "IKEv2 UDP ports", status: "fail", detail: "No local binding for UDP 4500.", guidance: "Check the VPN service." },
+        { id: "forwarding", label: "IPv4 forwarding", status: "unknown", detail: "The forwarding setting could not be read.", guidance: "" },
+      ] });
     }
     if (endpoint === "/api/sessions") {
       calls.sessions += 1;
@@ -469,4 +482,81 @@ test("sessions ignore a response arriving after sign out", async (t) => {
   release();
   await page.waitForTimeout(100);
   assert.equal(await page.locator("#sessions-list tr").count(), 0);
+});
+
+
+test("diagnostics renders all result types and guidance without sending commands or polling", async (t) => {
+  const { page, calls } = await fixture(t);
+  await page.locator('[data-view="diagnostics"]').click();
+  await waitText(page, "#diagnostics-summary", "4 checks completed · 3 to review");
+  assert.equal(await page.locator(".diagnostic-check").count(), 4);
+  for (const status of ["pass", "warn", "fail", "unknown"]) assert.equal(await page.locator(`#diagnostics-${status}`).textContent(), "1");
+  await waitText(page, "#diagnostics-list", "Review certificate renewal");
+  assert.equal(await page.locator("#workspace-title").textContent(), "Diagnostics");
+  await page.clock.fastForward(30000);
+  assert.equal(calls.diagnostics, 1);
+  assert.equal(calls.commands, 0);
+  assert.equal(calls.userChanges.length, 0);
+});
+
+test("diagnostics preserves stale results, rejects malformed responses, and recovers", async (t) => {
+  const { page, state, calls } = await fixture(t);
+  await page.locator('[data-view="diagnostics"]').click();
+  await waitText(page, "#diagnostics-summary", "4 checks completed");
+  state.diagnosticsFailure = true;
+  await page.locator("#diagnostics-refresh").click();
+  await waitText(page, "#diagnostics-error", "Previous results");
+  assert.equal(await page.locator(".diagnostic-check").count(), 4);
+  state.diagnosticsFailure = false;
+  state.diagnosticsMalformed = true;
+  await page.locator("#diagnostics-refresh").click();
+  await waitText(page, "#diagnostics-error", "unexpected diagnostics");
+  assert.equal(await page.locator(".diagnostic-check").count(), 4);
+  state.diagnosticsMalformed = false;
+  await page.locator("#diagnostics-refresh").click();
+  await page.locator("#diagnostics-error").waitFor({ state: "hidden" });
+  assert.equal(calls.diagnostics, 4);
+});
+
+test("diagnostics fits narrow screens and treats server fields as text", async (t) => {
+  const { page } = await fixture(t, { viewport: { width: 320, height: 844 }, diagnosticChecks: [
+    { id: "fixture", label: '<img src=x onerror="alert(1)">', status: "unknown", detail: "Unrecognized status. ".repeat(12), guidance: "Run the installer diagnostics to investigate." },
+  ] });
+  await page.locator('[data-view="diagnostics"]').click();
+  await waitText(page, "#diagnostics-summary", "1 checks completed");
+  assert.equal(await page.locator("#diagnostics-list img").count(), 0);
+  assert.match(await page.locator("#diagnostics-list").textContent(), /onerror/);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+  if (process.env.UI_SCREENSHOT_DIR) {
+    await fs.mkdir(process.env.UI_SCREENSHOT_DIR, { recursive: true });
+    await page.screenshot({ path: path.join(process.env.UI_SCREENSHOT_DIR, "diagnostics-mobile.png"), fullPage: true });
+  }
+});
+
+test("diagnostics blocks duplicate requests and ignores results after sign out", async (t) => {
+  const { page, state, calls } = await fixture(t);
+  let release;
+  state.diagnosticsHold = new Promise((resolve) => { release = resolve; });
+  t.after(() => release());
+  await page.locator('[data-view="diagnostics"]').click();
+  await page.locator("#diagnostics-progress").waitFor({ state: "visible" });
+  assert.equal(await page.locator("#diagnostics-refresh").isDisabled(), true);
+  await page.locator("#diagnostics-refresh").evaluate((element) => element.click());
+  await page.clock.fastForward(30000);
+  assert.equal(calls.diagnostics, 1);
+  await page.locator("#logout").click();
+  await page.locator("#login-view").waitFor({ state: "visible" });
+  release();
+  await page.waitForTimeout(100);
+  assert.equal(await page.locator(".diagnostic-check").count(), 0);
+});
+
+test("diagnostics handles unavailable status and session expiry", async (t) => {
+  const { page, state } = await fixture(t, { diagnosticsFailure: true });
+  await page.locator('[data-view="diagnostics"]').click();
+  await waitText(page, "#diagnostics-summary", "unavailable");
+  assert.equal(await page.locator("#diagnostics-counts").isVisible(), false);
+  state.authenticated = false;
+  await page.locator("#diagnostics-refresh").click();
+  await page.locator("#login-view").waitFor({ state: "visible" });
 });

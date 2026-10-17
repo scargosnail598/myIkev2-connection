@@ -61,6 +61,10 @@ class FakeBroker:
         return {"ok": True, "users": [{"username": "fixture-user"}], "total": 1, "matched": 1,
                 "page": 0, "pages": 1, "revision": "fixture-revision"}
 
+    def diagnostics(self):
+        return {"ok": True, "checked_at": "2026-10-17T00:00:00+00:00", "checks": [
+            {"id": "fixture", "label": "Fixture check", "status": "pass", "detail": "Checked.", "guidance": ""}]}
+
     def list_sessions(self, search="", page=0):
         return {"ok": True, "sessions": [], "total": 0, "matched": 0, "page": 0, "pages": 1, "running": True}
 
@@ -288,6 +292,25 @@ class WebServerTests(unittest.TestCase):
         self.assertEqual(response.status, 200)
         self.assertEqual(payload["status"], "ok")
         self.assertEqual(response.headers["Cache-Control"], "no-store")
+
+    def test_diagnostics_require_login_and_are_not_cached(self):
+        with self.assertRaises(HTTPError) as raised:
+            self.get_json("/api/diagnostics")
+        self.assertEqual(raised.exception.code, 401)
+        response, payload = self.get_json("/api/diagnostics", authenticated=True)
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+        self.assertEqual(payload["checks"][0]["status"], "pass")
+        with self.assertRaises(HTTPError) as raised:
+            self.post_json("/api/diagnostics", {"command": "restart"}, headers={"X-CSRF-Token": self.csrf_token})
+        self.assertEqual(raised.exception.code, 405)
+
+    def test_diagnostics_offline_broker_does_not_expose_errors(self):
+        self.login()
+        with patch.object(self.broker, "diagnostics", side_effect=BrokerError("private server detail")):
+            with self.assertRaises(HTTPError) as raised:
+                self.get_json("/api/diagnostics")
+        self.assertEqual(raised.exception.code, 503)
+        self.assertNotIn("private", raised.exception.read().decode())
 
     def test_sessions_require_login_and_responses_are_not_cached(self):
         with self.assertRaises(HTTPError) as raised:

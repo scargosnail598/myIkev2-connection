@@ -83,7 +83,7 @@ every 30 seconds, so totals survive VPN service and server restarts.
 
 The Windows utility supports both Full Tunnel and Proxy Mode without requiring separate VPN profiles.
 
-## Web UI (phase 3)
+## Web UI
 
 The repository includes an authenticated, local-only management dashboard. It
 has no third-party runtime dependencies and always binds to a loopback address.
@@ -101,7 +101,33 @@ service commands and confirmations. Failed refreshes retain the last received
 status with a stale-data notice and disable commands until a successful refresh.
 Service commands require a confirmation explaining their connection impact,
 show progress, and are never automatically retried. A failed sign-out keeps the
-dashboard visible until the server confirms logout. Diagnostics remains a planned section for a later step.
+dashboard visible until the server confirms logout.
+
+The **Diagnostics** page runs eight local, read-only checks when opened or when
+**Run checks** is selected: installer-state presence; VPN, firewall, and optional
+SOCKS5 service states; the loaded `ikev2-eap` connection; local UDP 500/4500
+bindings; IPv4 forwarding; and the managed server certificate's validity dates.
+Each check reports Passed, Warning, Failed, or Unknown with a suggested next
+step when appropriate. An absent or disabled optional proxy is not a failure.
+Certificates expiring within 30 days produce a warning. Missing or inaccessible
+information is Unknown, never a successful check. Failed requests retain the
+previous report with a stale-data notice, and checks are not retried automatically.
+
+Diagnostics requires the root broker and uses only fixed, allowlisted
+`systemctl show`, `ipsec statusall ikev2-eap`, and `openssl x509 -noout -dates`
+commands plus fixed `/proc` paths. It does not run the installer, read private
+keys or VPN passwords, return raw command output, change settings, or restart
+services. No additional broker sandbox permissions are needed. It does not test
+Internet connectivity, DNS, provider firewall reachability, client routing,
+IPv6 forwarding, NAT rules, certificate trust/hostname, or whether StrongSwan has
+loaded the certificate currently on disk. UDP checks establish only that the
+ports are locally bound, without attributing them to a process. Use the CLI
+diagnostics and a real VPN client for those remaining integration checks.
+Deploy both Web UI components through the existing workflow or installer;
+application rollback removes this view without altering VPN configuration.
+Installation also verifies all eight checks through the unprivileged broker
+client, printing only status counts. VPN warnings or failures do not fail a Web
+UI deployment; an invalid diagnostics response does.
 
 The **Sessions** page shows established `ikev2-eap` connections with the
 VPN username, session ID, assigned IPv4/IPv6 addresses, public peer IP, connection

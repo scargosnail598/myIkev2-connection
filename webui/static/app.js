@@ -20,6 +20,8 @@ let pendingAction = null;
 let confirmation = null;
 let confirmationTrigger = null;
 let logoutPending = false;
+let diagnosticsSnapshot = null;
+let diagnosticsLoading = false;
 let sessionsSnapshot = null;
 let sessionsLoading = false;
 let usersSnapshot = null;
@@ -78,6 +80,7 @@ function showLogin(message = "") {
   csrfToken = null;
   resetUsers();
   resetSessions();
+  resetDiagnostics();
   dashboard = null;
   dashboardFresh = false;
   dashboardLoading = false;
@@ -100,6 +103,7 @@ function showApp(session) {
   csrfToken = session.csrf_token;
   resetUsers();
   resetSessions();
+  resetDiagnostics();
   $("#session-user").textContent = session.username;
   dashboard = null;
   dashboardFresh = false;
@@ -156,6 +160,7 @@ function syncControls() {
   $("#action-progress").hidden = !pendingAction;
   syncUserControls();
   syncSessionControls();
+  syncDiagnosticsControls();
   if (pendingAction) $("#action-progress").textContent = `${operationLabels[pendingAction.operation]} request for ${pendingAction.label} is running. Please wait…`;
 }
 
@@ -420,12 +425,14 @@ async function initialize() {
 connectionRetry.addEventListener("click", initialize);
 window.setInterval(() => {
   if (document.visibilityState === "visible") {
+    if (location.hash === "#diagnostics") return;
     if (location.hash === "#sessions") loadSessions();
     else if (!services.contains(document.activeElement)) loadDashboard();
   }
 }, 30000);
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
+    if (location.hash === "#diagnostics") return;
     if (location.hash === "#sessions") loadSessions();
     else loadDashboard();
   }
@@ -448,11 +455,12 @@ function resetUsers() {
 }
 
 function selectView() {
-  const view = ["#users", "#sessions"].includes(location.hash) ? location.hash.slice(1) : "overview";
-  $("#workspace-title").textContent = { overview: "Overview", users: "Users", sessions: "Sessions" }[view];
+  const view = ["#users", "#sessions", "#diagnostics"].includes(location.hash) ? location.hash.slice(1) : "overview";
+  $("#workspace-title").textContent = { overview: "Overview", users: "Users", sessions: "Sessions", diagnostics: "Diagnostics" }[view];
   $("#overview").hidden = view !== "overview";
   $("#users-view").hidden = view !== "users";
   $("#sessions-view").hidden = view !== "sessions";
+  $("#diagnostics-view").hidden = view !== "diagnostics";
   document.querySelectorAll("[data-view]").forEach((link) => {
     const active = link.dataset.view === view;
     link.classList.toggle("active", active);
@@ -462,8 +470,87 @@ function selectView() {
   if (!csrfToken) return;
   if (view === "users") loadUsers();
   else if (view === "sessions") loadSessions();
+  else if (view === "diagnostics") loadDiagnostics();
   else loadDashboard();
 }
+
+const diagnosticLabels = { pass: "Passed", warn: "Warning", fail: "Failed", unknown: "Unknown" };
+
+function resetDiagnostics() {
+  diagnosticsSnapshot = null;
+  diagnosticsLoading = false;
+  $("#diagnostics-list").replaceChildren();
+  $("#diagnostics-counts").hidden = true;
+  $("#diagnostics-error").hidden = true;
+  $("#diagnostics-progress").hidden = true;
+  $("#diagnostics-summary").textContent = "Run checks to inspect server health.";
+  $("#diagnostics-updated").textContent = "Awaiting first check";
+}
+
+function syncDiagnosticsControls() {
+  $("#diagnostics-refresh").disabled = !csrfToken || diagnosticsLoading || Boolean(pendingAction || confirmation || logoutPending || userPending || userDialog.open);
+  $("#diagnostics-refresh").textContent = diagnosticsLoading ? "Checking…" : "Run checks";
+  $("#diagnostics-progress").hidden = !diagnosticsLoading;
+  $("#diagnostics-list").setAttribute("aria-busy", String(diagnosticsLoading));
+}
+
+async function loadDiagnostics() {
+  if (!csrfToken || diagnosticsLoading || pendingAction || confirmation || logoutPending || userPending || userDialog.open) return;
+  const version = sessionVersion;
+  diagnosticsLoading = true;
+  syncDiagnosticsControls();
+  try {
+    const data = await requestJson("/api/diagnostics", {}, 35000);
+    if (version !== sessionVersion) return;
+    if (data.ok !== true || !Array.isArray(data.checks) || data.checks.length === 0 || data.checks.length > 20
+        || typeof data.checked_at !== "string" || !Number.isFinite(Date.parse(data.checked_at))
+        || !data.checks.every((item) => item && Object.hasOwn(diagnosticLabels, item.status)
+          && ["id", "label", "detail", "guidance"].every((key) => typeof item[key] === "string"))) {
+      throw new Error("The server returned an unexpected diagnostics response.");
+    }
+    diagnosticsSnapshot = data;
+    $("#diagnostics-error").hidden = true;
+    const counts = Object.fromEntries(Object.keys(diagnosticLabels).map((status) => [status, data.checks.filter((item) => item.status === status).length]));
+    for (const status of Object.keys(counts)) $("#diagnostics-" + status).textContent = String(counts[status]);
+    $("#diagnostics-counts").hidden = false;
+    $("#diagnostics-summary").textContent = `${data.checks.length} checks completed · ${counts.warn + counts.fail + counts.unknown} to review`;
+    $("#diagnostics-list").replaceChildren(...data.checks.map((item) => {
+      const card = document.createElement("article");
+      card.className = "diagnostic-check";
+      const heading = document.createElement("div");
+      heading.className = "diagnostic-heading";
+      const title = document.createElement("h2");
+      title.textContent = item.label;
+      const status = document.createElement("span");
+      status.className = `diagnostic-status ${item.status}`;
+      status.textContent = diagnosticLabels[item.status];
+      heading.append(title, status);
+      const detail = document.createElement("p");
+      detail.textContent = item.detail;
+      card.append(heading, detail);
+      if (item.guidance) {
+        const guidance = document.createElement("p");
+        guidance.className = "diagnostic-guidance";
+        guidance.textContent = item.guidance;
+        card.append(guidance);
+      }
+      return card;
+    }));
+    const checked = new Date(data.checked_at);
+    $("#diagnostics-updated").textContent = `Checked ${checked.toLocaleTimeString()}`;
+    $("#diagnostics-updated").title = checked.toLocaleString();
+  } catch (error) {
+    if (version !== sessionVersion) return;
+    if (error.status === 401) { showLogin("Your session has expired. Sign in again."); return; }
+    $("#diagnostics-error").hidden = false;
+    $("#diagnostics-error").textContent = `${error.message} ${diagnosticsSnapshot ? "Previous results are shown and may be out of date." : "Choose Run checks to try again."}`;
+    if (!diagnosticsSnapshot) $("#diagnostics-summary").textContent = "Server diagnostics unavailable";
+  } finally {
+    if (version === sessionVersion) { diagnosticsLoading = false; syncDiagnosticsControls(); }
+  }
+}
+
+$("#diagnostics-refresh").addEventListener("click", loadDiagnostics);
 
 function resetSessions() {
   sessionsSnapshot = null;

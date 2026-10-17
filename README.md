@@ -116,6 +116,10 @@ reset it. The SSH user needs passwordless sudo for `/usr/bin/install` and the
 fixed, root-owned Web UI installer. See [deployment permissions](PRODUCTION_DEPLOYMENT.md#web-ui-deployment)
 for the exact sudoers rule.
 
+The workflow's `inspect_origin` option only reports web listeners and installed
+web-server tools on the production server; it skips installation and credential
+changes. Use it before configuring an HTTPS reverse proxy.
+
 If login fails because an older authentication config was preserved, run the
 workflow with **reset_admin_password** enabled. This explicitly sets the username
 to `admin` and replaces its password with `PRODUCTION_WEBUI_PASSWORD`, retaining

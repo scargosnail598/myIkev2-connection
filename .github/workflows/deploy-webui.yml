@@ -3,6 +3,10 @@ name: Deploy Production Web UI
 on:
   workflow_dispatch:
     inputs:
+      inspect_origin:
+        description: Only inspect origin web listeners and installed web-server tools
+        type: boolean
+        default: false
       reset_admin_password:
         description: Reset the admin account to PRODUCTION_WEBUI_PASSWORD and sign out existing sessions
         type: boolean
@@ -54,7 +58,31 @@ jobs:
           printf '%s\n' "$SSH_PRIVATE_KEY" > "$RUNNER_TEMP/ikev2-production-key"
           printf '%s\n' "$KNOWN_HOSTS" > "$RUNNER_TEMP/ikev2-known-hosts"
 
+      - name: Inspect origin web services
+        if: ${{ inputs.inspect_origin }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh -i "$RUNNER_TEMP/ikev2-production-key" \
+            -o "UserKnownHostsFile=$RUNNER_TEMP/ikev2-known-hosts" \
+            -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15 \
+            -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" bash -s <<'REMOTE'
+          set -Eeuo pipefail
+          printf 'Origin web listeners:\n'
+          ss -H -lnt '( sport = :80 or sport = :443 or sport = :8787 )'
+          printf 'Installed web tools:\n'
+          for tool in nginx caddy apache2 certbot; do
+            command -v "$tool" || true
+          done
+          printf 'Web service state:\n'
+          systemctl is-active nginx.service caddy.service apache2.service ikev2-web.service || true
+          printf 'Public origin HTTPS health:\n'
+          curl --silent --show-error --max-time 5 --resolve p.mahanfreenet.ir:443:127.0.0.1 \
+            --output /dev/null --write-out 'HTTP %{http_code}\n' https://p.mahanfreenet.ir/api/health || true
+          REMOTE
+
       - name: Install or update Web UI and verify health
+        if: ${{ !inputs.inspect_origin }}
         shell: bash
         env:
           INITIAL_PASSWORD: ${{ secrets.PRODUCTION_WEBUI_PASSWORD }}

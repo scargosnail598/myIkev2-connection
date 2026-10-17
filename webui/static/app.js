@@ -12,6 +12,7 @@ const sessionUser = document.querySelector("#session-user");
 const modeBadge = document.querySelector("#mode-badge");
 const toast = document.querySelector("#toast");
 const brokerNotice = document.querySelector("#broker-notice");
+const controlState = document.querySelector("#control-state");
 let csrfToken = null;
 let toastTimer = null;
 
@@ -109,19 +110,25 @@ async function loadDashboard() {
     }
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
-    installationState.textContent = data.installed ? "Detected" : "Not detected";
-    installationCopy.textContent = data.installed
-      ? "The managed installer state is present on this server."
-      : "No managed installer state was found. The dashboard remains safely read-only.";
+    installationState.textContent = data.installed === null ? "Unknown" : data.installed ? "Detected" : "Not detected";
+    installationCopy.textContent = data.installed === null
+      ? "Installation status requires the privileged broker."
+      : data.installed
+        ? "The managed installer state is present on this server."
+        : "No managed installer state was found on this server.";
     const canControl = data.capabilities.service_actions;
     brokerNotice.hidden = canControl;
     modeBadge.classList.toggle("controlled", canControl);
     modeBadge.querySelector("b").textContent = canControl ? "CONTROL ENABLED" : "READ-ONLY MODE";
+    controlState.textContent = canControl ? "Service actions via root broker" : "Write actions locked";
     renderServices(data.services, canControl);
     lastUpdated.textContent = `UPDATED ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`;
   } catch (error) {
     installationState.textContent = "Unavailable";
     installationCopy.textContent = "The local status API could not be reached.";
+    modeBadge.classList.remove("controlled");
+    modeBadge.querySelector("b").textContent = "STATUS UNAVAILABLE";
+    controlState.textContent = "Service controls unavailable";
     renderServices([], false);
     lastUpdated.textContent = "STATUS UPDATE FAILED";
   } finally {

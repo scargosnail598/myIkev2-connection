@@ -8,6 +8,7 @@ import getpass
 import json
 import os
 from pathlib import Path
+import sys
 
 from webui.security import hash_password
 
@@ -16,10 +17,15 @@ def create_config(args: argparse.Namespace) -> None:
     output = args.output.resolve()
     if output.exists():
         raise SystemExit(f"Refusing to overwrite existing config: {output}")
-    password = getpass.getpass("Web UI password (minimum 12 characters): ")
-    confirmation = getpass.getpass("Confirm Web UI password: ")
-    if password != confirmation:
-        raise SystemExit("Passwords do not match.")
+    if args.password_stdin:
+        password = sys.stdin.read(4097)
+        if len(password) > 4096:
+            raise SystemExit("Password must contain at most 4096 characters.")
+    else:
+        password = getpass.getpass("Web UI password (minimum 12 characters): ")
+        confirmation = getpass.getpass("Confirm Web UI password: ")
+        if password != confirmation:
+            raise SystemExit("Passwords do not match.")
     try:
         password_hash = hash_password(password)
     except ValueError as error:
@@ -48,6 +54,10 @@ def parse_args() -> argparse.Namespace:
     create = subparsers.add_parser("create-config", help="create a password-protected config")
     create.add_argument("--output", type=Path, required=True)
     create.add_argument("--username", default="admin")
+    create.add_argument(
+        "--password-stdin", action="store_true",
+        help="read the exact initial password from stdin without prompting",
+    )
     create.add_argument("--session-ttl", type=int, default=3600, choices=range(300, 86401))
     create.add_argument(
         "--allow-http",

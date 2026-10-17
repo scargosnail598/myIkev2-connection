@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local-only, read-only Web UI for the managed IKEv2 server."""
+"""Local-only Web UI for the managed IKEv2 server."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable
 from urllib.parse import urlparse
 
-from webui.broker import BrokerClient, BrokerError, DEFAULT_SOCKET
+from webui.broker import BrokerClient, BrokerError, DEFAULT_SOCKET, installation_state
 from webui.security import AuthConfig, AuthManager, Session
 
 
@@ -63,12 +63,20 @@ class SystemStatusProvider:
         return "unknown"
 
     def dashboard(self) -> dict[str, object]:
-        installed = Path("/var/lib/ikev2-easy-installer/state.env").is_file()
+        installed = installation_state()
         services = [
             {"id": key, "label": label, "unit": unit, "state": self.service_state(unit)}
             for key, label, unit in SERVICES
         ]
-        broker_available = self._broker.available() if self._broker else False
+        broker_available = False
+        if self._broker:
+            try:
+                status = self._broker.status()
+                broker_available = status.get("ok") is True
+                if broker_available and isinstance(status.get("installed"), bool):
+                    installed = status["installed"]
+            except BrokerError:
+                pass
         return {
             "installed": installed,
             "mode": "controlled" if broker_available else "read-only",

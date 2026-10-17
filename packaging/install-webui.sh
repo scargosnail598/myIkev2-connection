@@ -14,7 +14,7 @@ WEB_SERVICE="ikev2-web.service"
 
 usage() {
   cat <<'EOF'
-Usage: sudo ./packaging/install-webui.sh install [--secure-cookie]
+Usage: sudo ./packaging/install-webui.sh install [--secure-cookie] [--password-stdin]
        ./packaging/install-webui.sh status
 
 Commands:
@@ -24,6 +24,8 @@ Commands:
 Options:
   --secure-cookie  Require HTTPS for the login cookie. Without this option,
                    loopback HTTP/SSH-tunnel mode is configured.
+  --password-stdin Read the initial admin password from stdin without prompting.
+                   Existing authentication configuration is always preserved.
 EOF
 }
 
@@ -88,6 +90,7 @@ ensure_service_account() {
 
 ensure_config() {
   local secure_cookie="$1"
+  local password_stdin="$2"
   install -d -o "$WEB_USER" -g "$WEB_USER" -m 0700 "$CONFIG_DIR"
   if [[ -f "$CONFIG_FILE" ]]; then
     chown "$WEB_USER:$WEB_USER" "$CONFIG_FILE"
@@ -103,6 +106,9 @@ ensure_config() {
   )
   if [[ "$secure_cookie" != "yes" ]]; then
     config_args+=(--allow-http)
+  fi
+  if [[ "$password_stdin" == "yes" ]]; then
+    config_args+=(--password-stdin)
   fi
   (
     cd "$INSTALL_DIR"
@@ -149,6 +155,22 @@ show_status() {
     failed="yes"
   fi
 
+  if [[ ${EUID} -eq 0 ]]; then
+    if runuser -u "$WEB_USER" -- /usr/bin/python3 -B -c '
+import sys
+sys.path.insert(0, "/opt/ikev2")
+from webui.app import SystemStatusProvider
+from webui.broker import BrokerClient
+status = SystemStatusProvider(broker=BrokerClient()).dashboard()
+sys.exit(0 if status["capabilities"]["service_actions"] and isinstance(status["installed"], bool) else 1)
+'; then
+      printf '%-32s verified\n' "unprivileged dashboard/broker"
+    else
+      printf '%-32s unavailable\n' "unprivileged dashboard/broker"
+      failed="yes"
+    fi
+  fi
+
   if command -v curl >/dev/null 2>&1 && \
       curl --fail --silent --show-error --max-time 3 \
         http://127.0.0.1:8787/api/health >/dev/null; then
@@ -163,11 +185,15 @@ show_status() {
 
 install_webui() {
   local secure_cookie="no"
-  case "${1:-}" in
-    --secure-cookie) secure_cookie="yes" ;;
-    "") ;;
-    *) usage; exit 2 ;;
-  esac
+  local password_stdin="no"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --secure-cookie) secure_cookie="yes" ;;
+      --password-stdin) password_stdin="yes" ;;
+      *) usage; exit 2 ;;
+    esac
+    shift
+  done
 
   require_root
   require_source_files
@@ -176,8 +202,17 @@ install_webui() {
 
   ensure_service_account
   install_source
-  ensure_config "$secure_cookie"
+  ensure_config "$secure_cookie" "$password_stdin"
   install_units
+
+  # Type=simple units may be active before the HTTP listener is ready.
+  local attempt
+  for ((attempt = 0; attempt < 20; attempt++)); do
+    if curl --fail --silent --max-time 1 http://127.0.0.1:8787/api/health >/dev/null 2>&1; then
+      break
+    fi
+    sleep 0.5
+  done
 
   if ! show_status; then
     systemctl --no-pager --full status "$BROKER_SERVICE" "$WEB_SERVICE" || true
@@ -193,7 +228,7 @@ install_webui() {
 case "${1:-}" in
   install)
     shift
-    install_webui "${1:-}"
+    install_webui "$@"
     ;;
   status)
     [[ $# -eq 1 ]] || { usage; exit 2; }

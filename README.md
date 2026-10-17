@@ -105,6 +105,20 @@ The installer prompts for the initial admin password, creates the dedicated
 `/opt/ikev2`, enables both systemd services, and verifies the socket and HTTP
 health endpoint. Existing authentication configuration is preserved on update.
 
+For GitHub Actions deployment, run **Deploy Production Web UI** from the Actions
+tab. It uses the existing `production` environment's `PRODUCTION_HOST`,
+`PRODUCTION_PORT`, `PRODUCTION_USER`, `PRODUCTION_SSH_PRIVATE_KEY`, and
+`PRODUCTION_KNOWN_HOSTS`. Before the first deployment, add the environment secret
+`PRODUCTION_WEBUI_PASSWORD` with an admin password of at least 12 characters.
+The password is passed over SSH stdin and stored only as a scrypt hash on the
+server. Updates preserve the existing password; changing the secret does not
+reset it. The SSH user needs passwordless sudo for the Web UI installer.
+
+This workflow installs only the Web UI and its broker. It starts neither a VPN
+installation nor a VPN restart. The frontend stays unprivileged, and the broker
+checks the root-only installer state. Without broker access in development mode,
+the dashboard reports `Unknown` if it cannot inspect that state.
+
 Check it at any time with:
 
 ```bash
@@ -119,6 +133,17 @@ ssh -L 8787:127.0.0.1:8787 user@server
 
 Then open `http://127.0.0.1:8787`. Pass `--secure-cookie` to the install command
 when an HTTPS reverse proxy will be used instead of a loopback HTTP/SSH tunnel.
+
+For unattended initial installation, `install --password-stdin` reads the exact
+password from stdin (without a trailing newline). Interactive installation
+continues to prompt twice. Keep passwords out of shell arguments and logs.
+
+To roll back a Web UI update, check out the previous revision and rerun its
+installer; the existing authentication config is retained. To disable the Web
+UI, run `sudo systemctl disable --now ikev2-web.service ikev2-web-broker.service`.
+Starting, stopping, or restarting VPN services from the dashboard is a separate
+privileged action and can disconnect active VPN sessions; the dashboard asks
+for confirmation.
 
 ### Frontend-only development mode
 

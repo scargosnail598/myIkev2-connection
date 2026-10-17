@@ -248,6 +248,33 @@ jobs:
 
 This workflow uploads the installer, applies the DPD-based reconnect policy, and verifies the installation. It does not automatically run `install`, `upgrade`, `uninstall`, or certificate rotation. Those operations should require a deliberate production procedure.
 
+## Web UI deployment
+
+The separate `.github/workflows/deploy-webui.yml` workflow, **Deploy Production
+Web UI**, installs and verifies both Web UI services using the same `production`
+environment and SSH configuration above. It installs into `/opt/ikev2` regardless
+of `PRODUCTION_INSTALL_DIR`, which is used only for the VPN server script.
+
+Before the first run, add `PRODUCTION_WEBUI_PASSWORD` as an environment secret
+with at least 12 characters. The initial account is `admin`. The password travels
+over SSH stdin and is stored as a scrypt hash in `/etc/ikev2-web/config.json` with
+mode `0600`. On subsequent runs the existing account and password are preserved;
+the secret can be removed once initial provisioning is complete. Deployment
+requires passwordless sudo and restarts only `ikev2-web` and `ikev2-web-broker`.
+
+The listener remains private. With the example server above, connect using:
+
+```bash
+ssh -p 9011 -N -L 8787:127.0.0.1:8787 saeed@155.117.13.45
+```
+
+Then open `http://127.0.0.1:8787`. To disable access, use
+`sudo systemctl disable --now ikev2-web.service ikev2-web-broker.service`.
+To roll back the application, deploy the previous revision's Web UI sources and
+installer; keep the current authentication config. VPN service controls in the
+dashboard run through the root broker and can interrupt VPN sessions. Web UI
+installation itself does not change VPN routing, DNS, firewall, or CA trust.
+
 ## 8. Recommended Deployment Policy
 
 - Trigger production deployment manually or from signed release tags.

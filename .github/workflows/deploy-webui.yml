@@ -1,0 +1,86 @@
+name: Deploy Production Web UI
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-webui
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 10
+    env:
+      DEPLOY_HOST: ${{ vars.PRODUCTION_HOST }}
+      DEPLOY_PORT: ${{ vars.PRODUCTION_PORT }}
+      DEPLOY_USER: ${{ vars.PRODUCTION_USER }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate Web UI
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash -n packaging/install-webui.sh
+          shellcheck packaging/install-webui.sh
+          node --check webui/static/app.js
+          python3 -B -m unittest discover -s tests -p 'test_webui.py' -v
+
+      - name: Configure SSH
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.PRODUCTION_SSH_PRIVATE_KEY }}
+          KNOWN_HOSTS: ${{ secrets.PRODUCTION_KNOWN_HOSTS }}
+        run: |
+          set -Eeuo pipefail
+          test -n "$DEPLOY_HOST"
+          test -n "$DEPLOY_USER"
+          [[ "$DEPLOY_PORT" =~ ^[0-9]+$ ]]
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$KNOWN_HOSTS"
+          umask 077
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$RUNNER_TEMP/ikev2-production-key"
+          printf '%s\n' "$KNOWN_HOSTS" > "$RUNNER_TEMP/ikev2-known-hosts"
+
+      - name: Install or update Web UI and verify health
+        shell: bash
+        env:
+          INITIAL_PASSWORD: ${{ secrets.PRODUCTION_WEBUI_PASSWORD }}
+        run: |
+          # Staging paths are deliberately expanded locally after validation.
+          # shellcheck disable=SC2029
+          set -Eeuo pipefail
+          ssh_args=(
+            -i "$RUNNER_TEMP/ikev2-production-key"
+            -o "UserKnownHostsFile=$RUNNER_TEMP/ikev2-known-hosts"
+            -o StrictHostKeyChecking=yes
+            -o BatchMode=yes
+            -o ConnectTimeout=15
+            -p "$DEPLOY_PORT"
+          )
+          remote="$DEPLOY_USER@$DEPLOY_HOST"
+          remote_stage=$(ssh "${ssh_args[@]}" "$remote" 'mktemp -d /tmp/ikev2-web.XXXXXXXX')
+          [[ "$remote_stage" =~ ^/tmp/ikev2-web\.[a-zA-Z0-9]+$ ]]
+          cleanup() {
+            ssh "${ssh_args[@]}" "$remote" "rm -rf -- '$remote_stage'" || true
+          }
+          trap cleanup EXIT
+          # Archive tracked sources only: never upload local configs, keys, or caches.
+          git archive --format=tar.gz --output="$RUNNER_TEMP/ikev2-web.tar.gz" HEAD webui packaging
+          ssh "${ssh_args[@]}" "$remote" "tar -xz -C '$remote_stage'" < "$RUNNER_TEMP/ikev2-web.tar.gz"
+          # The initial password travels over SSH stdin, never in arguments or logs.
+          # On updates the installer preserves the existing authentication config.
+          printf '%s' "$INITIAL_PASSWORD" | ssh "${ssh_args[@]}" "$remote" \
+            "sudo -n bash '$remote_stage/packaging/install-webui.sh' install --password-stdin"
+
+      - name: Remove SSH credentials from runner
+        if: always()
+        shell: bash
+        run: rm -f -- "$RUNNER_TEMP/ikev2-production-key" "$RUNNER_TEMP/ikev2-known-hosts"

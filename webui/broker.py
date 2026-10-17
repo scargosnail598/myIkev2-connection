@@ -25,6 +25,7 @@ MAX_MESSAGE_BYTES = 4096
 DEFAULT_SOCKET = Path("/run/ikev2-web/broker.sock")
 DEFAULT_AUDIT_LOG = Path("/var/log/ikev2-web/audit.log")
 SYSTEMCTL = "/usr/bin/systemctl"
+MANAGED_STATE_FILE = Path("/var/lib/ikev2-easy-installer/state.env")
 
 SERVICE_UNITS = {
     "ikev2": "strongswan-starter.service",
@@ -36,6 +37,14 @@ OPERATIONS = {"start", "stop", "restart"}
 
 class BrokerError(Exception):
     """A safe-to-return broker error."""
+
+
+def installation_state() -> bool | None:
+    """Report presence only; never read or expose the root-only state contents."""
+    try:
+        return MANAGED_STATE_FILE.is_file()
+    except OSError:
+        return None
 
 
 @dataclass(frozen=True)
@@ -202,7 +211,7 @@ class BrokerRequestHandler(socketserver.StreamRequestHandler):
 
         action = request.get("action")
         if action == "ping":
-            self._reply({"ok": True, "version": PROTOCOL_VERSION})
+            self._reply({"ok": True, "version": PROTOCOL_VERSION, "installed": installation_state()})
             return
         if action != "service_control":
             self._reply({"ok": False, "error": "unsupported_action"})
@@ -325,9 +334,12 @@ class BrokerClient:
 
     def available(self) -> bool:
         try:
-            return self.request({"action": "ping"}).get("ok") is True
+            return self.status().get("ok") is True
         except BrokerError:
             return False
+
+    def status(self) -> dict[str, object]:
+        return self.request({"action": "ping"})
 
     def service_control(self, target: str, operation: str) -> dict[str, object]:
         return self.request({"action": "service_control", "target": target, "operation": operation})

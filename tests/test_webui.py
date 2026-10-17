@@ -7,6 +7,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import HTTPCookieProcessor, Request, build_opener, urlopen
 
@@ -21,6 +22,7 @@ from webui.broker import (  # noqa: E402
     BrokerError,
     BrokerServer,
     ServiceController,
+    installation_state,
 )
 from webui.security import AuthConfig, AuthManager, hash_password, verify_password  # noqa: E402
 
@@ -46,12 +48,36 @@ class FakeBroker:
     def available(self):
         return self.is_available
 
+    def status(self):
+        if not self.is_available:
+            raise BrokerError("Privileged broker is unavailable.")
+        return {"ok": True, "installed": True}
+
     def service_control(self, target, operation):
         self.calls.append((target, operation))
         return {"ok": True, "target": target, "operation": operation, "results": []}
 
 
 class SystemStatusProviderTests(unittest.TestCase):
+    def test_root_only_state_is_reported_as_unknown_without_broker(self):
+        with patch("webui.broker.MANAGED_STATE_FILE") as state:
+            state.is_file.side_effect = PermissionError("root-only state")
+            self.assertIsNone(installation_state())
+            dashboard = SystemStatusProvider(FakeRunner({})).dashboard()
+        self.assertIsNone(dashboard["installed"])
+        self.assertFalse(dashboard["capabilities"]["service_actions"])
+
+    def test_broker_reports_installation_without_exposing_root_state(self):
+        with patch("webui.broker.MANAGED_STATE_FILE") as state:
+            state.is_file.side_effect = PermissionError("root-only state")
+            dashboard = SystemStatusProvider(FakeRunner({}), FakeBroker()).dashboard()
+        self.assertTrue(dashboard["installed"])
+        self.assertTrue(dashboard["capabilities"]["service_actions"])
+
+    def test_offline_broker_does_not_break_dashboard(self):
+        dashboard = SystemStatusProvider(FakeRunner({}), FakeBroker(available=False)).dashboard()
+        self.assertEqual(dashboard["mode"], "read-only")
+
     def test_normalizes_known_service_states(self):
         provider = SystemStatusProvider(FakeRunner({"vpn.service": "active"}))
         self.assertEqual(provider.service_state("vpn.service"), "active")
@@ -62,6 +88,16 @@ class SystemStatusProviderTests(unittest.TestCase):
 
 
 class SecurityTests(unittest.TestCase):
+    def test_unicode_username_can_authenticate(self):
+        auth = AuthManager(AuthConfig("مدیر", PASSWORD_HASH))
+        self.assertIsNotNone(auth.authenticate("مدیر", PASSWORD, "client"))
+        self.assertIsNone(auth.authenticate("دیگری", PASSWORD, "client"))
+
+    def test_unicode_csrf_is_rejected_without_exception(self):
+        auth = AuthManager(AuthConfig("admin", PASSWORD_HASH))
+        _token, session = auth.authenticate("admin", PASSWORD, "client")
+        self.assertFalse(auth.csrf_valid(session, "نامعتبر"))
+
     def test_password_hash_round_trip(self):
         self.assertTrue(verify_password(PASSWORD, PASSWORD_HASH))
         self.assertFalse(verify_password("incorrect-password", PASSWORD_HASH))
@@ -159,6 +195,7 @@ class BrokerTests(unittest.TestCase):
             try:
                 client = BrokerClient(socket_path)
                 self.assertTrue(client.available())
+                self.assertIn("installed", client.status())
                 response = client.service_control("proxy", "start")
                 self.assertTrue(response["ok"])
             finally:
@@ -289,6 +326,11 @@ class WebServerTests(unittest.TestCase):
         payload = json.load(raised.exception)
         self.assertEqual(payload["message"], "Invalid username or password.")
 
+    def test_unicode_login_returns_unauthorized(self):
+        with self.assertRaises(HTTPError) as raised:
+            self.post_json("/api/auth/login", {"username": "مدیر", "password": PASSWORD})
+        self.assertEqual(raised.exception.code, 401)
+
     def test_logout_requires_csrf(self):
         self.login()
         with self.assertRaises(HTTPError) as raised:
@@ -309,6 +351,41 @@ class WebServerTests(unittest.TestCase):
         with self.assertRaises(HTTPError) as raised:
             urlopen(self.base_url + "/assets/../app.py", timeout=3)
         self.assertEqual(raised.exception.code, 404)
+
+
+class ConfigCommandTests(unittest.TestCase):
+    def create_config(self, path, password):
+        return subprocess.run(
+            [sys.executable, "-B", "-m", "webui.manage", "create-config",
+             "--output", str(path), "--allow-http", "--password-stdin"],
+            input=password, text=True, capture_output=True, cwd=REPO, check=False,
+        )
+
+    def test_password_from_stdin_creates_private_hashed_config(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            result = self.create_config(path, PASSWORD)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            config = AuthConfig.from_file(path)
+            self.assertTrue(verify_password(PASSWORD, config.password_hash))
+            self.assertFalse(config.secure_cookie)
+            self.assertNotIn(PASSWORD, path.read_text() + result.stdout + result.stderr)
+
+    def test_empty_stdin_fails_without_creating_config(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            result = self.create_config(path, "")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("at least 12", result.stderr)
+            self.assertFalse(path.exists())
+
+    def test_stdin_does_not_overwrite_existing_config(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            path.write_text("existing config")
+            result = self.create_config(path, PASSWORD)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(path.read_text(), "existing config")
 
 
 if __name__ == "__main__":

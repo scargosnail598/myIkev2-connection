@@ -125,7 +125,7 @@ class AuthManager:
     def authenticate(self, username: str, password: str, client_key: str) -> tuple[str, Session] | None:
         if not self.login_allowed(client_key)[0]:
             return None
-        username_ok = hmac.compare_digest(username, self.config.username)
+        username_ok = hmac.compare_digest(username.encode("utf-8"), self.config.username.encode("utf-8"))
         password_ok = verify_password(password, self.config.password_hash)
         if not (username_ok and password_ok):
             self.record_failure(client_key)
@@ -171,7 +171,9 @@ class AuthManager:
             self._sessions.pop(token, None)
 
     def csrf_valid(self, session: Session, supplied_token: str | None) -> bool:
-        return bool(supplied_token) and hmac.compare_digest(session.csrf_token, supplied_token)
+        return bool(supplied_token) and hmac.compare_digest(
+            session.csrf_token.encode("utf-8"), supplied_token.encode("utf-8")
+        )
 
     def _remove_expired_sessions(self) -> None:
         now = self._clock()

@@ -8,6 +8,9 @@ on:
       - "ikev2-windows-client.ps1"
       - ".github/workflows/ci.yml"
       - "tests/**"
+      - "webui/**"
+      - "packaging/**"
+      - ".github/workflows/deploy-webui.yml"
   pull_request:
     paths:
       - "ikev2-strongswan-ubuntu.sh"
@@ -15,6 +18,9 @@ on:
       - "ikev2-windows-client.ps1"
       - ".github/workflows/ci.yml"
       - "tests/**"
+      - "webui/**"
+      - "packaging/**"
+      - ".github/workflows/deploy-webui.yml"
 
 permissions:
   contents: read
@@ -31,10 +37,13 @@ jobs:
 
       - name: Check Bash scripts
         run: |
-          bash -n ikev2-strongswan-ubuntu.sh ikev2-linux-client.sh
-          shellcheck --severity=warning ikev2-strongswan-ubuntu.sh ikev2-linux-client.sh
+          bash -n ikev2-strongswan-ubuntu.sh ikev2-linux-client.sh packaging/install-webui.sh
+          shellcheck --severity=warning ikev2-strongswan-ubuntu.sh ikev2-linux-client.sh packaging/install-webui.sh
 
-      - name: Test ACME certificate provisioning and renewal
+      - name: Check Web UI JavaScript syntax
+        run: node --check webui/static/app.js
+
+      - name: Test ACME and Web UI
         run: python3 -B -m unittest discover -s tests -v
 
       - name: Check PowerShell syntax

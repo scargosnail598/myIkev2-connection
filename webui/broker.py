@@ -19,6 +19,8 @@ import subprocess
 import threading
 from typing import Callable
 
+from webui.users import UserError, UserManager, validate_change
+
 
 PROTOCOL_VERSION = 1
 MAX_MESSAGE_BYTES = 4096
@@ -166,11 +168,12 @@ class AuditLogger:
         operation: str,
         stage: str,
         ok: bool | None,
+        action: str = "service_control",
     ) -> None:
         event = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "peer_uid": peer_uid,
-            "action": "service_control",
+            "action": action,
             "target": target,
             "operation": operation,
             "stage": stage,
@@ -211,7 +214,12 @@ class BrokerRequestHandler(socketserver.StreamRequestHandler):
 
         action = request.get("action")
         if action == "ping":
-            self._reply({"ok": True, "version": PROTOCOL_VERSION, "installed": installation_state()})
+            installed = installation_state()
+            self._reply({"ok": True, "version": PROTOCOL_VERSION, "installed": installed,
+                         "user_management": installed is True})
+            return
+        if action in {"users_list", "users_manage"}:
+            self._users(request, peer_uid)
             return
         if action != "service_control":
             self._reply({"ok": False, "error": "unsupported_action"})
@@ -251,6 +259,30 @@ class BrokerRequestHandler(socketserver.StreamRequestHandler):
             return
         self._reply(response)
 
+    def _users(self, request: dict, peer_uid: int) -> None:
+        action = request["action"]
+        fields = None
+        try:
+            if action == "users_list":
+                self._reply(self.server.users.list_users(request.get("search", ""), request.get("page", 0)))
+                return
+            # Validate before auditing, so hostile input cannot be logged as an identity.
+            validate_change(request)
+            fields = {"peer_uid": peer_uid, "target": request["username"],
+                      "operation": request["operation"], "action": "user_management"}
+            self.server.audit.write(**fields, stage="requested", ok=None)
+            try:
+                response = self.server.users.execute(request)
+            except UserError as error:
+                response = error.result()
+            self.server.audit.write(**fields, stage="completed", ok=response.get("ok") is True)
+            self._reply(response)
+        except UserError as error:
+            self._reply(error.result())
+        except OSError:
+            self._reply({"ok": False, "error": "users_unavailable", "status": 503,
+                         "message": "VPN account storage or audit logging is unavailable."})
+
     def _reply(self, payload: dict[str, object]) -> None:
         self.wfile.write((json.dumps(payload, separators=(",", ":")) + "\n").encode())
 
@@ -265,11 +297,13 @@ class BrokerServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
         socket_gid: int,
         controller: ServiceController,
         audit: AuditLogger,
+        users: UserManager | None = None,
     ):
         self.socket_path = socket_path
         self.allowed_uid = allowed_uid
         self.controller = controller
         self.audit = audit
+        self.users = users or UserManager()
         self._prepare_socket_path(socket_gid)
         super().__init__(str(socket_path), BrokerRequestHandler)
         os.chown(socket_path, 0 if os.geteuid() == 0 else os.geteuid(), socket_gid)
@@ -309,13 +343,13 @@ class BrokerClient:
         self.socket_path = socket_path
         self.timeout = timeout
 
-    def request(self, payload: dict[str, object]) -> dict[str, object]:
+    def request(self, payload: dict[str, object], timeout: float | None = None) -> dict[str, object]:
         message = json.dumps({"version": PROTOCOL_VERSION, **payload}, separators=(",", ":")).encode() + b"\n"
         if len(message) > MAX_MESSAGE_BYTES:
             raise BrokerError("Broker request is too large.")
         try:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-                connection.settimeout(self.timeout)
+                connection.settimeout(self.timeout if timeout is None else timeout)
                 connection.connect(str(self.socket_path))
                 connection.sendall(message)
                 reader = connection.makefile("rb")
@@ -343,6 +377,12 @@ class BrokerClient:
 
     def service_control(self, target: str, operation: str) -> dict[str, object]:
         return self.request({"action": "service_control", "target": target, "operation": operation})
+
+    def list_users(self, search: str = "", page: int = 0) -> dict:
+        return self.request({"action": "users_list", "search": search, "page": page})
+
+    def manage_user(self, payload: dict) -> dict:
+        return self.request({**payload, "action": "users_manage"}, timeout=45)
 
 
 def parse_args() -> argparse.Namespace:

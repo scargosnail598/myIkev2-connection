@@ -19,6 +19,14 @@ let dashboardLoading = false;
 let pendingAction = null;
 let confirmation = null;
 let logoutPending = false;
+let usersSnapshot = null;
+let usersFresh = false;
+let usersLoading = false;
+let userPending = false;
+let usersGeneration = 0;
+let userOperation = null;
+let userRevision = null;
+const userDialog = $("#user-dialog");
 
 async function requestJson(path, options = {}, timeout = 15000) {
   const controller = new AbortController();
@@ -63,6 +71,7 @@ function finishConfirmation(accepted) {
 function showLogin(message = "") {
   sessionVersion += 1;
   csrfToken = null;
+  resetUsers();
   dashboard = null;
   dashboardFresh = false;
   dashboardLoading = false;
@@ -82,6 +91,7 @@ function showLogin(message = "") {
 function showApp(session) {
   sessionVersion += 1;
   csrfToken = session.csrf_token;
+  resetUsers();
   $("#session-user").textContent = session.username;
   dashboard = null;
   dashboardFresh = false;
@@ -103,6 +113,7 @@ function showApp(session) {
   $("#last-updated").textContent = "Awaiting first update";
   setMode("CHECKING STATUS", false);
   syncControls();
+  selectView();
 }
 
 function showToast(message, isError = false) {
@@ -119,7 +130,7 @@ function setMode(label, controlled) {
 }
 
 function syncControls() {
-  const busy = Boolean(pendingAction || confirmation || logoutPending);
+  const busy = Boolean(pendingAction || confirmation || logoutPending || userPending || userDialog.open);
   const canControl = Boolean(csrfToken && dashboardFresh && dashboard?.capabilities.service_actions);
   refreshButton.disabled = !csrfToken || dashboardLoading || busy;
   refreshButton.textContent = dashboardLoading ? "Refreshing…" : "Refresh status ↻";
@@ -134,6 +145,7 @@ function syncControls() {
         : transitioning ? "Wait for this service to finish changing state." : "";
   });
   $("#action-progress").hidden = !pendingAction;
+  syncUserControls();
   if (pendingAction) $("#action-progress").textContent = `${operationLabels[pendingAction.operation]} request for ${pendingAction.label} is running. Please wait…`;
 }
 
@@ -222,7 +234,7 @@ async function controlService(target, operation) {
 }
 
 async function loadDashboard() {
-  if (!csrfToken || dashboardLoading || pendingAction || confirmation || logoutPending) return;
+  if (!csrfToken || dashboardLoading || pendingAction || confirmation || logoutPending || userPending || userDialog.open) return;
   const version = sessionVersion;
   dashboardLoading = true;
   syncControls();
@@ -369,5 +381,213 @@ window.setInterval(() => {
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") loadDashboard();
 });
+
+function resetUsers() {
+  usersGeneration += 1;
+  usersSnapshot = null;
+  usersFresh = false;
+  usersLoading = false;
+  userPending = false;
+  closeUserDialog();
+  $("#users-list").replaceChildren();
+  $("#users-error").hidden = true;
+  $("#users-empty").hidden = true;
+  $("#users-search").value = "";
+  $("#users-page").textContent = "";
+  $("#users-summary").textContent = "Loading VPN accounts…";
+  $("#users-updated").textContent = "Awaiting first update";
+}
+
+function selectView() {
+  const usersView = location.hash === "#users";
+  $("#overview").hidden = usersView;
+  $("#users-view").hidden = !usersView;
+  document.querySelectorAll("[data-view]").forEach((link) => {
+    const active = (link.dataset.view === "users") === usersView;
+    link.classList.toggle("active", active);
+    if (active) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
+  });
+  if (csrfToken && usersView) loadUsers();
+  else if (csrfToken) loadDashboard();
+}
+
+function syncUserControls() {
+  const busy = usersLoading || userPending || Boolean(pendingAction || confirmation || logoutPending);
+  const writable = Boolean(csrfToken && usersFresh && dashboard?.capabilities.user_management);
+  $("#user-add").disabled = !writable || busy;
+  $("#users-refresh").disabled = !csrfToken || busy;
+  $("#users-refresh").textContent = usersLoading ? "Loading…" : "Refresh users";
+  $("#users-list").setAttribute("aria-busy", String(busy));
+  $("#users-list").querySelectorAll("button").forEach((button) => { button.disabled = !writable || busy; });
+  $("#users-previous").disabled = busy || !usersSnapshot || usersSnapshot.page <= 0;
+  $("#users-next").disabled = busy || !usersSnapshot || usersSnapshot.page + 1 >= usersSnapshot.pages;
+  $("#users-progress").hidden = !userPending;
+  $("#users-search").disabled = userPending;
+  $("#users-search-form button").disabled = busy;
+}
+
+async function loadUsers(page = usersSnapshot?.page || 0) {
+  if (!csrfToken || userPending || userDialog.open) return;
+  const version = sessionVersion;
+  const generation = ++usersGeneration;
+  usersLoading = true;
+  syncUserControls();
+  try {
+    const query = new URLSearchParams({ search: $("#users-search").value, page: String(page) });
+    const data = await requestJson(`/api/users?${query}`);
+    if (version !== sessionVersion || generation !== usersGeneration) return;
+    if (!Array.isArray(data.users) || typeof data.revision !== "string" || !Number.isInteger(data.total)
+        || !data.users.every((user) => typeof user?.username === "string")) throw new Error("Unexpected account list response.");
+    usersSnapshot = data;
+    usersFresh = true;
+    $("#users-error").hidden = true;
+    $("#users-summary").textContent = `${data.total} VPN accounts · ${data.matched} matching`;
+    $("#users-page").textContent = `Page ${data.page + 1} of ${data.pages}`;
+    $("#users-empty").hidden = data.users.length > 0;
+    $("#users-list").replaceChildren(...data.users.map((user) => {
+      const row = document.createElement("tr");
+      const name = document.createElement("td");
+      name.textContent = user.username;
+      const actions = document.createElement("td");
+      actions.className = "user-row-actions";
+      [["reset", "Change password"], ["delete", "Delete"]].forEach(([operation, label]) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "secondary-button";
+        button.textContent = label;
+        button.dataset.user = user.username;
+        button.dataset.userOperation = operation;
+        button.setAttribute("aria-label", `${label}: ${user.username}`);
+        actions.append(button);
+      });
+      row.append(name, actions);
+      return row;
+    }));
+    $("#users-updated").textContent = `Updated ${new Date().toLocaleTimeString()}`;
+  } catch (error) {
+    if (version !== sessionVersion || generation !== usersGeneration) return;
+    if (error.status === 401) { showLogin("Your session has expired. Sign in again."); return; }
+    usersFresh = false;
+    $("#users-error").hidden = false;
+    $("#users-error").textContent = `${error.message} ${usersSnapshot ? "The previous list is shown. Refresh before editing accounts." : "Refresh users to try again."}`;
+    if (!usersSnapshot) $("#users-summary").textContent = "Account list unavailable";
+  } finally {
+    if (version === sessionVersion && generation === usersGeneration) {
+      usersLoading = false;
+      syncUserControls();
+    }
+  }
+}
+
+function closeUserDialog() {
+  $("#user-form").reset();
+  $("#user-form").querySelectorAll("input, button").forEach((element) => { element.disabled = false; });
+  ["#vpn-password", "#vpn-password-confirm"].forEach((selector) => { $(selector).type = "password"; });
+  $("#user-show-password").textContent = "Show password";
+  $("#user-show-password").setAttribute("aria-pressed", "false");
+  $("#user-save").disabled = false;
+  $("#user-cancel").disabled = false;
+  if (userDialog.open) userDialog.close();
+  userOperation = null;
+  userRevision = null;
+}
+
+function openUserDialog(operation, username = "") {
+  if (!usersFresh || usersLoading || userPending || pendingAction || confirmation || logoutPending || !dashboard?.capabilities.user_management) return;
+  closeUserDialog();
+  userOperation = operation;
+  userRevision = usersSnapshot.revision;
+  $("#user-dialog-title").textContent = operation === "create" ? "Add VPN user" : operation === "reset" ? "Change VPN password" : "Delete VPN user";
+  $("#user-dialog-copy").textContent = operation === "create"
+    ? "Create credentials for a new VPN account. Save the password before closing this dialog."
+    : operation === "reset" ? "The new password is required on the next authentication. Existing VPN connections are not disconnected."
+      : "This blocks future authentication for this account. Existing VPN connections may remain active.";
+  $("#vpn-username").value = username;
+  $("#vpn-username").readOnly = operation !== "create";
+  $("#user-password-fields").hidden = operation === "delete";
+  ["#vpn-password", "#vpn-password-confirm"].forEach((selector) => { $(selector).required = operation !== "delete"; });
+  $("#user-delete-confirm-label").hidden = operation !== "delete";
+  $("#user-delete-confirm").required = operation === "delete";
+  const last = operation === "delete" && usersSnapshot.total === 1;
+  $("#user-last-confirm-label").hidden = !last;
+  $("#user-last-confirm").required = last;
+  $("#user-form-error").hidden = true;
+  $("#user-save").textContent = operation === "create" ? "Create user" : operation === "reset" ? "Change password" : "Delete user";
+  $("#user-save").classList.toggle("destructive", operation === "delete");
+  userDialog.showModal();
+  syncControls();
+}
+
+$("#user-add").addEventListener("click", () => openUserDialog("create"));
+$("#users-list").addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-user-operation]");
+  if (button && !button.disabled) openUserDialog(button.dataset.userOperation, button.dataset.user);
+});
+$("#user-cancel").addEventListener("click", () => { closeUserDialog(); syncControls(); });
+userDialog.addEventListener("cancel", (event) => { event.preventDefault(); if (!userPending) { closeUserDialog(); syncControls(); } });
+$("#users-refresh").addEventListener("click", () => loadUsers());
+$("#users-search-form").addEventListener("submit", (event) => { event.preventDefault(); loadUsers(0); });
+$("#users-previous").addEventListener("click", () => loadUsers(usersSnapshot.page - 1));
+$("#users-next").addEventListener("click", () => loadUsers(usersSnapshot.page + 1));
+$("#user-show-password").addEventListener("click", () => {
+  const show = $("#vpn-password").type === "password";
+  ["#vpn-password", "#vpn-password-confirm"].forEach((selector) => { $(selector).type = show ? "text" : "password"; });
+  $("#user-show-password").textContent = show ? "Hide password" : "Show password";
+  $("#user-show-password").setAttribute("aria-pressed", String(show));
+});
+$("#user-generate").addEventListener("click", () => {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  const password = Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+  $("#vpn-password").value = password;
+  $("#vpn-password-confirm").value = password;
+  if ($("#vpn-password").type === "password") $("#user-show-password").click();
+});
+$("#user-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (userPending || !usersFresh || !userOperation) return;
+  const operation = userOperation;
+  const payload = { username: $("#vpn-username").value, revision: userRevision };
+  if (operation !== "delete") {
+    const password = $("#vpn-password").value;
+    if (!/^[\x20-\x7e]{12,128}$/.test(password) || password.includes('"') || password !== $("#vpn-password-confirm").value) {
+      $("#user-form-error").textContent = "Passwords must match: 12–128 printable ASCII characters, excluding double quotes.";
+      $("#user-form-error").hidden = false;
+      return;
+    }
+    payload.password = password;
+  } else {
+    if (!$("#user-delete-confirm").checked || (usersSnapshot.total === 1 && !$("#user-last-confirm").checked)) return;
+    payload.allow_last = $("#user-last-confirm").checked;
+  }
+  const version = sessionVersion;
+  userPending = true;
+  $("#user-form").querySelectorAll("input, button").forEach((element) => { element.disabled = true; });
+  $("#user-save").disabled = true;
+  $("#user-cancel").disabled = true;
+  syncControls();
+  try {
+    const result = await requestJson(`/api/users/${operation}`, {
+      method: "POST", headers: { "Content-Type": "application/json", "X-CSRF-Token": csrfToken }, body: JSON.stringify(payload),
+    }, 60000);
+    if (version !== sessionVersion) return;
+    if (result.ok !== true) throw new Error("The server did not confirm this change.");
+    showToast(result.applies_on_start ? "Account saved. It will load when the VPN service starts." : "VPN account updated.");
+  } catch (error) {
+    if (version !== sessionVersion) return;
+    if (error.status === 401) { showLogin("Your session has expired. Sign in again."); return; }
+    showToast(`Account change was not confirmed. ${error.message} Refresh before trying again.`, true);
+  } finally {
+    delete payload.password;
+    if (version === sessionVersion) {
+      userPending = false;
+      closeUserDialog();
+      usersFresh = false;
+      syncControls();
+      await loadUsers();
+    }
+  }
+});
+window.addEventListener("hashchange", selectView);
 
 initialize();

@@ -46,6 +46,8 @@ require_source_files() {
     "webui/broker.py" \
     "webui/manage.py" \
     "webui/security.py" \
+    "webui/users.py" \
+    "packaging/systemd/ikev2-web-users-apply.service" \
     "webui/static/index.html" \
     "webui/static/app.css" \
     "webui/static/app.js" \
@@ -70,6 +72,7 @@ install_source() {
     "${SOURCE_DIR}/webui/broker.py" \
     "${SOURCE_DIR}/webui/manage.py" \
     "${SOURCE_DIR}/webui/security.py" \
+    "${SOURCE_DIR}/webui/users.py" \
     "${INSTALL_DIR}/webui/"
   install -o root -g root -m 0644 \
     "${SOURCE_DIR}/webui/static/index.html" \
@@ -122,6 +125,9 @@ ensure_config() {
 }
 
 install_units() {
+  install -o root -g root -m 0644 \
+    "${SOURCE_DIR}/packaging/systemd/ikev2-web-users-apply.service" \
+    "${SYSTEMD_DIR}/ikev2-web-users-apply.service"
   install -o root -g root -m 0644 \
     "${SOURCE_DIR}/packaging/systemd/${BROKER_SERVICE}" \
     "${SYSTEMD_DIR}/${BROKER_SERVICE}"
@@ -207,6 +213,12 @@ install_webui() {
   install_source
   ensure_config "$secure_cookie" "$password_stdin"
   install_units
+  if [[ -f /var/lib/ikev2-easy-installer/state.env && -f /etc/ipsec.secrets ]]; then
+    (
+      cd "$INSTALL_DIR"
+      /usr/bin/python3 -B -c 'from webui.users import UserManager; result=UserManager().check(); assert result.get("checked") is True, "Account helper read-only check failed"; print("Account helper namespace and private storage verified (no credential changes).")'
+    )
+  fi
 
   # Type=simple units may be active before the HTTP listener is ready.
   local attempt

@@ -41,8 +41,8 @@
           <span><strong>IKEv2</strong><small>CONTROL PLANE</small></span>
         </a>
         <nav aria-label="Primary navigation">
-          <a class="nav-item active" href="#overview"><span>01</span>Overview</a>
-          <button class="nav-item" disabled><span>02</span>Users<em>Next</em></button>
+          <a class="nav-item active" href="#overview" data-view="overview" aria-current="page"><span>01</span>Overview</a>
+          <a class="nav-item" href="#users" data-view="users"><span>02</span>Users</a>
           <button class="nav-item" disabled><span>03</span>Sessions<em>Next</em></button>
           <button class="nav-item" disabled><span>04</span>Diagnostics<em>Next</em></button>
         </nav>
@@ -112,6 +112,30 @@
           <span id="last-updated">Awaiting first update</span>
         </footer>
       </main>
+      <main id="users-view" hidden>
+        <header>
+          <div><p class="eyebrow">SERVER OPERATIONS / USERS</p><h1 class="overview-title">VPN users</h1>
+            <p class="overview-copy">Manage the accounts that can connect to this VPN.</p></div>
+          <button id="user-add" class="primary-button" type="button" disabled>Add user</button>
+        </header>
+        <div class="users-toolbar">
+          <form id="users-search-form" role="search">
+            <label for="users-search">Search usernames</label>
+            <div class="search-fields"><input id="users-search" type="search" maxlength="64" autocomplete="off"><button class="secondary-button" type="submit">Search</button></div>
+          </form>
+          <button id="users-refresh" class="secondary-button" type="button">Refresh users</button>
+        </div>
+        <p id="users-summary" class="muted" role="status">Loading VPN accounts…</p>
+        <div id="users-error" class="broker-notice" role="alert" hidden></div>
+        <p id="users-progress" class="action-progress" role="status" hidden>Applying account change. Please wait…</p>
+        <div class="users-table-wrap"><table class="users-table" aria-label="Configured VPN users">
+          <thead><tr><th scope="col">Username</th><th scope="col">Account actions</th></tr></thead>
+          <tbody id="users-list"></tbody>
+        </table></div>
+        <p id="users-empty" class="empty-state" hidden>No matching VPN accounts.</p>
+        <div class="users-pagination"><button id="users-previous" class="secondary-button" type="button" disabled>Previous</button><span id="users-page"></span><button id="users-next" class="secondary-button" type="button" disabled>Next</button></div>
+        <footer><span>Passwords are never displayed in the account list</span><span id="users-updated">Awaiting first update</span></footer>
+      </main>
     </div>
     <dialog id="action-dialog" class="action-dialog" aria-labelledby="action-title" aria-describedby="action-copy">
       <p class="eyebrow">SERVICE CONTROL</p>
@@ -121,6 +145,23 @@
         <button id="action-cancel" class="secondary-button" type="button" autofocus>Cancel</button>
         <button id="action-confirm" type="button"></button>
       </div>
+    </dialog>
+    <dialog id="user-dialog" class="action-dialog" aria-labelledby="user-dialog-title" aria-describedby="user-dialog-copy">
+      <h2 id="user-dialog-title"></h2><p id="user-dialog-copy"></p>
+      <form id="user-form" class="user-form">
+        <label for="vpn-username">VPN username</label><input id="vpn-username" required maxlength="64" autocomplete="off" spellcheck="false" pattern="[A-Za-z0-9._@\-]{1,64}">
+        <small>1–64 letters, digits, dot, underscore, @ or hyphen.</small>
+        <div id="user-password-fields" class="user-form">
+          <label for="vpn-password">New VPN password</label><input id="vpn-password" type="password" autocomplete="new-password" minlength="12" maxlength="128">
+          <label for="vpn-password-confirm">Confirm password</label><input id="vpn-password-confirm" type="password" autocomplete="new-password" minlength="12" maxlength="128">
+          <small>12–128 printable ASCII characters, excluding double quotes. Save it before closing; it cannot be retrieved later.</small>
+          <div class="password-tools"><button id="user-generate" class="secondary-button" type="button">Generate password</button><button id="user-show-password" class="secondary-button" type="button" aria-pressed="false">Show password</button></div>
+        </div>
+        <label id="user-delete-confirm-label" class="checkbox-label" hidden><input id="user-delete-confirm" type="checkbox">Remove this account's VPN credentials.</label>
+        <label id="user-last-confirm-label" class="checkbox-label" hidden><input id="user-last-confirm" type="checkbox">I understand this removes the last VPN account.</label>
+        <p id="user-form-error" class="form-error" role="alert" hidden></p>
+        <div class="dialog-actions"><button id="user-cancel" class="secondary-button" type="button">Cancel</button><button id="user-save" class="primary-button" type="submit">Save</button></div>
+      </form>
     </dialog>
     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
   </body>

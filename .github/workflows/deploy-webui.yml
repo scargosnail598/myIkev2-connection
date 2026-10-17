@@ -49,6 +49,7 @@ jobs:
           shellcheck packaging/install-webui.sh packaging/install-arvan-proxy.sh
           node --check webui/static/app.js
           python3 -B -m unittest discover -s tests -p 'test_webui.py' -v
+          python3 -B -m unittest discover -s tests -p 'test_users.py' -v
           python3 -B -m unittest discover -s tests -p 'test_arvan_proxy.py' -v
 
       - name: Configure SSH
@@ -148,7 +149,7 @@ jobs:
           sudo -n /usr/bin/install -o root -g root -m 0644 \
             "$source_dir/webui/__init__.py" "$source_dir/webui/app.py" \
             "$source_dir/webui/broker.py" "$source_dir/webui/manage.py" \
-            "$source_dir/webui/security.py" "$deploy_dir/webui/"
+            "$source_dir/webui/security.py" "$source_dir/webui/users.py" "$deploy_dir/webui/"
           sudo -n /usr/bin/install -o root -g root -m 0644 \
             "$source_dir/webui/static/index.html" "$source_dir/webui/static/app.css" \
             "$source_dir/webui/static/app.js" "$deploy_dir/webui/static/"
@@ -156,6 +157,7 @@ jobs:
             "$source_dir/packaging/systemd/ikev2-web.service" \
             "$source_dir/packaging/systemd/ikev2-web-broker.service" \
             "$source_dir/packaging/systemd/ikev2-web-proxy.service" \
+            "$source_dir/packaging/systemd/ikev2-web-users-apply.service" \
             "$deploy_dir/packaging/systemd/"
           sudo -n /usr/bin/install -o root -g root -m 0644 \
             "$source_dir/packaging/render-arvan-proxy.py" "$deploy_dir/packaging/"

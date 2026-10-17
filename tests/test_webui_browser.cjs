@@ -12,7 +12,7 @@ let base;
 const staticRoot = path.resolve(__dirname, "../webui/static");
 const snapshot = () => ({
   installed: true,
-  capabilities: { service_actions: true },
+  capabilities: { service_actions: true, user_management: true },
   services: [
     { id: "ikev2", label: "IKEv2 / StrongSwan", unit: "strongswan-starter.service", state: "active" },
     { id: "firewall", label: "Firewall & NAT", unit: "ikev2-vpn-firewall.service", state: "active" },
@@ -48,7 +48,8 @@ async function fixture(t, options = {}) {
   const page = await context.newPage();
   const errors = [];
   const state = { authenticated: true, data: snapshot(), dashboardFailure: false, logoutFailure: false, sessionFailure: false, loginLimited: false, commandFailure: false, ...options };
-  const calls = { dashboard: 0, commands: 0, logout: 0 };
+  state.userNames = options.userNames || ["alice", "bob", "carol"];
+  const calls = { dashboard: 0, commands: 0, logout: 0, userChanges: [] };
   const session = () => ({ authenticated: state.authenticated, username: state.authenticated ? "browser-test-admin" : null, csrf_token: state.authenticated ? "browser-test-csrf" : null });
   page.on("pageerror", (error) => errors.push(error.message));
   await page.route("**/api/**", async (route) => {
@@ -76,7 +77,24 @@ async function fixture(t, options = {}) {
       state.authenticated = true;
       return json(session());
     }
+    if (endpoint === "/api/users") {
+      if (state.userFailure) return json({ message: "Account list unavailable." }, 503);
+      const query = new URL(request.url()).searchParams;
+      const names = state.userNames.filter((name) => name.includes(query.get("search") || ""));
+      const page = Math.min(Number(query.get("page") || 0), Math.max(0, Math.ceil(names.length / 20) - 1));
+      return json({ ok: true, users: names.slice(page * 20, page * 20 + 20).map((username) => ({ username })),
+        total: state.userNames.length, matched: names.length, page, pages: Math.max(1, Math.ceil(names.length / 20)), revision: "1".repeat(64) });
+    }
     assert.equal(request.headers()["x-csrf-token"], "browser-test-csrf");
+    if (endpoint.startsWith("/api/users/")) {
+      const payload = request.postDataJSON();
+      calls.userChanges.push({ operation: endpoint.split("/").at(-1), ...payload });
+      if (state.userChangeHold) await state.userChangeHold;
+      if (state.userChangeFailure) return json({ message: "Accounts changed. Refresh the list." }, 409);
+      if (endpoint.endsWith("/create")) state.userNames.push(payload.username);
+      if (endpoint.endsWith("/delete")) state.userNames = state.userNames.filter((name) => name !== payload.username);
+      return json({ ok: true });
+    }
     if (endpoint === "/api/auth/logout") {
       calls.logout += 1;
       if (state.logoutFailure) return json({ message: "Please try again." }, 503);
@@ -253,4 +271,116 @@ test("desktop and mobile layouts fit and dialogs remain accessible", async (t) =
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
   }
   if (output) await page.screenshot({ path: path.join(output, "mobile.png"), fullPage: true });
+});
+
+test("users navigation searches and paginates the real API shape", async (t) => {
+  const { page } = await fixture(t, { userNames: Array.from({ length: 25 }, (_, i) => `user${String(i).padStart(2, "0")}`) });
+  await page.locator('[data-view="users"]').click();
+  await waitText(page, "#users-summary", "25 VPN accounts");
+  assert.equal(await page.locator("#users-list tr").count(), 20);
+  await page.locator("#users-next").click();
+  await waitText(page, "#users-page", "Page 2 of 2");
+  assert.equal(await page.locator("#users-list tr").count(), 5);
+  await page.locator("#users-search").fill("user24");
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await waitText(page, "#users-summary", "1 matching");
+  assert.equal(await page.locator("#users-list tr").count(), 1);
+  await page.locator("#users-search").fill("absent");
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await page.locator("#users-empty").waitFor({ state: "visible" });
+});
+
+test("create validates passwords, sends once and clears credentials after saving", async (t) => {
+  const { page, state, calls } = await fixture(t);
+  await page.locator('[data-view="users"]').click();
+  await waitText(page, "#users-summary", "3 VPN accounts");
+  await page.locator("#user-add").click();
+  await page.locator("#vpn-username").fill("new-user");
+  await page.locator("#vpn-password").fill("fixture password one");
+  await page.locator("#vpn-password-confirm").fill("fixture password two");
+  await page.locator("#user-save").click();
+  await page.locator("#user-form-error").waitFor({ state: "visible" });
+  assert.equal(calls.userChanges.length, 0);
+  await page.locator("#user-generate").click();
+  assert.match(await page.locator("#vpn-password").inputValue(), /^[a-f0-9]{32}$/);
+  let release;
+  state.userChangeHold = new Promise((resolve) => { release = resolve; });
+  t.after(() => release());
+  await page.locator("#user-save").click();
+  await page.waitForFunction(() => document.querySelector("#user-save").disabled);
+  assert.equal(await page.locator("#vpn-password").isDisabled(), true);
+  while (calls.userChanges.length < 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(calls.userChanges[0].username, "new-user");
+  release();
+  await page.locator("#user-dialog").waitFor({ state: "hidden" });
+  await waitText(page, "#users-summary", "4 VPN accounts");
+  assert.equal(await page.locator("#vpn-password").inputValue(), "");
+  assert.equal(calls.userChanges.length, 1);
+});
+
+test("password reset explains active sessions and cancel clears the form", async (t) => {
+  const { page, calls } = await fixture(t);
+  await page.locator('[data-view="users"]').click();
+  await waitText(page, "#users-summary", "3 VPN accounts");
+  await page.getByRole("button", { name: "Change password: alice", exact: true }).click();
+  assert.match(await page.locator("#user-dialog-copy").textContent(), /not disconnected/);
+  assert.equal(await page.locator("#vpn-username").getAttribute("readonly"), "");
+  await page.locator("#user-generate").click();
+  await page.keyboard.press("Escape");
+  assert.equal(await page.locator("#vpn-password").inputValue(), "");
+  assert.equal(calls.userChanges.length, 0);
+  await page.getByRole("button", { name: "Change password: alice", exact: true }).click();
+  await page.locator("#user-generate").click();
+  await page.locator("#user-save").click();
+  await page.locator("#user-dialog").waitFor({ state: "hidden" });
+  assert.equal(calls.userChanges[0].operation, "reset");
+});
+
+test("deleting the final account requires both explicit confirmations", async (t) => {
+  const { page, calls } = await fixture(t, { userNames: ["alice"] });
+  await page.locator('[data-view="users"]').click();
+  await waitText(page, "#users-summary", "1 VPN accounts");
+  await page.getByRole("button", { name: "Delete: alice", exact: true }).click();
+  await page.locator("#user-delete-confirm").check();
+  await page.locator("#user-save").click();
+  assert.equal(calls.userChanges.length, 0);
+  await page.locator("#user-last-confirm").check();
+  await page.locator("#user-save").click();
+  await page.locator("#user-dialog").waitFor({ state: "hidden" });
+  await waitText(page, "#users-summary", "0 VPN accounts");
+  assert.equal(calls.userChanges[0].allow_last, true);
+  assert.equal(calls.userChanges[0].operation, "delete");
+});
+
+test("account failures keep data stale and conflicts are never retried", async (t) => {
+  const { page, state, calls } = await fixture(t);
+  await page.locator('[data-view="users"]').click();
+  await waitText(page, "#users-summary", "3 VPN accounts");
+  state.userFailure = true;
+  await page.locator("#users-refresh").click();
+  await page.locator("#users-error").waitFor({ state: "visible" });
+  assert.equal(await page.locator("#user-add").isDisabled(), true);
+  assert.equal(await page.locator("#users-list tr").count(), 3);
+  state.userFailure = false;
+  await page.locator("#users-refresh").click();
+  await page.locator("#users-error").waitFor({ state: "hidden" });
+  state.userChangeFailure = true;
+  await page.getByRole("button", { name: "Delete: alice", exact: true }).click();
+  await page.locator("#user-delete-confirm").check();
+  await page.locator("#user-save").click();
+  await waitText(page, "#toast", "not confirmed");
+  await page.locator("#user-dialog").waitFor({ state: "hidden" });
+  assert.equal(calls.userChanges.length, 1);
+});
+
+test("users list and password dialog fit mobile with long usernames", async (t) => {
+  const { page } = await fixture(t, { userNames: ["a".repeat(64)] });
+  await page.setViewportSize({ width: 320, height: 844 });
+  await page.locator('[data-view="users"]').click();
+  await waitText(page, "#users-summary", "1 VPN accounts");
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  if (process.env.UI_SCREENSHOT_DIR) await page.screenshot({ path: path.join(process.env.UI_SCREENSHOT_DIR, "users-mobile.png"), fullPage: true });
+  await page.getByRole("button", { name: `Change password: ${"a".repeat(64)}`, exact: true }).click();
+  const bounds = await page.getByRole("dialog").boundingBox();
+  assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= 320);
 });

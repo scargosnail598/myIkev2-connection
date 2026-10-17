@@ -57,6 +57,14 @@ class FakeBroker:
         self.calls.append((target, operation))
         return {"ok": True, "target": target, "operation": operation, "results": []}
 
+    def list_users(self, search="", page=0):
+        return {"ok": True, "users": [{"username": "fixture-user"}], "total": 1, "matched": 1,
+                "page": 0, "pages": 1, "revision": "fixture-revision"}
+
+    def manage_user(self, payload):
+        self.calls.append(payload)
+        return {"ok": True, "username": payload["username"], "operation": payload["operation"]}
+
 
 class SystemStatusProviderTests(unittest.TestCase):
     def test_root_only_state_is_reported_as_unknown_without_broker(self):
@@ -277,6 +285,33 @@ class WebServerTests(unittest.TestCase):
         self.assertEqual(response.status, 200)
         self.assertEqual(payload["status"], "ok")
         self.assertEqual(response.headers["Cache-Control"], "no-store")
+
+    def test_users_require_login_and_responses_are_not_cached(self):
+        with self.assertRaises(HTTPError) as raised:
+            self.get_json("/api/users")
+        self.assertEqual(raised.exception.code, 401)
+        response, payload = self.get_json("/api/users?search=fixture&page=0", authenticated=True)
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+        self.assertEqual(payload["users"], [{"username": "fixture-user"}])
+
+    def test_user_mutations_require_csrf_and_never_echo_passwords(self):
+        self.login()
+        payload = {"username": "fixture-user", "password": "fixture-vpn-password", "revision": "fixture-revision"}
+        with self.assertRaises(HTTPError) as raised:
+            self.post_json("/api/users/create", payload)
+        self.assertEqual(raised.exception.code, 403)
+        with self.post_json("/api/users/create", payload, headers={"X-CSRF-Token": self.csrf_token}) as response:
+            self.assertNotIn(payload["password"], response.read().decode())
+        self.assertEqual(self.broker.calls[-1]["operation"], "create")
+
+    def test_users_reject_invalid_page_and_unexpected_fields(self):
+        self.login()
+        with self.assertRaises(HTTPError) as raised:
+            self.get_json("/api/users?page=oops")
+        self.assertEqual(raised.exception.code, 400)
+        with self.assertRaises(HTTPError) as raised:
+            self.post_json("/api/users/create", {"path": "/etc/passwd"}, headers={"X-CSRF-Token": self.csrf_token})
+        self.assertEqual(raised.exception.code, 400)
 
     def test_dashboard_returns_service_state(self):
         _response, payload = self.get_json("/api/dashboard", authenticated=True)

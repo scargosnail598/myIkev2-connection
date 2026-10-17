@@ -13,7 +13,7 @@ import subprocess
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from webui.broker import BrokerClient, BrokerError, DEFAULT_SOCKET, installation_state
 from webui.security import AuthConfig, AuthManager, Session
@@ -69,10 +69,12 @@ class SystemStatusProvider:
             for key, label, unit in SERVICES
         ]
         broker_available = False
+        user_management = False
         if self._broker:
             try:
                 status = self._broker.status()
                 broker_available = status.get("ok") is True
+                user_management = broker_available and status.get("user_management") is True
                 if broker_available and isinstance(status.get("installed"), bool):
                     installed = status["installed"]
             except BrokerError:
@@ -83,7 +85,7 @@ class SystemStatusProvider:
             "services": services,
             "capabilities": {
                 "service_actions": broker_available,
-                "user_management": False,
+                "user_management": user_management,
                 "session_management": False,
             },
         }
@@ -122,6 +124,17 @@ class Ikev2RequestHandler(BaseHTTPRequestHandler):
                 return
             self._send_json(self.provider.dashboard())
             return
+        if path == "/api/users":
+            if self._require_session() is None:
+                return
+            query = parse_qs(urlparse(self.path).query)
+            try:
+                page = int(query.get("page", ["0"])[0])
+            except ValueError:
+                self._send_json({"message": "Invalid user page."}, HTTPStatus.BAD_REQUEST)
+                return
+            self._user_result(lambda: self.broker.list_users(query.get("search", [""])[0], page))
+            return
         if path == "/":
             self._send_file(STATIC_ROOT / "index.html")
             return
@@ -158,6 +171,21 @@ class Ikev2RequestHandler(BaseHTTPRequestHandler):
             )
             return
         parts = path.strip("/").split("/")
+        if len(parts) == 3 and parts[:2] == ["api", "users"]:
+            if parts[2] not in {"create", "reset", "delete"}:
+                self._send_json({"message": "Unsupported user operation."}, HTTPStatus.BAD_REQUEST)
+                return
+            try:
+                payload = self._read_json()
+            except ValueError as error:
+                self._send_json({"message": str(error)}, HTTPStatus.BAD_REQUEST)
+                return
+            allowed = {"username", "password", "revision", "allow_last"}
+            if set(payload) - allowed:
+                self._send_json({"message": "Unsupported user fields."}, HTTPStatus.BAD_REQUEST)
+                return
+            self._user_result(lambda: self.broker.manage_user({**payload, "operation": parts[2]}))
+            return
         if len(parts) == 4 and parts[:2] == ["api", "services"]:
             _api, _services, target, operation = parts
             self._service_control(target, operation)
@@ -166,6 +194,21 @@ class Ikev2RequestHandler(BaseHTTPRequestHandler):
             {"error": "write_operations_disabled", "message": "Privileged broker is not enabled."},
             status=HTTPStatus.METHOD_NOT_ALLOWED,
         )
+
+    def _user_result(self, operation) -> None:
+        try:
+            result = operation()
+        except BrokerError:
+            self._send_json({"message": "VPN user management is unavailable."}, HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+        if result.get("ok") is True:
+            self._send_json(result)
+        else:
+            status = result.get("status", 503)
+            if type(status) is not int or status not in {400, 404, 409, 503}:
+                status = 503
+            self._send_json({"error": result.get("error", "users_unavailable"),
+                             "message": result.get("message", "VPN user management is unavailable.")}, status)
 
     def _service_control(self, target: str, operation: str) -> None:
         if target not in {"ikev2", "proxy", "all"} or operation not in {"start", "stop", "restart"}:

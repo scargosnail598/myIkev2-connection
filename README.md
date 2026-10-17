@@ -96,8 +96,49 @@ service commands and confirmations. Failed refreshes retain the last received
 status with a stale-data notice and disable commands until a successful refresh.
 Service commands require a confirmation explaining their connection impact,
 show progress, and are never automatically retried. A failed sign-out keeps the
-dashboard visible until the server confirms logout. Users, Sessions, and
-Diagnostics remain planned sections for later steps.
+dashboard visible until the server confirms logout. Sessions and Diagnostics
+remain planned sections for later steps.
+
+The **Users** page lists and searches configured VPN usernames, with 20 accounts
+per page. Admins can add accounts, change passwords, and delete accounts after
+confirmation. Deleting the last account requires an additional acknowledgement.
+Passwords are never returned in lists or mutation responses; generated passwords
+are created in the browser and must be saved before closing the form. VPN passwords
+accept 12–128 printable ASCII characters except double quotes. Quoted secrets in
+the [StrongSwan stroke parser](https://github.com/strongswan/strongswan/blob/master/src/libcharon/plugins/stroke/stroke_cred.c)
+are literal, so backslashes are preserved rather than escaped.
+
+Account changes update the installer's existing `/etc/ipsec.secrets` atomically,
+preserving other entries and file mode 0600. The EAP credentials remain in the
+root-only format required by the existing installation; the Web UI process
+cannot read that file. The same accounts remain visible in the CLI installer.
+Duplicate identities, includes, and nonstandard EAP entries require manual
+management and are refused by this page. Avoid editing accounts through the CLI
+and Web UI simultaneously: Web UI writes are serialized and stale snapshots are
+rejected, but the older CLI does not participate in the Web UI lock.
+
+After a change, the helper runs only `ipsec rereadsecrets` when StrongSwan is
+active. It does not restart the VPN or disconnect existing sessions; password
+changes/deletion apply at the next authentication. If the VPN is stopped, the
+file is saved for its next start. Reload failure restores the previous file and
+reports that runtime state could not be confirmed. Mutations are never retried
+automatically. Rolling back the application does not undo account changes.
+
+The long-lived broker keeps its existing read-only `/etc` sandbox. A new root
+oneshot unit, `ikev2-web-users-apply.service`, reads a mode-0600 request in a
+root-only runtime directory and applies only validated create/reset/delete
+operations to the fixed secrets file. Atomic replacement requires write access
+to parent `/etc`, granted only to this short-lived unit. It has no capabilities,
+IP network sockets, shell command input, or write access to home directories; SSH,
+sudoers, account databases, systemd configuration and private key directories
+are inaccessible inside its namespace. Requests/results are deleted after use;
+audit logs contain operation and username but never passwords. The deployment
+runs a read-only helper check without changing credentials or reloading VPN
+secrets. To block user mutations while retaining monitoring, move
+`/etc/systemd/system/ikev2-web-users-apply.service` to the same path with a
+`.disabled` suffix and run `sudo systemctl daemon-reload`. A subsequent Web UI
+deployment reinstalls the unit. Existing accounts survive application rollback
+or removal of this helper unit.
 
 Optional browser regression checks run against a local static server with mocked
 APIs, so no VPN service commands or production credentials are used:

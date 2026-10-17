@@ -92,6 +92,8 @@ throttled, and all POST requests after login require a CSRF token.
 
 The dashboard uses a responsive dark interface with persistent workspace
 navigation, service icons, compact health cards, and consistent account forms.
+Body text uses a 16px default with relative font sizes, brighter secondary text,
+and comfortable line spacing; mobile layouts retain readable controls and tables.
 Tables scroll horizontally on small screens, and a keyboard skip link moves
 focus directly to the workspace. The overview shows running-service counts and
 highlights failed or unknown services. It refreshes every 30 seconds while the tab is visible, pausing during

@@ -77,10 +77,32 @@ jobs:
           # Archive tracked sources only: never upload local configs, keys, or caches.
           git archive --format=tar.gz --output="$RUNNER_TEMP/ikev2-web.tar.gz" HEAD webui packaging
           ssh "${ssh_args[@]}" "$remote" "tar -xz -C '$remote_stage'" < "$RUNNER_TEMP/ikev2-web.tar.gz"
+          # Publish root-owned sources to the fixed path allowed by sudoers.
+          ssh "${ssh_args[@]}" "$remote" bash -s -- "$remote_stage" <<'REMOTE'
+          set -Eeuo pipefail
+          source_dir="$1"
+          deploy_dir=/opt/ikev2-web-deploy
+          sudo -n /usr/bin/install -d -o root -g root -m 0755 \
+            "$deploy_dir" "$deploy_dir/webui" "$deploy_dir/webui/static" \
+            "$deploy_dir/packaging" "$deploy_dir/packaging/systemd"
+          sudo -n /usr/bin/install -o root -g root -m 0644 \
+            "$source_dir/webui/__init__.py" "$source_dir/webui/app.py" \
+            "$source_dir/webui/broker.py" "$source_dir/webui/manage.py" \
+            "$source_dir/webui/security.py" "$deploy_dir/webui/"
+          sudo -n /usr/bin/install -o root -g root -m 0644 \
+            "$source_dir/webui/static/index.html" "$source_dir/webui/static/app.css" \
+            "$source_dir/webui/static/app.js" "$deploy_dir/webui/static/"
+          sudo -n /usr/bin/install -o root -g root -m 0644 \
+            "$source_dir/packaging/systemd/ikev2-web.service" \
+            "$source_dir/packaging/systemd/ikev2-web-broker.service" \
+            "$deploy_dir/packaging/systemd/"
+          sudo -n /usr/bin/install -o root -g root -m 0755 \
+            "$source_dir/packaging/install-webui.sh" "$deploy_dir/packaging/install-webui.sh"
+          REMOTE
           # The initial password travels over SSH stdin, never in arguments or logs.
           # On updates the installer preserves the existing authentication config.
           printf '%s' "$INITIAL_PASSWORD" | ssh "${ssh_args[@]}" "$remote" \
-            "sudo -n bash '$remote_stage/packaging/install-webui.sh' install --password-stdin"
+            'sudo -n /opt/ikev2-web-deploy/packaging/install-webui.sh install --password-stdin'
 
       - name: Remove SSH credentials from runner
         if: always()

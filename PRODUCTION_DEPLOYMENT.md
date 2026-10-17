@@ -255,6 +255,19 @@ Web UI**, installs and verifies both Web UI services using the same `production`
 environment and SSH configuration above. It installs into `/opt/ikev2` regardless
 of `PRODUCTION_INSTALL_DIR`, which is used only for the VPN server script.
 
+The workflow copies source files into root-owned `/opt/ikev2-web-deploy` using
+the existing passwordless `/usr/bin/install` permission, then runs the installer
+from that fixed path. Add its sudoers rule once with
+`sudo visudo -f /etc/sudoers.d/ikev2-web-deploy` (replace `saeed` if needed):
+
+```sudoers
+saeed ALL=(root) NOPASSWD: /opt/ikev2-web-deploy/packaging/install-webui.sh install --password-stdin
+```
+
+This grants root-level Web UI deployment. It does not require a passwordless
+shell or a wildcard path to a temporary script. Keep the deployment sources and
+installer owned by root.
+
 Before the first run, add `PRODUCTION_WEBUI_PASSWORD` as an environment secret
 with at least 12 characters. The initial account is `admin`. The password travels
 over SSH stdin and is stored as a scrypt hash in `/etc/ikev2-web/config.json` with

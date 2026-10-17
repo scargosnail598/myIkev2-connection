@@ -112,7 +112,9 @@ tab. It uses the existing `production` environment's `PRODUCTION_HOST`,
 `PRODUCTION_WEBUI_PASSWORD` with an admin password of at least 12 characters.
 The password is passed over SSH stdin and stored only as a scrypt hash on the
 server. Updates preserve the existing password; changing the secret does not
-reset it. The SSH user needs passwordless sudo for the Web UI installer.
+reset it. The SSH user needs passwordless sudo for `/usr/bin/install` and the
+fixed, root-owned Web UI installer. See [deployment permissions](PRODUCTION_DEPLOYMENT.md#web-ui-deployment)
+for the exact sudoers rule.
 
 This workflow installs only the Web UI and its broker. It starts neither a VPN
 installation nor a VPN restart. The frontend stays unprivileged, and the broker

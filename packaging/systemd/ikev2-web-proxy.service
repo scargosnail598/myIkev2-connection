@@ -7,6 +7,9 @@ Wants=ikev2-web.service
 Type=simple
 User=ikev2-proxy
 Group=ikev2-proxy
+RuntimeDirectory=ikev2-web-proxy
+RuntimeDirectoryMode=0700
+Environment=XDG_CONFIG_HOME=/run/ikev2-web-proxy
 ExecStart=/usr/local/lib/ikev2-web/caddy run --config /etc/ikev2-web-proxy/Caddyfile --adapter caddyfile
 Restart=on-failure
 RestartSec=3

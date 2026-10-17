@@ -32,7 +32,6 @@ def render(settings: dict, networks_text: str) -> str:
     return f"""{{
     admin off
     auto_https off
-    persist_config off
 }}
 
 :{port} {{

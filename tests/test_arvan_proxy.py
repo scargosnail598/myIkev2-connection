@@ -58,7 +58,11 @@ class CaddyIntegrationTests(unittest.TestCase):
         path = Path(cls.directory.name) / "Caddyfile"
         path.write_text(config)
         cls.log = tempfile.TemporaryFile()
-        cls.process = subprocess.Popen([CADDY, "run", "--config", str(path), "--adapter", "caddyfile"], stdout=cls.log, stderr=cls.log)
+        cls.process = subprocess.Popen(
+            [CADDY, "run", "--config", str(path), "--adapter", "caddyfile"],
+            stdout=cls.log, stderr=cls.log,
+            env=dict(os.environ, XDG_CONFIG_HOME=cls.directory.name),
+        )
         for _ in range(100):
             if cls.process.poll() is not None:
                 cls.log.seek(0)

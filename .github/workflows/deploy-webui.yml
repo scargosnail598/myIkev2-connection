@@ -197,9 +197,20 @@ jobs:
             -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" /usr/bin/python3 -B - <<'PY'
           from urllib.error import HTTPError
           from urllib.request import urlopen
+          import socket
+          import subprocess
 
           base = "https://p.mahanfreenet.ir"
-          with urlopen(base + "/api/health", timeout=30) as response:
+          try:
+              response = urlopen(base + "/api/health", timeout=30)
+          except HTTPError as error:
+              print("CDN health error:", error.code, "server:", error.headers.get("Server"),
+                    "type:", error.headers.get("Content-Type"),
+                    "origin_denial:", error.read(80) == b"Forbidden")
+              print("CDN DNS:", sorted({entry[4][0] for entry in socket.getaddrinfo("p.mahanfreenet.ir", 443)}))
+              subprocess.run(["ss", "-Hnt", "sport = :8080"], check=False)
+              raise SystemExit("Public CDN health failed; access restrictions were preserved")
+          with response:
               assert response.status == 200
               assert "no-store" in response.headers.get("Cache-Control", "")
               assert response.headers.get("X-Cache", "").upper() not in ("HIT", "STALE"), "Disable CDN caching"

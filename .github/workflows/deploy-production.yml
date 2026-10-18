@@ -2,6 +2,11 @@ name: Deploy Production Server Installer
 
 on:
   workflow_dispatch:
+    inputs:
+      apply_reconnect:
+        description: Apply the VPN reconnect policy after deploying the installer
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -23,6 +28,7 @@ jobs:
           set -Eeuo pipefail
           file="ikev2-strongswan-ubuntu.sh"
           bash -n "$file"
+          python3 -B -m unittest discover -s tests -p 'test_webui_reset.py' -v
 
       - name: Configure SSH
         shell: bash
@@ -70,8 +76,12 @@ jobs:
           ssh_args=(-i "$HOME/.ssh/production_deploy" -p "$PORT")
           ssh "${ssh_args[@]}" "$USER@$HOST" \
             "sudo '$INSTALL_DIR/ikev2-strongswan-ubuntu.sh' status"
+          ssh "${ssh_args[@]}" "$USER@$HOST" \
+            "grep -Fq '13) Reset Web UI Password' '$INSTALL_DIR/ikev2-strongswan-ubuntu.sh' && \
+             printf 'Main menu Web UI password reset verified\n'"
 
       - name: Apply reconnect policy
+        if: ${{ inputs.apply_reconnect }}
         shell: bash
         env:
           HOST: ${{ vars.PRODUCTION_HOST }}

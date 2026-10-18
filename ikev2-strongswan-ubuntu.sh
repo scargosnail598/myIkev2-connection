@@ -6,7 +6,7 @@ IFS=$'\n\t'
 # Uses StrongSwan, EAP-MSCHAPv2, selectable Private CA or ACME trust, and IPv4 full-tunnel NAT.
 
 INSTALLER_NAME="ikev2-easy-installer"
-CURRENT_INSTALLER_VERSION="6.4.8-en"
+CURRENT_INSTALLER_VERSION="6.4.9-en"
 INSTALLER_VERSION="$CURRENT_INSTALLER_VERSION"
 
 STATE_DIR="/var/lib/${INSTALLER_NAME}"
@@ -181,6 +181,17 @@ die()  { write_log ERROR "$*"; printf '%b[x]%b %s\n' "$RED" "$RESET" "$*" >&2; e
 pause_main_menu() {
   printf '\n'
   read -r -p 'Press Enter to return to the main menu...' _ || true
+}
+
+reset_webui_password() {
+  local reset_script="/opt/ikev2/reset-webui-password.sh"
+
+  if [[ ! -f "$reset_script" || ! -x "$reset_script" || -L "$reset_script" ]]; then
+    warn "The Web UI password reset tool is missing. Install or update the Web UI first."
+    return 1
+  fi
+
+  "$reset_script" "$@"
 }
 
 show_about() {
@@ -4015,8 +4026,9 @@ interactive_menu() {
       printf '  10) Update Installer\n'
       printf '  11) Uninstall\n'
       printf '  12) About\n'
-      printf '  13) Exit\n'
-      read -r -p 'Choose [1-13]: ' choice || true
+      printf '  13) Reset Web UI Password\n'
+      printf '  14) Exit\n'
+      read -r -p 'Choose [1-14]: ' choice || true
 
       case "$choice" in
         1)
@@ -4065,6 +4077,10 @@ interactive_menu() {
           pause_main_menu
           ;;
         13)
+          reset_webui_password || warn "Web UI password reset did not complete. Review the message above."
+          pause_main_menu
+          ;;
+        14)
           printf '\nExiting...\n'
           exit 0
           ;;
@@ -4102,7 +4118,7 @@ interactive_menu() {
 
 usage() {
   cat <<EOF
-Usage: $0 [install|upgrade|reconnect|update|status|certificate|renew|logs|disconnect|diagnostics|start|stop|restart|proxy-start|proxy-stop|proxy-restart|start-all|stop-all|uninstall]
+Usage: $0 [install|upgrade|reconnect|update|status|certificate|renew|logs|disconnect|diagnostics|start|stop|restart|proxy-start|proxy-stop|proxy-restart|start-all|stop-all|reset-webui-password|uninstall]
 
 Commands:
   install        Full interactive IKEv2 installation; all previous features are retained.
@@ -4122,6 +4138,8 @@ Commands:
   proxy-restart  Restart the private SOCKS5 Proxy Mode service.
   start-all      Start firewall/NAT, IKEv2, and configured Proxy Mode.
   stop-all       Stop Proxy Mode, IKEv2, and firewall/NAT after confirmation.
+  reset-webui-password
+                 Reset the Web UI password (optional --password-stdin); sign out panel sessions.
   uninstall      Remove managed configuration and restore previous files/services.
 
 The upgrade command does not regenerate certificates, rewrite users, replace ipsec.conf,
@@ -4135,6 +4153,12 @@ main() {
   require_root
   initialize_logging
   check_ubuntu
+  # A panel password reset does not need VPN logging/timer reconfiguration.
+  if [[ "${1:-}" == "reset-webui-password" ]]; then
+    shift
+    reset_webui_password "$@"
+    return
+  fi
   if [[ -f "$STATE_FILE" ]]; then
     configure_connection_logging
   fi

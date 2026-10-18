@@ -38,7 +38,7 @@ Commit and push the release changes to `main` before creating these tags.
 
 | Component | File | Version / Target |
 |---|---|---|
-| Server | `ikev2-strongswan-ubuntu.sh` | v6.4.8 / Ubuntu 22.04 & 24.04 |
+| Server | `ikev2-strongswan-ubuntu.sh` | v6.4.9 / Ubuntu 22.04 & 24.04 |
 | Windows client | `ikev2-windows-client.ps1` | v6.4.7 / PowerShell 5.1+ |
 | Linux client | `ikev2-linux-client.sh` | v1.9.8 / Ubuntu 22.04 & 24.04 |
 
@@ -301,7 +301,14 @@ cookie and session settings. It restarts only the Web UI, signs out existing
 sessions, clears login throttling, and verifies login plus authenticated dashboard
 access. Normal deployments continue to preserve credentials.
 
-To reset the Web UI password from the server CLI, run the installed script:
+To reset the Web UI password, run the main server script without arguments and
+choose **13) Reset Web UI Password**. You can also run it directly:
+
+```bash
+sudo ./ikev2-strongswan-ubuntu.sh reset-webui-password
+```
+
+Both use the installed CLI tool (and require the Web UI to be installed):
 
 ```bash
 sudo /opt/ikev2/reset-webui-password.sh
@@ -459,7 +466,9 @@ sudo ./ikev2-strongswan-ubuntu.sh
 ```
 
 The interactive menu includes **About**, which briefly describes the server
-installer and displays its version.
+installer and displays its version. On managed installations, **13) Reset Web UI
+Password** changes the panel password from the terminal; **14) Exit** closes the
+menu.
 
 On a fresh server choose:
 

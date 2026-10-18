@@ -69,6 +69,63 @@ else:
         self.installer = self.root / "install-webui.sh"
         self.installer.write_text((REPO / "packaging/install-webui.sh").read_text())
 
+    def main_server_fixture(self):
+        # Extract the active functions; never source or run privileged VPN setup.
+        source = (REPO / "ikev2-strongswan-ubuntu.sh").read_text().split('\nmain "$@"\n', 1)[0]
+        functions = []
+        for name, following in (("pause_main_menu", "reset_webui_password"),
+                                ("reset_webui_password", "show_about"),
+                                ("interactive_menu", "usage")):
+            start = source.index(f"\n{name}() {{") + 1
+            functions.append(source[start:source.index(f"\n{following}() {{", start)])
+        functions.append(source[source.index("\nmain() {") + 1:])
+        body = "\n".join(functions).replace('local reset_script="/opt/ikev2/reset-webui-password.sh"',
+                                             f'local reset_script="{self.script}"')
+        state = self.root / "managed-state"
+        state.touch()
+        self.main_server = self.root / "server.sh"
+        self.main_server.write_text('set -Eeuo pipefail\n' + body + f"""
+STATE_FILE="{state}"
+BOLD='' RESET=''
+require_root() {{ :; }}
+initialize_logging() {{ :; }}
+check_ubuntu() {{ :; }}
+warn() {{ printf '%s\\n' "$*" >&2; }}
+configure_connection_logging() {{ printf 'VPN setup must not run' >&2; exit 99; }}
+# The interactive startup is outside the scope of this fixture. Direct reset
+# must return before the real startup's VPN logging/timer configuration.
+if [[ $# -eq 0 ]]; then interactive_menu; else main "$@"; fi
+""")
+        return self.main_server
+
+    def test_main_server_direct_reset_uses_helper_without_vpn_setup(self):
+        script = self.main_server_fixture()
+        result = subprocess.run(["bash", str(script), "reset-webui-password", "--password-stdin"],
+                                input=NEW_PASSWORD, text=True, capture_output=True,
+                                env=self.environment, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_password_changed_safely(result.stdout + result.stderr)
+
+    def test_main_server_missing_helper_fails_without_changing_password(self):
+        script = self.main_server_fixture()
+        self.script.unlink()
+        result = subprocess.run(["bash", str(script), "reset-webui-password", "--password-stdin"],
+                                input=NEW_PASSWORD, text=True, capture_output=True,
+                                env=self.environment, timeout=15)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Install or update the Web UI first", result.stderr)
+        self.assertEqual(self.config.read_bytes(), self.original)
+        self.assertEqual(self.commands(), [])
+
+    def test_main_server_propagates_helper_failure(self):
+        script = self.main_server_fixture()
+        result = subprocess.run(["bash", str(script), "reset-webui-password", "--password-stdin"],
+                                input="too-short", text=True, capture_output=True,
+                                env=self.environment, timeout=15)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.config.read_bytes(), self.original)
+        self.assertFalse(any(command[0] == "restart" for command in self.commands()))
+
     def run_cli(self, password=NEW_PASSWORD, options=("--password-stdin",), installer=False):
         command = ["bash", str(self.installer if installer else self.script)]
         if installer:
@@ -160,9 +217,10 @@ else:
         self.assertIn("not active", result.stderr)
         self.assertNotIn("reset successfully", result.stdout)
 
-    def interactive(self, confirmation):
+    def interactive(self, confirmation, main_menu=False):
         master, slave = pty.openpty()
-        process = subprocess.Popen(["bash", str(self.script)], stdin=slave, stdout=slave, stderr=slave,
+        script = self.main_server_fixture() if main_menu else self.script
+        process = subprocess.Popen(["bash", str(script)], stdin=slave, stdout=slave, stderr=slave,
                                    env=self.environment, start_new_session=True)
         os.close(slave)
         transcript = bytearray()
@@ -173,10 +231,16 @@ else:
                 if select.select([master], [], [], 0.1)[0]:
                     transcript.extend(os.read(master, 4096))
         try:
+            if main_menu:
+                read_until(b"Choose [1-14]:")
+                os.write(master, b"13\n")
             read_until(b"minimum 12 characters")
             os.write(master, (NEW_PASSWORD + "\n").encode())
             read_until(b"Confirm Web UI password:")
             os.write(master, (confirmation + "\n").encode())
+            if main_menu:
+                read_until(b"Press Enter to return to the main menu")
+                os.write(master, b"\n14\n")
             process.wait(timeout=10)
             while select.select([master], [], [], 0.1)[0]:
                 try:
@@ -194,6 +258,22 @@ else:
                 process.kill()
                 process.wait()
             os.close(master)
+
+    def test_main_menu_resets_password_and_returns_to_menu(self):
+        code, output = self.interactive(NEW_PASSWORD, main_menu=True)
+        self.assertEqual(code, 0, output)
+        self.assertIn("13) Reset Web UI Password", output)
+        self.assertIn("14) Exit", output)
+        self.assert_password_changed_safely(output)
+
+    def test_main_menu_mismatch_returns_to_menu_without_restart(self):
+        code, output = self.interactive("different-disposable-password", main_menu=True)
+        self.assertEqual(code, 0, output)
+        self.assertIn("Passwords do not match", output)
+        self.assertIn("reset did not complete", output)
+        self.assertNotIn(NEW_PASSWORD, output)
+        self.assertEqual(self.config.read_bytes(), self.original)
+        self.assertFalse(any(command[0] == "restart" for command in self.commands()))
 
     def test_interactive_password_is_confirmed_without_terminal_echo(self):
         code, output = self.interactive(NEW_PASSWORD)

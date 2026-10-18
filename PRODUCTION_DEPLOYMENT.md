@@ -166,6 +166,11 @@ Those values must remain on the server or be entered during the controlled insta
 
 ## 7. Add the Deployment Workflow
 
+The checked-in **Deploy Production Server Installer** workflow accepts
+`apply_reconnect` (default `true`). Set it to `false` for an installer/menu-only
+update that does not apply the VPN reconnect policy. The password reset menu
+uses the Web UI helper installed by the separate Web UI deployment.
+
 Create `.github/workflows/deploy-production.yml` with the following content:
 
 ```yaml

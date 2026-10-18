@@ -155,6 +155,14 @@ if [[ $# -eq 0 ]]; then interactive_menu; else main "$@"; fi
         self.assertEqual((self.config.stat().st_uid, self.config.stat().st_gid), (owner.st_uid, owner.st_gid))
         self.assertIn("sessions were signed out", result.stdout)
 
+    def test_reset_disables_two_factor_and_removes_its_secret(self):
+        self.config.write_text(json.dumps({**self.payload, "totp_secret": "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP", "totp_last_counter": 100}))
+        result = self.run_cli(installer=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_password_changed_safely(result.stdout + result.stderr)
+        self.assertIn("Two-factor authentication was disabled", result.stdout)
+        self.assertNotIn("totp_secret", json.loads(self.config.read_text()))
+
     def test_invalid_password_never_changes_config_or_restarts_services(self):
         for password in ("short", NEW_PASSWORD + "\n", "x" * 4097):
             with self.subTest(password_length=len(password)):

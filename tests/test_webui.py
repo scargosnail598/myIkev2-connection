@@ -477,7 +477,7 @@ class WebServerTests(unittest.TestCase):
             self.login(password="wrong-password")
         self.assertEqual(raised.exception.code, 401)
         payload = json.load(raised.exception)
-        self.assertEqual(payload["message"], "Invalid username or password.")
+        self.assertEqual(payload["message"], "Invalid username, password or authenticator code.")
 
     def test_unicode_login_returns_unauthorized(self):
         with self.assertRaises(HTTPError) as raised:
@@ -533,7 +533,7 @@ class ConfigCommandTests(unittest.TestCase):
                 self.assertEqual(json.loads(path.read_text()), expected)
                 self.assertEqual(path.stat().st_mode & 0o777, 0o600)
                 self.assertEqual((path.stat().st_uid, path.stat().st_gid), (original.st_uid, original.st_gid))
-                self.assertEqual(len(list(path.parent.iterdir())), 1)
+                self.assertEqual({item.name for item in path.parent.iterdir()}, {path.name, f".{path.name}.lock"})
 
     def reset_password(self, path, password, *options):
         return subprocess.run(
@@ -564,7 +564,7 @@ class ConfigCommandTests(unittest.TestCase):
             self.assertEqual(path.stat().st_gid, original.st_gid)
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
             self.assertNotIn(new_password, path.read_text() + result.stdout + result.stderr)
-            self.assertEqual(len(list(path.parent.iterdir())), 1)
+            self.assertEqual({item.name for item in path.parent.iterdir()}, {path.name, f".{path.name}.lock"})
 
     def test_reset_can_restore_admin_username(self):
         with tempfile.TemporaryDirectory() as directory:

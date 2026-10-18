@@ -16,7 +16,7 @@ from typing import Callable
 from urllib.parse import parse_qs, urlparse
 
 from webui.broker import BrokerClient, BrokerError, DEFAULT_SOCKET, installation_state
-from webui.security import AuthConfig, AuthManager, Session
+from webui.security import AuthConfig, AuthError, AuthManager, Session
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -121,7 +121,20 @@ class Ikev2RequestHandler(BaseHTTPRequestHandler):
     def broker(self) -> BrokerClient:
         return self.server.broker_client  # type: ignore[attr-defined]
 
+    def _auth_error(self, error: AuthError) -> None:
+        headers = None
+        if error.status == 429:
+            _allowed, retry_after = self.auth.login_allowed(self.client_address[0])
+            headers = {"Retry-After": str(retry_after)}
+        self._send_json({"error": "authentication_error", "message": str(error)}, error.status, headers=headers)
+
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler contract
+        try:
+            self._get()
+        except AuthError as error:
+            self._auth_error(error)
+
+    def _get(self) -> None:
         path = urlparse(self.path).path
         if path == "/api/health":
             self._send_json({"status": "ok", "version": "0.3.0"})
@@ -133,6 +146,10 @@ class Ikev2RequestHandler(BaseHTTPRequestHandler):
                 "username": session.username if session else None,
                 "csrf_token": session.csrf_token if session else None,
             })
+            return
+        if path == "/api/auth/2fa":
+            if self._require_session() is not None:
+                self._send_json(self.auth.two_factor_status())
             return
         if path == "/api/dashboard":
             if self._require_session() is None:
@@ -211,6 +228,12 @@ class Ikev2RequestHandler(BaseHTTPRequestHandler):
         self.send_error(HTTPStatus.NOT_FOUND)
 
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler contract
+        try:
+            self._post()
+        except AuthError as error:
+            self._auth_error(error)
+
+    def _post(self) -> None:
         path = urlparse(self.path).path
         if path == "/api/auth/login":
             self._login()
@@ -231,6 +254,31 @@ class Ikev2RequestHandler(BaseHTTPRequestHandler):
                 {"authenticated": False},
                 cookies=[self._expired_session_cookie()],
             )
+            return
+        if path.startswith("/api/auth/2fa/"):
+            operation = path.removeprefix("/api/auth/2fa/")
+            fields = {"setup": {"password"}, "enable": {"code"}, "disable": {"password", "code"}, "cancel": set()}
+            if operation not in fields:
+                self._send_json({"message": "Unsupported two-factor operation."}, HTTPStatus.BAD_REQUEST)
+                return
+            try:
+                payload = self._read_json()
+                if set(payload) != fields[operation]:
+                    raise ValueError("Supply only the required two-factor fields.")
+            except ValueError as error:
+                self._send_json({"message": str(error)}, HTTPStatus.BAD_REQUEST)
+                return
+            token = self._session_token()
+            client = self.client_address[0]
+            if operation == "setup":
+                result = self.auth.begin_two_factor(token, payload["password"], client)
+            elif operation == "enable":
+                result = self.auth.confirm_two_factor(token, payload["code"], client)
+            elif operation == "disable":
+                result = self.auth.disable_two_factor(token, payload["password"], payload["code"], client)
+            else:
+                result = self.auth.cancel_two_factor(token)
+            self._send_json(result)
             return
         parts = path.strip("/").split("/")
         if len(parts) == 3 and parts[:2] == ["api", "users"]:
@@ -330,13 +378,13 @@ class Ikev2RequestHandler(BaseHTTPRequestHandler):
                 HTTPStatus.BAD_REQUEST,
             )
             return
-        result = self.auth.authenticate(username, password, client_key)
+        result = self.auth.authenticate(username, password, client_key, payload.get("code"))
         if result is None:
             allowed, retry_after = self.auth.login_allowed(client_key)
             headers = {"Retry-After": str(retry_after)} if not allowed else None
             status = HTTPStatus.TOO_MANY_REQUESTS if not allowed else HTTPStatus.UNAUTHORIZED
             self._send_json(
-                {"error": "invalid_credentials", "message": "Invalid username or password."},
+                {"error": "invalid_credentials", "message": "Invalid username, password or authenticator code."},
                 status,
                 headers=headers,
             )
@@ -502,7 +550,7 @@ def main() -> None:
     server = Ikev2WebServer(
         (args.host, args.port),
         SystemStatusProvider(broker=broker),
-        AuthManager(auth_config),
+        AuthManager(auth_config, config_path=args.config),
         broker,
     )
     print(f"IKEv2 Web UI listening on http://{args.host}:{args.port}")

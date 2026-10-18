@@ -18,6 +18,7 @@ PrivateTmp=true
 PrivateDevices=true
 ProtectHome=true
 ProtectSystem=strict
+ReadWritePaths=/etc/ikev2-web
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true

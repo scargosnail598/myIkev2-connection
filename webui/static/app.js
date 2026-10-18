@@ -44,6 +44,10 @@ let shareGeneration = 0;
 let shareTimer = null;
 let shareUsername = null;
 let shareRevision = null;
+let securityGeneration = 0;
+let securityBusy = false;
+let securityEnabled = null;
+let securityTimer = null;
 
 async function requestJson(path, options = {}, timeout = 15000) {
   const controller = new AbortController();
@@ -90,6 +94,7 @@ function finishConfirmation(accepted) {
 function showLogin(message = "") {
   sessionVersion += 1;
   csrfToken = null;
+  resetSecurity();
   resetUsers();
   resetSessions();
   resetDiagnostics();
@@ -108,12 +113,14 @@ function showLogin(message = "") {
   $("#login-error").textContent = message;
   $("#login-error").hidden = !message;
   $("#password").value = "";
+  $("#login-code").value = "";
   $("#username").focus();
 }
 
 function showApp(session) {
   sessionVersion += 1;
   csrfToken = session.csrf_token;
+  resetSecurity();
   resetUsers();
   resetSessions();
   resetDiagnostics();
@@ -157,7 +164,7 @@ function setMode(label, controlled) {
 }
 
 function syncControls() {
-  const busy = Boolean(pendingAction || confirmation || logoutPending || userPending || userDialog.open || shareDialog.open || limitsDialog.open);
+  const busy = Boolean(pendingAction || confirmation || logoutPending || userPending || securityBusy || userDialog.open || shareDialog.open || limitsDialog.open);
   const canControl = Boolean(csrfToken && dashboardFresh && dashboard?.capabilities.service_actions);
   refreshButton.disabled = !csrfToken || dashboardLoading || busy;
   refreshButton.textContent = dashboardLoading ? "Refreshing…" : "Refresh status ↻";
@@ -176,6 +183,7 @@ function syncControls() {
   syncSessionControls();
   syncDiagnosticsControls();
   syncMetricsControls();
+  syncSecurityControls();
   if (pendingAction) $("#action-progress").textContent = `${operationLabels[pendingAction.operation]} request for ${pendingAction.label} is running. Please wait…`;
 }
 
@@ -378,7 +386,7 @@ loginForm.addEventListener("submit", async (event) => {
     const form = new FormData(loginForm);
     const data = await requestJson("/api/auth/login", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: form.get("username"), password: form.get("password") }),
+      body: JSON.stringify({ username: form.get("username"), password: form.get("password"), code: form.get("code") }),
     });
     if (!data.authenticated || !data.csrf_token) throw new Error("Sign in could not be confirmed. Try again.");
     loginForm.reset();
@@ -440,7 +448,7 @@ async function initialize() {
 connectionRetry.addEventListener("click", initialize);
 window.setInterval(() => {
   if (document.visibilityState === "visible") {
-    if (location.hash === "#diagnostics") return;
+    if (["#diagnostics", "#security"].includes(location.hash)) return;
     if (location.hash === "#sessions") loadSessions();
     else if (location.hash === "#users") {
       if (!$("#users-list").contains(document.activeElement) && document.activeElement !== $("#users-search")) loadUsers();
@@ -450,7 +458,7 @@ window.setInterval(() => {
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
     loadMetrics();
-    if (location.hash === "#diagnostics") return;
+    if (["#diagnostics", "#security"].includes(location.hash)) return;
     if (location.hash === "#sessions") loadSessions();
     else if (location.hash === "#users") loadUsers();
     else loadDashboard();
@@ -480,12 +488,14 @@ function selectView() {
   closeShareDialog();
   closeLimitsDialog();
   syncControls();
-  const view = ["#users", "#sessions", "#diagnostics"].includes(location.hash) ? location.hash.slice(1) : "overview";
-  $("#workspace-title").textContent = { overview: "Overview", users: "Users", sessions: "Sessions", diagnostics: "Diagnostics" }[view];
+  const view = ["#users", "#sessions", "#diagnostics", "#security"].includes(location.hash) ? location.hash.slice(1) : "overview";
+  $("#workspace-title").textContent = { overview: "Overview", users: "Users", sessions: "Sessions", diagnostics: "Diagnostics", security: "Security" }[view];
   $("#overview").hidden = view !== "overview";
   $("#users-view").hidden = view !== "users";
   $("#sessions-view").hidden = view !== "sessions";
   $("#diagnostics-view").hidden = view !== "diagnostics";
+  $("#security-view").hidden = view !== "security";
+  resetSecurity();
   document.querySelectorAll("[data-view]").forEach((link) => {
     const active = link.dataset.view === view;
     link.classList.toggle("active", active);
@@ -496,6 +506,7 @@ function selectView() {
   if (view === "users") loadUsers();
   else if (view === "sessions") loadSessions();
   else if (view === "diagnostics") loadDiagnostics();
+  else if (view === "security") loadSecurity();
   else { loadDashboard(); loadMetrics(); }
 }
 
@@ -1203,6 +1214,169 @@ $("#share-download").addEventListener("click", () => {
   anchor.href = $("#share-qr").toDataURL("image/png");
   anchor.click();
 });
+function clearSecuritySetup() {
+  window.clearTimeout(securityTimer);
+  securityTimer = null;
+  $("#security-setup").hidden = true;
+  $("#security-secret").value = "";
+  $("#security-confirm-code").value = "";
+  $("#security-password").value = "";
+  $("#security-disable-code").value = "";
+  $("#security-qr").width = $("#security-qr").height = 0;
+}
+
+function resetSecurity() {
+  securityGeneration += 1;
+  securityBusy = false;
+  securityEnabled = null;
+  clearSecuritySetup();
+  $("#security-status").textContent = "Checking two-factor settings…";
+  $("#security-error").hidden = true;
+  $("#security-retry").hidden = true;
+  $("#security-password-form").hidden = true;
+}
+
+function syncSecurityControls() {
+  const busy = securityBusy || !csrfToken;
+  $("#security-password-form").querySelectorAll("input, button").forEach((item) => { item.disabled = busy; });
+  $("#security-confirm-form").querySelectorAll("input, button").forEach((item) => { item.disabled = busy; });
+  $("#security-disable-code").disabled = busy || securityEnabled !== true;
+  $("#security-retry").disabled = busy;
+}
+
+function renderSecurity(enabled) {
+  if (typeof enabled !== "boolean") throw new Error("Two-factor status could not be confirmed. Refresh Security.");
+  securityEnabled = enabled;
+  $("#security-status").textContent = enabled ? "Enabled — sign-in requires your password and an Authenticator code." : "Disabled — sign-in currently uses your password.";
+  $("#security-password-form").hidden = false;
+  $("#security-disable-code").hidden = $("#security-disable-code-label").hidden = !enabled;
+  $("#security-disable-code").required = enabled;
+  $("#security-start").textContent = enabled ? "Disable two-factor authentication" : "Set up two-factor authentication";
+  syncSecurityControls();
+}
+
+function securityError(error) {
+  if (error.status === 401) { showLogin("Your session expired. Sign in again."); return; }
+  $("#security-error").textContent = error.message;
+  $("#security-error").hidden = false;
+}
+
+async function loadSecurity() {
+  if (!csrfToken || securityBusy) return;
+  const generation = securityGeneration;
+  securityBusy = true;
+  syncControls();
+  try {
+    const data = await requestJson("/api/auth/2fa");
+    if (generation !== securityGeneration) return;
+    renderSecurity(data.enabled);
+  } catch (error) {
+    if (generation !== securityGeneration) return;
+    securityError(error);
+    $("#security-status").textContent = "Two-factor status unavailable.";
+    $("#security-retry").hidden = false;
+  } finally {
+    if (generation === securityGeneration) { securityBusy = false; syncControls(); }
+  }
+}
+
+async function securityRequest(operation, payload) {
+  return requestJson(`/api/auth/2fa/${operation}`, {
+    method: "POST", headers: { "Content-Type": "application/json", "X-CSRF-Token": csrfToken }, body: JSON.stringify(payload),
+  });
+}
+
+$("#security-retry").addEventListener("click", () => { resetSecurity(); loadSecurity(); });
+$("#security-password-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (securityBusy || securityEnabled === null || !csrfToken) return;
+  const generation = securityGeneration;
+  const disabling = securityEnabled;
+  const payload = { password: $("#security-password").value };
+  if (disabling) payload.code = $("#security-disable-code").value;
+  $("#security-password").value = "";
+  $("#security-disable-code").value = "";
+  securityBusy = true;
+  $("#security-error").hidden = true;
+  syncControls();
+  try {
+    const data = await securityRequest(disabling ? "disable" : "setup", payload);
+    if (generation !== securityGeneration) return;
+    if (disabling) {
+      if (data.enabled !== false) throw new Error("Disabling two-factor authentication was not confirmed. Refresh Security.");
+      clearSecuritySetup();
+      renderSecurity(false);
+      showToast("Two-factor authentication disabled. Other panel sessions were signed out.");
+    } else {
+      if (!/^[A-Z2-7]{32}$/.test(data.secret) || typeof data.uri !== "string" || !data.uri.startsWith("otpauth://totp/")) throw new Error("Setup could not be confirmed. Try again.");
+      const qr = qrcodegen.QrCode.encodeText(data.uri, qrcodegen.QrCode.Ecc.MEDIUM);
+      const canvas = $("#security-qr");
+      const scale = 6;
+      canvas.width = canvas.height = (qr.size + 8) * scale;
+      const context = canvas.getContext("2d");
+      context.fillStyle = "#fff";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.fillStyle = "#000";
+      for (let y = 0; y < qr.size; y++) for (let x = 0; x < qr.size; x++) {
+        if (qr.getModule(x, y)) context.fillRect((x + 4) * scale, (y + 4) * scale, scale, scale);
+      }
+      $("#security-secret").value = data.secret;
+      $("#security-password-form").hidden = true;
+      $("#security-setup").hidden = false;
+      securityTimer = window.setTimeout(() => {
+        if (generation !== securityGeneration) return;
+        resetSecurity(); loadSecurity();
+        securityError(new Error("Setup expired. Start again to get a new QR code."));
+      }, 600000);
+    }
+  } catch (error) {
+    if (generation === securityGeneration) securityError(error);
+  } finally {
+    payload.password = "";
+    if (generation === securityGeneration) {
+      securityBusy = false; syncControls();
+      if (!$("#security-setup").hidden) $("#security-confirm-code").focus();
+    }
+  }
+});
+
+$("#security-confirm-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (securityBusy || !csrfToken) return;
+  const generation = securityGeneration;
+  const code = $("#security-confirm-code").value;
+  $("#security-confirm-code").value = "";
+  securityBusy = true;
+  $("#security-error").hidden = true;
+  syncControls();
+  try {
+    const data = await securityRequest("enable", { code });
+    if (generation !== securityGeneration) return;
+    if (data.enabled !== true) throw new Error("Enabling two-factor authentication was not confirmed. Refresh Security.");
+    clearSecuritySetup(); renderSecurity(true);
+    showToast("Two-factor authentication enabled. Other panel sessions were signed out. Use a new code at your next sign-in.");
+  } catch (error) {
+    if (generation === securityGeneration) securityError(error);
+  } finally {
+    if (generation === securityGeneration) { securityBusy = false; syncControls(); }
+  }
+});
+
+$("#security-cancel").addEventListener("click", async () => {
+  if (securityBusy) return;
+  const generation = securityGeneration;
+  clearSecuritySetup();
+  securityBusy = true; syncControls();
+  try { await securityRequest("cancel", {}); }
+  catch (error) { if (generation === securityGeneration) securityError(error); }
+  finally {
+    if (generation === securityGeneration) {
+      resetSecurity();
+      await loadSecurity();
+    }
+  }
+});
+
 window.addEventListener("hashchange", selectView);
 
 initialize();

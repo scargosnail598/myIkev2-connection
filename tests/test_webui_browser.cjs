@@ -64,7 +64,7 @@ async function fixture(t, options = {}) {
   state.userLimits = options.userLimits || {};
   const limitsFor = (username) => state.userLimits[username] || { byte_limit: null, validity_seconds: null,
     used_bytes: 0, first_connected_at: null, reset_at: 1792238400, blocked: null, suspended: false };
-  const calls = { dashboard: 0, commands: 0, logout: 0, sessions: 0, diagnostics: 0, metrics: 0, userChanges: [], exports: [], limitChanges: [] };
+  const calls = { dashboard: 0, commands: 0, logout: 0, sessions: 0, diagnostics: 0, metrics: 0, userChanges: [], exports: [], limitChanges: [], security: [], logins: [] };
   const session = () => ({ authenticated: state.authenticated, username: state.authenticated ? "browser-test-admin" : null, csrf_token: state.authenticated ? "browser-test-csrf" : null });
   page.on("pageerror", (error) => errors.push(error.message));
   await page.route("**/api/**", async (route) => {
@@ -88,9 +88,36 @@ async function fixture(t, options = {}) {
       return json(state.data);
     }
     if (endpoint === "/api/auth/login") {
+      calls.logins.push(request.postDataJSON());
+      if (state.twoFactorEnabled && request.postDataJSON().code !== "012345") return json({ message: "Invalid username, password or authenticator code." }, 401);
       if (state.loginLimited) return json({ message: "Too many failed attempts." }, 429, { "Retry-After": "120" });
       state.authenticated = true;
       return json(session());
+    }
+    if (endpoint === "/api/auth/2fa" || endpoint.startsWith("/api/auth/2fa/")) {
+      if (!state.authenticated) return json({ message: "Sign in to continue." }, 401);
+      if (state.securityFailure) return json({ message: "Authentication settings unavailable." }, 503);
+      if (endpoint === "/api/auth/2fa") return json({ enabled: Boolean(state.twoFactorEnabled) });
+      assert.equal(request.headers()["x-csrf-token"], "browser-test-csrf");
+      const operation = endpoint.split("/").at(-1);
+      const payload = request.postDataJSON();
+      calls.security.push({ operation, ...payload });
+      if (state.securityHold) await state.securityHold;
+      if (operation === "setup") {
+        if (payload.password !== "browser-fixture-panel-password") return json({ message: "Invalid password or authenticator code." }, 403);
+        return json({ secret: "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP", uri: "otpauth://totp/IKEv2%20Web%20UI%3Abrowser-test-admin?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP&issuer=IKEv2+Web+UI&algorithm=SHA1&digits=6&period=30", expires_in: 600 });
+      }
+      if (operation === "enable") {
+        if (payload.code !== "012345") return json({ message: "Invalid authenticator code." }, 403);
+        state.twoFactorEnabled = true;
+        return json({ enabled: true });
+      }
+      if (operation === "disable") {
+        if (payload.password !== "browser-fixture-panel-password" || payload.code !== "012345") return json({ message: "Invalid password or authenticator code." }, 403);
+        state.twoFactorEnabled = false;
+        return json({ enabled: false });
+      }
+      if (operation === "cancel") return json({ cancelled: true });
     }
     if (endpoint === "/api/metrics") {
       calls.metrics += 1;
@@ -925,4 +952,117 @@ test("older brokers disable limits and reset controls", async (t) => {
   assert.equal(await button.isDisabled(), true);
   assert.equal(await page.getByRole("button", { name: "Reset usage: alice", exact: true }).isDisabled(), true);
   assert.equal(calls.limitChanges.length, 0);
+});
+
+
+test("two-factor sign-in sends the six-digit code and clears credentials on failure", async (t) => {
+  const { page, calls } = await fixture(t, { authenticated: false, twoFactorEnabled: true });
+  await page.locator("#username").fill("browser-test-admin");
+  await page.locator("#password").fill("browser-fixture-panel-password");
+  await page.locator("#login-code").fill("999999");
+  await page.locator('#login-form button[type="submit"]').click();
+  await waitText(page, "#login-error", "authenticator code");
+  assert.equal(await page.locator("#login-code").inputValue(), "");
+  assert.equal(await page.locator("#password").inputValue(), "");
+  await page.locator("#password").fill("browser-fixture-panel-password");
+  await page.locator("#login-code").fill("012345");
+  await page.locator('#login-form button[type="submit"]').click();
+  await waitText(page, "#running-services", "2 / 3");
+  assert.equal(calls.logins.at(-1).code, "012345");
+  assert.equal(await page.locator("#login-code").inputValue(), "");
+});
+
+test("Authenticator setup QR scans locally and protection starts only after confirmation", async (t) => {
+  const { page, state, calls } = await fixture(t, { viewport: { width: 320, height: 844 } });
+  await page.locator('[data-view="security"]').click();
+  await waitText(page, "#security-status", "Disabled");
+  await page.locator("#security-password").fill("browser-fixture-panel-password");
+  await page.locator("#security-start").click();
+  await page.locator("#security-setup").waitFor({ state: "visible" });
+  assert.equal(state.twoFactorEnabled, undefined);
+  assert.equal(await page.locator("#security-password").inputValue(), "");
+  const pixels = await page.locator("#security-qr").evaluate((canvas) => ({ width: canvas.width, height: canvas.height,
+    data: Array.from(canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height).data) }));
+  const qr = jsQR(Uint8ClampedArray.from(pixels.data), pixels.width, pixels.height);
+  assert.ok(qr);
+  const parsed = new URL(qr.data);
+  assert.equal(parsed.protocol, "otpauth:");
+  assert.equal(parsed.searchParams.get("secret"), await page.locator("#security-secret").inputValue());
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  await page.locator("#security-confirm-code").fill("999999");
+  await page.locator("#security-confirm").click();
+  await waitText(page, "#security-error", "Invalid authenticator");
+  assert.equal(await page.locator("#security-setup").isVisible(), true);
+  await page.locator("#security-confirm-code").fill("012345");
+  await page.locator("#security-confirm").click();
+  await waitText(page, "#security-status", "Enabled");
+  assert.equal(state.twoFactorEnabled, true);
+  assert.equal(await page.locator("#security-secret").inputValue(), "");
+  assert.equal(await page.locator("#security-qr").getAttribute("width"), "0");
+  assert.deepEqual(calls.security.map((item) => item.operation), ["setup", "enable", "enable"]);
+  assert.equal(calls.commands, 0);
+  if (process.env.UI_SCREENSHOT_DIR) await page.screenshot({ path: path.join(process.env.UI_SCREENSHOT_DIR, "security-mobile.png"), fullPage: true });
+});
+
+test("disabling two-factor requires a password and a fresh app code", async (t) => {
+  const { page, state, calls } = await fixture(t, { twoFactorEnabled: true });
+  await page.locator('[data-view="security"]').click();
+  await waitText(page, "#security-status", "Enabled");
+  await page.locator("#security-password").fill("browser-fixture-panel-password");
+  await page.locator("#security-disable-code").fill("012345");
+  await page.locator("#security-start").click();
+  await waitText(page, "#security-status", "Disabled");
+  assert.equal(state.twoFactorEnabled, false);
+  assert.equal(await page.locator("#security-disable-code").inputValue(), "");
+  assert.equal(await page.locator("#security-password").inputValue(), "");
+  assert.deepEqual(calls.security[0], { operation: "disable", password: "browser-fixture-panel-password", code: "012345" });
+});
+
+test("two-factor setup cancel, navigation and expiry clear the setup key", async (t) => {
+  const { page } = await fixture(t);
+  async function setup() {
+    await waitText(page, "#security-status", "Disabled");
+    await page.locator("#security-password").fill("browser-fixture-panel-password");
+    await page.locator("#security-start").click();
+    await page.locator("#security-setup").waitFor({ state: "visible" });
+  }
+  await page.locator('[data-view="security"]').click();
+  await setup();
+  await page.locator("#security-cancel").click();
+  await page.locator("#security-password-form").waitFor({ state: "visible" });
+  assert.equal(await page.locator("#security-secret").inputValue(), "");
+  await setup();
+  await page.locator('[data-view="overview"]').click();
+  assert.equal(await page.locator("#security-secret").inputValue(), "");
+  await page.locator('[data-view="security"]').click();
+  await setup();
+  await page.clock.fastForward(600001);
+  await waitText(page, "#security-error", "Setup expired");
+  assert.equal(await page.locator("#security-secret").inputValue(), "");
+  assert.equal(await page.locator("#security-setup").isVisible(), false);
+});
+
+test("security handles unavailable settings, rejects delayed setup and expires sessions", async (t) => {
+  const { page, state, calls } = await fixture(t, { securityFailure: true });
+  await page.locator('[data-view="security"]').click();
+  await waitText(page, "#security-error", "unavailable");
+  assert.equal(await page.locator("#security-password-form").isVisible(), false);
+  state.securityFailure = false;
+  await page.locator("#security-retry").click();
+  await waitText(page, "#security-status", "Disabled");
+  let release;
+  state.securityHold = new Promise((resolve) => { release = resolve; });
+  t.after(() => release());
+  await page.locator("#security-password").fill("browser-fixture-panel-password");
+  await page.locator("#security-start").click();
+  await page.waitForFunction(() => document.querySelector("#security-start").disabled);
+  await page.locator('[data-view="overview"]').click();
+  release();
+  await page.waitForTimeout(150);
+  assert.equal(await page.locator("#security-secret").inputValue(), "");
+  assert.equal(calls.security.length, 1);
+  state.authenticated = false;
+  await page.locator('[data-view="security"]').click();
+  await page.locator("#login-view").waitFor({ state: "visible" });
+  assert.equal(await page.locator("#security-secret").inputValue(), "");
 });

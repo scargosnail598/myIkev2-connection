@@ -10,7 +10,7 @@ usage() {
   cat <<'HELP'
 Usage: sudo /opt/ikev2/reset-webui-password.sh [--password-stdin]
 
-Reset only the installed Web UI password and sign out existing panel sessions.
+Reset the installed Web UI password, disable 2FA and sign out panel sessions.
 The current username, cookie settings and session lifetime are preserved.
 Without --password-stdin, enter the new password twice without echo.
 --password-stdin reads the exact password from stdin, without a trailing newline.
@@ -48,6 +48,8 @@ reset_webui_password() {
     [[ -t 0 && -t 2 ]] || die "Interactive reset requires a terminal. Use --password-stdin for automation."
   fi
 
+  printf 'Resetting the Web UI password also disables two-factor authentication.\n'
+
   # The existing utility hashes and atomically replaces the config while
   # retaining ownership and all settings except the password hash.
   (
@@ -61,7 +63,8 @@ reset_webui_password() {
     die "The new password was saved, but the Web UI is not active. Check ikev2-web.service before signing in."
   fi
   printf 'Web UI password reset successfully. Existing panel sessions were signed out.\n'
-  printf 'The existing username and all other settings were preserved.\n'
+  printf 'Two-factor authentication was disabled. Enable it again from Security after signing in.\n'
+  printf 'The existing username, cookie settings and session lifetime were preserved.\n'
 }
 
 reset_webui_password "$@"

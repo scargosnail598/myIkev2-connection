@@ -30,6 +30,8 @@
           <input id="username" name="username" autocomplete="username" required maxlength="64">
           <label for="password">Password</label>
           <input id="password" name="password" type="password" autocomplete="current-password" required>
+          <label for="login-code">Authenticator code <span class="muted">(if enabled)</span></label>
+          <input id="login-code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" placeholder="6-digit code">
           <p id="login-error" class="form-error" role="alert" hidden></p>
           <button type="submit">Sign in <span>→</span></button>
         </form>
@@ -49,6 +51,7 @@
           <a class="nav-item" href="#users" data-view="users"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2 M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8 M22 21v-2a4 4 0 0 0-3-3.87 M16 3.13a4 4 0 0 1 0 7.75"/></svg><span class="nav-label">Users</span></a>
           <a class="nav-item" href="#sessions" data-view="sessions"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12h4l3-8 6 16 3-8h4"/></svg><span class="nav-label">Sessions</span></a>
           <a class="nav-item" href="#diagnostics" data-view="diagnostics"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6 M12 3v4 M5 7l2 2 M19 7l-2 2 M12 13l3-3 M20 15a8 8 0 1 1-16 0 8 8 0 0 1 16 0"/></svg><span class="nav-label">Diagnostics</span></a>
+          <a class="nav-item" href="#security" data-view="security"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 4v5c0 5-8 9-8 9s-8-4-8-9V7z M8 12l3 3 5-6"/></svg><span class="nav-label">Security</span></a>
         </nav>
         <button id="logout" class="sidebar-foot" type="button" aria-label="Sign out" title="Sign out">
           <span class="pulse"></span>
@@ -222,6 +225,37 @@
         </dl>
         <div id="diagnostics-list" class="diagnostics-list" aria-busy="false"></div>
         <footer><span>Checks run on opening or on request. Local checks do not confirm DNS, public reachability or client routing. Certificate checks cover dates only.</span><span id="diagnostics-updated">Awaiting first check</span></footer>
+      </main>
+      <main id="security-view" hidden>
+        <header><div><p class="eyebrow">ACCOUNT PROTECTION</p><h1 class="overview-title">Security</h1>
+          <p class="overview-copy">Protect panel sign-in with an Authenticator app.</p></div></header>
+        <section class="security-card" aria-labelledby="two-factor-title">
+          <h2 id="two-factor-title">Two-factor authentication</h2>
+          <p id="security-status" role="status">Checking two-factor settings…</p>
+          <p class="muted">Use a time-based code from Google Authenticator, Microsoft Authenticator or another TOTP app.</p>
+          <div id="security-error" class="broker-notice" role="alert" hidden></div>
+          <button id="security-retry" class="secondary-button" type="button" hidden>Retry</button>
+          <form id="security-password-form" class="user-form" hidden>
+            <label for="security-password">Current panel password</label>
+            <input id="security-password" type="password" autocomplete="current-password" required maxlength="4096">
+            <label id="security-disable-code-label" for="security-disable-code" hidden>New authenticator code</label>
+            <input id="security-disable-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" hidden disabled>
+            <button id="security-start" class="primary-button" type="submit">Set up two-factor authentication</button>
+          </form>
+          <div id="security-setup" hidden>
+            <p>Scan this QR in your Authenticator app, or enter the setup key manually. Confirm a code to enable protection. Setup expires in 10 minutes.</p>
+            <canvas id="security-qr" role="img" aria-label="Authenticator setup QR code"></canvas>
+            <label for="security-secret">Setup key</label>
+            <input id="security-secret" readonly autocomplete="off" spellcheck="false">
+            <form id="security-confirm-form" class="user-form">
+              <label for="security-confirm-code">Authenticator code</label>
+              <input id="security-confirm-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required>
+              <div class="dialog-actions"><button id="security-cancel" class="secondary-button" type="button">Cancel setup</button>
+                <button id="security-confirm" class="primary-button" type="submit">Enable two-factor authentication</button></div>
+            </form>
+          </div>
+          <p class="security-recovery muted">Lost access to your Authenticator? On the server, use the main CLI menu's <strong>Reset Web UI Password</strong>. It resets the password and disables two-factor authentication. You can enable it again here.</p>
+        </section>
       </main>
       </div>
     </div>

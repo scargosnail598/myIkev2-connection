@@ -9,9 +9,8 @@ import json
 import os
 from pathlib import Path
 import sys
-import tempfile
 
-from webui.security import AuthConfig, hash_password
+from webui.security import AuthConfig, hash_password, locked_config, write_existing_config
 
 
 def read_password_hash(args: argparse.Namespace) -> str:
@@ -60,33 +59,19 @@ def reset_password(args: argparse.Namespace) -> None:
         AuthConfig.from_file(path)
     except ValueError as error:
         raise SystemExit(str(error)) from error
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if args.username is not None:
-        if not 1 <= len(args.username) <= 64:
-            raise SystemExit("Username must contain between 1 and 64 characters.")
-        payload["username"] = args.username
-    payload["password_hash"] = read_password_hash(args)
-    write_existing_config(path, payload)
-    print("Web UI credentials updated. Restart ikev2-web.service to apply and invalidate existing sessions.")
-
-
-def write_existing_config(path: Path, payload: dict) -> None:
-    """Replace private configuration atomically while retaining its owner."""
-    original = path.stat()
-    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as config_file:
-            # Root may reset a config owned by the dedicated Web UI account.
-            os.fchown(config_file.fileno(), original.st_uid, original.st_gid)
-            os.fchmod(config_file.fileno(), 0o600)
-            json.dump(payload, config_file, indent=2)
-            config_file.write("\n")
-            config_file.flush()
-            os.fsync(config_file.fileno())
-        os.replace(temporary, path)
-    finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
+    password_hash = read_password_hash(args)
+    with locked_config(path):
+        AuthConfig.from_file(path)
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if args.username is not None:
+            if not 1 <= len(args.username) <= 64:
+                raise SystemExit("Username must contain between 1 and 64 characters.")
+            payload["username"] = args.username
+        payload["password_hash"] = password_hash
+        payload.pop("totp_secret", None)
+        payload.pop("totp_last_counter", None)
+        write_existing_config(path, payload)
+    print("Web UI credentials updated; two-factor authentication disabled. Restart ikev2-web.service to apply and invalidate existing sessions.")
 
 
 def configure_cookie(args: argparse.Namespace) -> None:
@@ -95,9 +80,11 @@ def configure_cookie(args: argparse.Namespace) -> None:
         AuthConfig.from_file(path)
     except ValueError as error:
         raise SystemExit(str(error)) from error
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    payload["secure_cookie"] = not args.allow_http
-    write_existing_config(path, payload)
+    with locked_config(path):
+        AuthConfig.from_file(path)
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["secure_cookie"] = not args.allow_http
+        write_existing_config(path, payload)
     print("Cookie security updated; credentials preserved. Restart ikev2-web.service to apply.")
 
 

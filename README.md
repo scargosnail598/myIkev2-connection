@@ -321,13 +321,39 @@ button or HTTP endpoint in the panel; it requires root/sudo access to the server
 
 Enter the new password twice without echo (minimum 12 characters). The script
 preserves the current username, cookie security, session lifetime and extra
-settings, atomically replaces the configuration with mode `0600` and retains its
+settings, removes the two-factor secret and replay counter, atomically replaces the configuration with mode `0600` and retains its
 owner. It then restarts only `ikev2-web.service`, signing out panel sessions and
 clearing login throttling. Passwords are never accepted as command arguments or
 printed. For automation, `--password-stdin` reads the exact password from stdin
 without a trailing newline; it skips confirmation. If the service restart fails,
 the CLI reports that the new password is saved and requires starting the service.
 Rolling back application files does not restore the previous password.
+
+To enable two-factor authentication, sign in and open **Security**. Enter your
+current panel password, scan the QR with an Authenticator app (or enter the setup
+key), then confirm a six-digit code. Setup expires after 10 minutes and does not
+change sign-in until confirmed. Sign-in then requires username, password and a
+fresh **Authenticator code**. To disable it from Security, enter the current
+password and a fresh code. Changing two-factor settings signs out other panel
+sessions while retaining the session used to make the change.
+
+TOTP uses SHA-1, six digits and 30-second steps as described in
+[RFC 6238](https://www.rfc-editor.org/rfc/rfc6238), with one step of clock skew.
+Keep the phone and server clocks synchronized. Accepted codes cannot be reused,
+even after restarting the Web UI; wait for the next code if one was just used
+for setup or sign-in. Wrong codes share the existing five-attempt login throttle.
+QR generation stays in the browser and sends no key to an external QR service.
+The key is stored in the private `0600` authentication config, never returned
+again after setup. The Web UI service can write only its configuration directory
+in addition to its existing sandbox access, to persist settings and consumed
+codes. Normal deployments and cookie changes preserve two-factor protection.
+
+If you lose the Authenticator, use **13) Reset Web UI Password** in the server's
+main CLI menu (or either reset command above). Every successful CLI password
+reset also disables two-factor authentication and removes its key. After signing
+in with the new password, set it up again in **Security**. There are no recovery
+codes or HTTP password-reset endpoints. Rolling back to code predating 2FA removes
+its enforcement; deploy a 2FA-capable version to keep protection.
 
 This workflow installs the Web UI, its broker and its limits worker/timer. It starts neither a VPN
 installation nor a VPN restart. The frontend stays unprivileged, and the broker

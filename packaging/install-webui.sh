@@ -21,14 +21,14 @@ Usage: sudo ./packaging/install-webui.sh install [--secure-cookie] [--password-s
 Commands:
   install          Install/update the Web UI and start its systemd services.
   status           Show Web UI, broker, socket, and HTTP health status.
-  reset-password   Reset the installed Web UI password and sign out panel sessions.
+  reset-password   Reset the Web UI password, disable 2FA and sign out panel sessions.
 
 Options:
   --secure-cookie  Require HTTPS for the login cookie. Without this option,
                    loopback HTTP/SSH-tunnel mode is configured.
   --password-stdin Read the exact password from stdin without prompting or a trailing newline.
                    With install, only the initial password is read; existing config is preserved.
-                   With reset-password, replace the installed password and preserve other settings.
+                   With reset-password, replace the installed password and disable 2FA; preserve username/cookie settings.
 EOF
 }
 
@@ -49,6 +49,7 @@ require_source_files() {
     "webui/broker.py" \
     "webui/manage.py" \
     "webui/security.py" \
+    "webui/totp.py" \
     "webui/users.py" \
     "webui/profiles.py" \
     "webui/limits.py" \
@@ -88,6 +89,7 @@ install_source() {
     "${SOURCE_DIR}/webui/broker.py" \
     "${SOURCE_DIR}/webui/manage.py" \
     "${SOURCE_DIR}/webui/security.py" \
+    "${SOURCE_DIR}/webui/totp.py" \
     "${SOURCE_DIR}/webui/users.py" \
     "${SOURCE_DIR}/webui/profiles.py" \
     "${SOURCE_DIR}/webui/limits.py" \
@@ -213,6 +215,11 @@ import sys
 sys.path.insert(0, "/opt/ikev2")
 from webui.app import SystemStatusProvider
 from webui.broker import BrokerClient
+from webui.security import AuthConfig, AuthManager
+from pathlib import Path
+config_path = Path("/etc/ikev2-web/config.json")
+AuthManager(AuthConfig.from_file(config_path), config_path=config_path).two_factor_status()
+print("Web UI authentication storage verified (two-factor settings preserved).")
 broker = BrokerClient()
 status = SystemStatusProvider(broker=broker).dashboard()
 report = broker.diagnostics()

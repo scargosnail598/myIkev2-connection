@@ -368,3 +368,21 @@ sudo /opt/ikev2/ikev2-strongswan-ubuntu.sh status
 sudo /opt/ikev2/ikev2-strongswan-ubuntu.sh diagnostics
 sudo ss -lunp | grep -E ':(500|4500)\\b'
 ```
+
+## Two-factor authentication and CLI recovery
+
+Panel administrators can enable Authenticator TOTP under **Security** after
+confirming their password and an app code. Updates preserve the key and replay
+counter in `/etc/ikev2-web/config.json` (mode `0600`). The web service's
+`ReadWritePaths=/etc/ikev2-web` permits atomic settings updates and durable code
+consumption; the rest of its filesystem sandbox remains in place. A shared
+private lock serializes settings writes with the root CLI.
+
+Every successful CLI password reset (including the main menu and the workflow's
+`reset_admin_password` option) removes the TOTP key and counter. It signs out
+panel sessions and lets the administrator sign in with the new password, then
+re-enroll under **Security**. Normal deployments must leave that reset option
+disabled to preserve authentication. Recovery never needs a VPN restart or
+changes VPN credentials, routing, firewall or certificates. A rollback to a
+version without 2FA support stops enforcing the second factor; retain a
+2FA-capable version when rolling back.

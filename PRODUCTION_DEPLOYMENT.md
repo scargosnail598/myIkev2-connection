@@ -285,6 +285,21 @@ the workflow then verifies an actual login and authenticated dashboard request.
 Ordinary deployments leave existing credentials intact. Rolling back application
 files does not restore a previous password.
 
+For terminal recovery, Web UI deployment also installs the root-owned CLI script:
+
+```bash
+sudo /opt/ikev2/reset-webui-password.sh
+```
+
+It requests the new password twice without echo, preserves the existing username
+and other authentication settings, and restarts only `ikev2-web.service` to sign
+out existing sessions. `sudo ./packaging/install-webui.sh reset-password` is the
+equivalent command from a checkout. Root/sudo access is required; the panel has
+no HTTP password-reset endpoint. Automation can append `--password-stdin` and
+supply the exact password on stdin without a trailing newline. Do not put a
+password in arguments, logs or source control. Ordinary deployments install this
+capability while preserving the current password.
+
 The listener remains private. With the example server above, connect using:
 
 ```bash

@@ -37,8 +37,8 @@ jobs:
 
       - name: Check Bash scripts
         run: |
-          bash -n ikev2-strongswan-ubuntu.sh ikev2-linux-client.sh packaging/install-webui.sh packaging/install-arvan-proxy.sh
-          shellcheck --severity=warning ikev2-strongswan-ubuntu.sh ikev2-linux-client.sh packaging/install-webui.sh packaging/install-arvan-proxy.sh
+          bash -n ikev2-strongswan-ubuntu.sh ikev2-linux-client.sh packaging/install-webui.sh packaging/reset-webui-password.sh packaging/install-arvan-proxy.sh
+          shellcheck --severity=warning ikev2-strongswan-ubuntu.sh ikev2-linux-client.sh packaging/install-webui.sh packaging/reset-webui-password.sh packaging/install-arvan-proxy.sh
 
       - name: Check Web UI JavaScript syntax
         run: |

@@ -15,17 +15,20 @@ WEB_SERVICE="ikev2-web.service"
 usage() {
   cat <<'EOF'
 Usage: sudo ./packaging/install-webui.sh install [--secure-cookie] [--password-stdin]
+       sudo ./packaging/install-webui.sh reset-password [--password-stdin]
        ./packaging/install-webui.sh status
 
 Commands:
   install          Install/update the Web UI and start its systemd services.
   status           Show Web UI, broker, socket, and HTTP health status.
+  reset-password   Reset the installed Web UI password and sign out panel sessions.
 
 Options:
   --secure-cookie  Require HTTPS for the login cookie. Without this option,
                    loopback HTTP/SSH-tunnel mode is configured.
-  --password-stdin Read the initial admin password from stdin without prompting.
-                   Existing authentication configuration is always preserved.
+  --password-stdin Read the exact password from stdin without prompting or a trailing newline.
+                   With install, only the initial password is read; existing config is preserved.
+                   With reset-password, replace the installed password and preserve other settings.
 EOF
 }
 
@@ -52,6 +55,7 @@ require_source_files() {
     "webui/sessions.py" \
     "webui/diagnostics.py" \
     "webui/metrics.py" \
+    "packaging/reset-webui-password.sh" \
     "packaging/systemd/ikev2-web-users-apply.service" \
     "packaging/systemd/ikev2-web-limits.service" \
     "packaging/systemd/ikev2-web-limits.timer" \
@@ -73,6 +77,10 @@ install_source() {
     "$INSTALL_DIR" \
     "${INSTALL_DIR}/webui" \
     "${INSTALL_DIR}/webui/static"
+
+  install -o root -g root -m 0755 \
+    "${SOURCE_DIR}/packaging/reset-webui-password.sh" \
+    "${INSTALL_DIR}/reset-webui-password.sh"
 
   install -o root -g root -m 0644 \
     "${SOURCE_DIR}/webui/__init__.py" \
@@ -176,6 +184,14 @@ show_status() {
       failed="yes"
     fi
   done
+
+  if [[ -x "${INSTALL_DIR}/reset-webui-password.sh" ]] &&
+      "${INSTALL_DIR}/reset-webui-password.sh" --help >/dev/null; then
+    printf '%-32s verified\n' "Web UI password reset CLI"
+  else
+    printf '%-32s missing/unavailable\n' "Web UI password reset CLI"
+    failed="yes"
+  fi
 
   if systemctl is-active --quiet ikev2-web-limits.timer; then
     printf '%-32s active\n' "VPN limits timer"
@@ -329,6 +345,10 @@ case "${1:-}" in
   install)
     shift
     install_webui "$@"
+    ;;
+  reset-password)
+    shift
+    "${SCRIPT_DIR}/reset-webui-password.sh" "$@"
     ;;
   status)
     [[ $# -eq 1 ]] || { usage; exit 2; }

@@ -301,18 +301,26 @@ cookie and session settings. It restarts only the Web UI, signs out existing
 sessions, clears login throttling, and verifies login plus authenticated dashboard
 access. Normal deployments continue to preserve credentials.
 
-To reset a password interactively on the VPN server instead:
+To reset the Web UI password from the server CLI, run the installed script:
 
 ```bash
-cd /opt/ikev2
-sudo python3 -m webui.manage reset-password --config /etc/ikev2-web/config.json --username admin
-sudo systemctl restart ikev2-web.service
+sudo /opt/ikev2/reset-webui-password.sh
 ```
 
-The password is entered twice without echo; no password is placed in command
-arguments. The configuration is replaced atomically with mode `0600` and retains
-its owner and other settings. Password resets invalidate the previous login
-password and sessions; rolling back application files does not restore them.
+From a repository checkout, the equivalent command is
+`sudo ./packaging/install-webui.sh reset-password`. Update the Web UI with the
+installer first if the installed reset script is missing. Password reset has no
+button or HTTP endpoint in the panel; it requires root/sudo access to the server.
+
+Enter the new password twice without echo (minimum 12 characters). The script
+preserves the current username, cookie security, session lifetime and extra
+settings, atomically replaces the configuration with mode `0600` and retains its
+owner. It then restarts only `ikev2-web.service`, signing out panel sessions and
+clearing login throttling. Passwords are never accepted as command arguments or
+printed. For automation, `--password-stdin` reads the exact password from stdin
+without a trailing newline; it skips confirmation. If the service restart fails,
+the CLI reports that the new password is saved and requires starting the service.
+Rolling back application files does not restore the previous password.
 
 This workflow installs the Web UI, its broker and its limits worker/timer. It starts neither a VPN
 installation nor a VPN restart. The frontend stays unprivileged, and the broker

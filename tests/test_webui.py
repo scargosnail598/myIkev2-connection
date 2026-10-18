@@ -484,6 +484,14 @@ class WebServerTests(unittest.TestCase):
             self.post_json("/api/auth/login", {"username": "مدیر", "password": PASSWORD})
         self.assertEqual(raised.exception.code, 401)
 
+    def test_panel_password_reset_is_not_available_over_http(self):
+        self.login()
+        with self.assertRaises(HTTPError) as error:
+            self.post_json("/api/auth/reset-password", {"password": "disposable-reset-test-password"},
+                           headers={"X-CSRF-Token": self.csrf_token})
+        self.assertEqual(error.exception.code, 405)
+        self.assertNotIn(b"disposable-reset-test-password", error.exception.read())
+
     def test_logout_requires_csrf(self):
         self.login()
         with self.assertRaises(HTTPError) as raised:

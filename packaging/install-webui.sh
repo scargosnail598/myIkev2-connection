@@ -60,6 +60,8 @@ require_source_files() {
     "telegram_bot/__init__.py" \
     "telegram_bot/app.py" \
     "telegram_bot/status.py" \
+    "telegram_bot/activity.py" \
+    "telegram_bot/reports.py" \
     "packaging/install-telegram-bot.sh" \
     "packaging/systemd/ikev2-telegram.service" \
     "packaging/systemd/ikev2-telegram-collect.service" \

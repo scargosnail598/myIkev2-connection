@@ -98,6 +98,42 @@ replies. Allowed accounts can get at most one reply every five seconds. Incoming
 commands older than five minutes are ignored. The bot sends replies only when
 requested; this version does not send scheduled reports or automatic alerts.
 
+## Session and per-user commands
+
+| Command | Report |
+| --- | --- |
+| `/sessions [page]` | Established managed sessions: username, ID, age, assigned VPN addresses, RX/TX and total traffic |
+| `/online [page]` | Distinct online usernames with active session count and summed current-session traffic |
+| `/usage [page]` | Saved cumulative user RX/TX and total usage, sorted by largest total first |
+| `/user alice` | Exact username lookup: online state, session count, current and saved traffic |
+
+`/users` aliases `/online`, and `/traffic` aliases `/usage`. Lists show five
+records per page; use `/sessions 2`, `/online 2` or `/usage 2` for subsequent
+pages. Each request produces at most one bounded Telegram message and retains
+the five-second cooldown. The bot registers these names in Telegram's private
+chat command menu with [`setMyCommands`](https://core.telegram.org/bots/api#setmycommands).
+This menu contains generic descriptions only and does not grant access to
+reports. If menu registration fails, manually typed commands still work.
+
+Session traffic comes from currently installed CHILD_SAs. It can reset on
+rekey/reconnection; if any counter is unavailable, the corresponding aggregate
+is `N/A`. It is separate from `/usage`, which reads only `TOTAL` rows in the
+existing root-owned, mode-0600 `/var/lib/ikev2-easy-installer/traffic.tsv`.
+`SESSION` rows are previous accounting baselines and are never added a second
+time. The CLI traffic timer normally updates this file every 30 seconds while
+StrongSwan is running. Its saved age is included even when the file is old;
+a missing, unsafe or malformed file is unavailable, not zero. This historical
+file can retain deleted users and does not define which accounts exist now.
+Totals are sampled and may miss short sessions. They are independent of the
+panel's quota accounting and its **Reset usage** operation. No accounting files
+are modified and the bot does not sample additional traffic itself.
+
+The snapshot keeps at most 1,000 session, online-user and saved-usage records
+per list; report totals and a limit notice expose truncation. An exact user
+lookup with a missing entry in a truncated online list reports Unknown rather
+than claiming Offline. Updates require the bot and collector to be deployed
+together; old snapshots yield an explicit unavailable message for new commands.
+
 ## What the numbers mean
 
 - Hostname and uptime refer to the host. Load is the Linux 1/5/15 minute load
@@ -131,15 +167,20 @@ The network-facing `ikev2-telegram.service` runs as the separate
 `ikev2-telegram` system account, with no capabilities and a read-only system
 filesystem. It cannot access the Web UI broker socket, VPN credentials/private
 keys, managed installer state or Web UI configuration. It reads only the
-aggregate `/run/ikev2-telegram/status.json` snapshot for server monitoring.
-This file contains counts, never user identities, peer IPs, passwords or keys.
+bounded `/run/ikev2-telegram/status.json` snapshot for server monitoring.
+It now contains validated VPN usernames, session IDs/ages, assigned VPN addresses,
+current traffic and saved cumulative user totals, in addition to host metrics.
+It excludes public client IPs, raw daemon output, passwords and keys. `/status`
+continues to show counts only; detailed commands share usernames and session
+details with authorized private Telegram chats. The snapshot is capped at 1 MiB.
 
 `ikev2-telegram-collect.service` is a root oneshot, launched by
 `ikev2-telegram-collect.timer`. It reuses the existing metrics and session parsers.
 Its fixed subprocesses are `systemctl is-active strongswan-starter.service`,
 `ipsec statusall ikev2-eap`, `ipsec --version` and
 `ip -j address show scope global`, each with a timeout. It also reads fixed
-`/proc` files and the managed state as data. Only its own runtime snapshot
+`/proc` files, managed state and the fixed saved CLI traffic file as data.
+Only its own runtime snapshot
 directory is writable; it has no IPv4/IPv6 socket access or token access.
 Snapshots are replaced atomically, owned by root with group `ikev2-telegram`
 and mode 0640 inside a root-owned 0750 directory.
@@ -159,7 +200,8 @@ certificate or inbound firewall rule is added. Use one poller per token; an
 existing webhook is refused and is never removed automatically.
 
 Telegram receives requested server status reports and the authorized account's
-chat ID. This includes hostname, IP addresses, versions and host usage. Treat
+chat ID. This includes hostname, server IPs, versions, host usage, VPN usernames,
+session VPN addresses and per-user traffic for detailed commands. Treat
 those reports as administrative information. Content protection is requested
 for replies, but recipients can still record what they see.
 
@@ -227,6 +269,7 @@ operation and Web UI deployment independent.
 ```bash
 python3 -B -m unittest discover -s tests -p test_telegram_bot.py -v
 python3 -B -m unittest discover -s tests -p test_telegram_settings.py -v
+python3 -B -m unittest discover -s tests -p test_telegram_reports.py -v
 bash -n packaging/install-telegram-bot.sh
 shellcheck packaging/install-telegram-bot.sh
 systemd-analyze verify packaging/systemd/ikev2-telegram*.service packaging/systemd/ikev2-telegram*.timer

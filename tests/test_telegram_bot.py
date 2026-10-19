@@ -14,7 +14,7 @@ from unittest.mock import Mock, patch
 from urllib.error import HTTPError, URLError
 
 from telegram_bot.app import ApiError, Bot, BotConfig, NoRedirects, TelegramAPI
-from telegram_bot.status import StatusCollector, format_status, read_snapshot, write_snapshot
+from telegram_bot.status import MAX_SNAPSHOT_BYTES, StatusCollector, format_status, read_snapshot, write_snapshot
 
 
 TOKEN = "123456:" + "x" * 35  # Synthetic, never a real Telegram credential.
@@ -224,7 +224,7 @@ ikev2-eap{2}: INSTALLED, TUNNEL
             return subprocess.CompletedProcess(argv, 0, output, "")
         self.collector = StatusCollector(self.root, self.root / "state.env", runner=runner, clock=lambda: 1000)
 
-    def test_counts_versions_and_report_do_not_expose_accounts_or_secrets(self):
+    def test_status_omits_user_names_and_activity_omits_secrets_and_peer_ips(self):
         data = self.collector.collect()
         self.assertEqual((data["online_sessions"], data["online_users"]), (2, 1))
         self.assertEqual((data["tcp"], data["udp"]), (12, 4))
@@ -237,7 +237,10 @@ ikev2-eap{2}: INSTALLED, TUNNEL
         self.assertIn("2 sessions / 1 users", report)
         self.assertIn("VPN Status: running", report)
         self.assertIn("↑ 1.95 KiB, ↓ 1000.00 B", report)
-        self.assertNotIn("alice", json.dumps(data))
+        self.assertNotIn("alice", report)
+        self.assertEqual(data["online"][0]["username"], "alice")
+        self.assertNotIn("192.0.2.2", json.dumps(data))
+        self.assertNotIn("192.0.2.3", json.dumps(data))
         self.assertNotIn("do-not-export", json.dumps(data))
         self.assertEqual(self.commands, [["/usr/bin/systemctl", "is-active", "strongswan-starter.service"],
                                         ["/usr/sbin/ipsec", "statusall", "ikev2-eap"],
@@ -281,7 +284,7 @@ ikev2-eap{2}: INSTALLED, TUNNEL
         for invalid in ({"version": 1, "collected_at": float("nan")}, [], {"version": True, "collected_at": 1000}):
             path.write_text(json.dumps(invalid))
             self.assertIsNone(read_snapshot(path, clock=lambda: 1000))
-        path.write_text("x" * 32769)
+        path.write_text("x" * (MAX_SNAPSHOT_BYTES + 1))
         self.assertIsNone(read_snapshot(path))
 
     def test_state_is_data_and_duplicate_versions_are_unknown(self):

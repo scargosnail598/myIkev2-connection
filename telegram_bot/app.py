@@ -23,13 +23,13 @@ import time
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, HTTPSHandler, ProxyHandler, Request, build_opener
 
-from telegram_bot.status import SNAPSHOT, format_status, read_snapshot
+from telegram_bot.status import SNAPSHOT, read_snapshot
+from telegram_bot.reports import COMMANDS, render
 
 
 CONFIG = Path("/etc/ikev2-telegram/config.json")
 CURSOR = Path("/var/lib/ikev2-telegram/cursor.json")
 TOKEN = re.compile(r"[1-9][0-9]{0,19}:[A-Za-z0-9_-]{20,128}")
-HELP = "IKEv2 server monitor\n/status — server health, resources and active connection counts\n/help — show commands"
 MAX_API_BYTES = 1024 * 1024
 LOG = logging.getLogger("ikev2-telegram")
 
@@ -78,7 +78,7 @@ class TelegramAPI:
                                             HTTPSHandler(context=ssl.create_default_context()))
 
     def call(self, method, payload=None):
-        if method not in {"getMe", "getWebhookInfo", "getUpdates", "sendMessage"}:
+        if method not in {"getMe", "getWebhookInfo", "getUpdates", "sendMessage", "setMyCommands"}:
             raise ValueError("Unsupported Telegram method.")
         request = Request(f"https://api.telegram.org/bot{self._token}/{method}",
                           data=json.dumps(payload or {}).encode(),
@@ -156,6 +156,11 @@ class Bot:
         if not isinstance(webhook, dict) or webhook.get("url") != "":
             raise ValueError("This bot has a webhook. Use a dedicated bot with no webhook for this monitor.")
         self.username = me["username"].casefold()
+        try:
+            if self.api.call("setMyCommands", {"commands": COMMANDS, "scope": {"type": "all_private_chats"}}) is not True:
+                raise ApiError()
+        except ApiError as error:
+            LOG.warning("Telegram command menu unavailable (code %s); typed commands remain available.", error.code)
 
     def handle(self, update):
         message = update.get("message")
@@ -175,14 +180,15 @@ class Bot:
         content = message.get("text")
         if not isinstance(content, str) or not content.strip() or len(content) > 4096:
             return
-        command = re.fullmatch(r"/([a-z]+)(?:@([A-Za-z0-9_]+))?", content.split()[0])
+        parts = content.split()
+        command = re.fullmatch(r"/([a-z]+)(?:@([A-Za-z0-9_]+))?", parts[0])
         if command is None or (command[2] and command[2].casefold() != self.username):
             return
         now = self.monotonic()
         if now - self.last_reply.get(user_id, float("-inf")) < 5:
             return
         self.last_reply[user_id] = now
-        reply = format_status(read_snapshot(self.snapshot, self.clock), self.clock) if command[1] == "status" else HELP
+        reply = render(command[1], parts[1:], lambda: read_snapshot(self.snapshot, self.clock), self.clock)
         self.api.call("sendMessage", {"chat_id": user_id, "text": reply,
                                       "link_preview_options": {"is_disabled": True}, "protect_content": True})
 

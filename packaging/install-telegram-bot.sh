@@ -56,10 +56,26 @@ configure_bot() {
   # The service receives a private copy through systemd LoadCredential.
 }
 
+verify_snapshot() {
+  runuser -u "$BOT_USER" -- /usr/bin/python3 -B -c '
+import sys
+sys.path.insert(0, "/opt/ikev2-telegram")
+from telegram_bot.status import read_snapshot
+from telegram_bot.reports import render
+snapshot = read_snapshot()
+assert snapshot is not None, "Collector snapshot is missing, unreadable or stale"
+assert all(key in snapshot for key in ("sessions", "online", "usage")), "Collector report fields missing"
+for command in ("status", "sessions", "online", "usage"):
+    report = render(command, [], lambda: snapshot)
+    assert len(report.encode("utf-16-le")) // 2 <= 4096, "Telegram report exceeds message limit"
+print("Telegram report snapshot and rendering verified as the bot user (no Telegram messages sent).")
+'
+}
+
 install_bot() {
   local prepare="${1:-no}" bot_running="no" timer_running="no"
   local path
-  for path in telegram_bot/__init__.py telegram_bot/app.py telegram_bot/status.py \
+  for path in telegram_bot/__init__.py telegram_bot/app.py telegram_bot/status.py telegram_bot/activity.py telegram_bot/reports.py \
     webui/__init__.py webui/metrics.py webui/sessions.py; do
     [[ -f "${SOURCE_DIR}/${path}" ]] || die "Required source is missing: ${path}"
   done
@@ -98,20 +114,14 @@ install_bot() {
     install -o root -g root -m 0644 "${SCRIPT_DIR}/systemd/${path}" "/etc/systemd/system/${path}"
   done
   systemctl daemon-reload
+  systemctl start ikev2-telegram-collect.service
+  verify_snapshot
   if [[ "$prepare" == "yes" ]]; then
     if [[ "$timer_running" == "yes" ]]; then systemctl start ikev2-telegram-collect.timer; fi
     if [[ "$bot_running" == "yes" && -f "${CONFIG_DIR}/config.json" ]]; then systemctl start ikev2-telegram.service; fi
     printf 'Telegram services prepared. Configure the bot in the Web UI Telegram page.\n'
     return 0
   fi
-  systemctl start ikev2-telegram-collect.service
-  runuser -u "$BOT_USER" -- /usr/bin/python3 -B -c '
-import sys
-sys.path.insert(0, "/opt/ikev2-telegram")
-from telegram_bot.status import read_snapshot
-if read_snapshot() is None:
-    raise SystemExit("Collector snapshot is missing, unreadable or stale.")
-'
   systemctl enable --now ikev2-telegram-collect.timer ikev2-telegram.service
   printf 'Bot installed. Send /status in a private Telegram chat from an allowed account.\n'
   show_status

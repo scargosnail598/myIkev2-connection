@@ -1,4 +1,4 @@
-"""Fixed local probes and an aggregate snapshot, without credentials or user names."""
+"""Fixed local probes and bounded administrative reports, without credentials."""
 
 from __future__ import annotations
 
@@ -18,10 +18,11 @@ import time
 
 from webui.metrics import MetricsReader, read_text
 from webui.sessions import SessionReader
+from telegram_bot.activity import saved_usage, session_activity
 
 
 SNAPSHOT = Path("/run/ikev2-telegram/status.json")
-MAX_SNAPSHOT_BYTES = 32768
+MAX_SNAPSHOT_BYTES = 1024 * 1024
 MAX_AGE = 90
 
 
@@ -115,6 +116,7 @@ class StatusCollector:
             "online_sessions": len(sessions["sessions"]) if known_sessions else None,
             "online_users": len({item["username"] for item in sessions["sessions"]}) if known_sessions else None,
             "vpn_status": ("running" if sessions["running"] else "stopped") if known_sessions else "unknown",
+            **session_activity(sessions), **saved_usage(self.state.parent / "traffic.tsv"),
             **self._sockets(),
         }
 
@@ -127,7 +129,10 @@ def write_snapshot(path, payload):
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as output:
             os.fchmod(output.fileno(), 0o640)
-            json.dump(payload, output, allow_nan=False)
+            raw = json.dumps(payload, allow_nan=False)
+            if len(raw.encode("utf-8")) > MAX_SNAPSHOT_BYTES:
+                raise ValueError("Status snapshot exceeds its bounded size.")
+            output.write(raw)
             output.write("\n")
             output.flush()
             os.fsync(output.fileno())

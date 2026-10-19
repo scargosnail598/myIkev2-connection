@@ -91,6 +91,20 @@ active VPN session/user counts, TCP/UDP socket counts, selected-interface traffi
 and VPN service status. `/start` and `/help` show the available commands.
 Only explicitly allowed numeric Telegram user IDs receive replies.
 
+| Command | Report |
+| --- | --- |
+| `/sessions [page]` | Active sessions, VPN addresses, connection age and current traffic |
+| `/online [page]` | Online users, session counts and combined current-session traffic |
+| `/usage [page]` | Saved cumulative CLI traffic per user, largest first |
+| `/user username` | One user's online state, current traffic and saved cumulative usage |
+| `/help` | Commands and examples; `/users` and `/traffic` alias `/online` and `/usage` |
+
+Lists show five records per page, e.g. `/sessions 2`. Saved CLI usage comes from
+the existing `traffic.tsv`; it can include removed users and is separate from
+panel quota accounting/resets. Missing readings show `N/A`. These reports share
+VPN usernames and assigned VPN addresses with the allowed administrator's
+private Telegram chat, without exporting passwords, keys or public client IPs.
+
 Install/update the Web UI from a full checkout on the Ubuntu VPN server:
 
 ```bash
@@ -106,7 +120,7 @@ existing one. Web UI deployment prepares the bot without prompting for a token
 or enabling an unconfigured bot. The standalone CLI remains optional.
 
 The bot uses outbound HTTPS polling with no webhook or inbound port. It runs as
-a separate unprivileged user, consumes an aggregate local snapshot every 30
+a separate unprivileged user, consumes a bounded local snapshot every 30
 seconds, and cannot control services or read VPN credentials. The private token
 stays in `/etc/ikev2-telegram/config.json`, outside the checkout. It works without
 the Web UI. See [setup, report semantics, troubleshooting and removal](docs/telegram-bot.md).

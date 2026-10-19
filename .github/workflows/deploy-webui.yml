@@ -53,6 +53,7 @@ jobs:
           python3 -B -m unittest discover -s tests -p 'test_webui_reset.py' -v
           python3 -B -m unittest discover -s tests -p 'test_totp.py' -v
           python3 -B -m unittest discover -s tests -p 'test_telegram_bot.py' -v
+          python3 -B -m unittest discover -s tests -p 'test_telegram_reports.py' -v
           python3 -B -m unittest discover -s tests -p 'test_telegram_settings.py' -v
           python3 -B -m unittest discover -s tests -p 'test_users.py' -v
           python3 -B -m unittest discover -s tests -p 'test_profiles.py' -v

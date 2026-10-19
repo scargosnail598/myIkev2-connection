@@ -229,7 +229,7 @@
       </main>
       <main id="telegram-view" hidden>
         <header><div><p class="eyebrow">SERVER MONITOR</p><h1 class="overview-title">Telegram</h1>
-          <p class="overview-copy">Configure private /status reports for your Telegram accounts.</p></div></header>
+          <p class="overview-copy">Configure private server, session and user traffic reports for your Telegram accounts.</p></div></header>
         <section class="security-card" aria-labelledby="telegram-title">
           <h2 id="telegram-title">Telegram bot settings</h2>
           <p id="telegram-status" role="status">Loading Telegram settings…</p>
@@ -244,7 +244,7 @@
             <label for="telegram-users">Allowed Telegram user IDs</label>
             <input id="telegram-users" type="text" maxlength="2200" autocomplete="off" spellcheck="false" placeholder="123456789, 987654321" aria-describedby="telegram-users-copy">
             <small id="telegram-users-copy">Numeric user IDs, separated by commas. Only these accounts receive replies in private chats. Usernames and group IDs are not supported.</small>
-            <p class="muted">Enabled bots send hostname, IP addresses, versions and usage to Telegram when an allowed user requests /status. Saving applies only to Telegram services. Local service state does not confirm Telegram connectivity.</p>
+            <p class="muted">Enabled bots send server information, VPN usernames, session VPN addresses and traffic to Telegram on an allowed user's request. Use /help in the bot for commands. Saving applies only to Telegram services. Local service state does not confirm Telegram connectivity.</p>
             <button id="telegram-save" class="primary-button" type="submit">Save Telegram settings</button>
           </form>
         </section>

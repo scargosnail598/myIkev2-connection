@@ -1,5 +1,5 @@
 [Unit]
-Description=Collect aggregate read-only IKEv2 status for Telegram
+Description=Collect bounded read-only IKEv2 status and activity for Telegram
 After=strongswan-starter.service
 
 [Service]

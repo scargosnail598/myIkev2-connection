@@ -45,13 +45,15 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          bash -n packaging/install-webui.sh packaging/reset-webui-password.sh packaging/install-arvan-proxy.sh
-          shellcheck packaging/install-webui.sh packaging/reset-webui-password.sh packaging/install-arvan-proxy.sh
+          bash -n packaging/install-webui.sh packaging/reset-webui-password.sh packaging/install-arvan-proxy.sh packaging/install-telegram-bot.sh
+          shellcheck packaging/install-webui.sh packaging/reset-webui-password.sh packaging/install-arvan-proxy.sh packaging/install-telegram-bot.sh
           node --check webui/static/app.js
           node --check webui/static/qrcodegen.js
           python3 -B -m unittest discover -s tests -p 'test_webui.py' -v
           python3 -B -m unittest discover -s tests -p 'test_webui_reset.py' -v
           python3 -B -m unittest discover -s tests -p 'test_totp.py' -v
+          python3 -B -m unittest discover -s tests -p 'test_telegram_bot.py' -v
+          python3 -B -m unittest discover -s tests -p 'test_telegram_settings.py' -v
           python3 -B -m unittest discover -s tests -p 'test_users.py' -v
           python3 -B -m unittest discover -s tests -p 'test_profiles.py' -v
           python3 -B -m unittest discover -s tests -p 'test_limits.py' -v
@@ -144,7 +146,7 @@ jobs:
           }
           trap cleanup EXIT
           # Archive tracked sources only: never upload local configs, keys, or caches.
-          git archive --format=tar.gz --output="$RUNNER_TEMP/ikev2-web.tar.gz" HEAD webui packaging
+          git archive --format=tar.gz --output="$RUNNER_TEMP/ikev2-web.tar.gz" HEAD webui telegram_bot packaging
           ssh "${ssh_args[@]}" "$remote" "tar -xz -C '$remote_stage'" < "$RUNNER_TEMP/ikev2-web.tar.gz"
           # Publish root-owned sources to the fixed path allowed by sudoers.
           ssh "${ssh_args[@]}" "$remote" bash -s -- "$remote_stage" "$PUBLISH_ARVAN" <<'REMOTE'
@@ -152,12 +154,13 @@ jobs:
           source_dir="$1"
           deploy_dir=/opt/ikev2-web-deploy
           sudo -n /usr/bin/install -d -o root -g root -m 0755 \
-            "$deploy_dir" "$deploy_dir/webui" "$deploy_dir/webui/static" \
+            "$deploy_dir" "$deploy_dir/webui" "$deploy_dir/webui/static" "$deploy_dir/telegram_bot" \
             "$deploy_dir/packaging" "$deploy_dir/packaging/systemd"
           sudo -n /usr/bin/install -o root -g root -m 0644 \
             "$source_dir/webui/__init__.py" "$source_dir/webui/app.py" \
             "$source_dir/webui/broker.py" "$source_dir/webui/manage.py" \
-            "$source_dir/webui/security.py" "$source_dir/webui/totp.py" "$source_dir/webui/profiles.py" "$source_dir/webui/limits.py" "$source_dir/webui/users.py" "$source_dir/webui/sessions.py" "$source_dir/webui/diagnostics.py" "$source_dir/webui/metrics.py" "$deploy_dir/webui/"
+            "$source_dir/webui/security.py" "$source_dir/webui/totp.py" "$source_dir/webui/profiles.py" "$source_dir/webui/limits.py" "$source_dir/webui/users.py" "$source_dir/webui/sessions.py" "$source_dir/webui/diagnostics.py" "$source_dir/webui/metrics.py" "$source_dir/webui/telegram.py" "$deploy_dir/webui/"
+          sudo -n /usr/bin/install -o root -g root -m 0644 "$source_dir/telegram_bot/"*.py "$deploy_dir/telegram_bot/"
           sudo -n /usr/bin/install -o root -g root -m 0644 \
             "$source_dir/webui/static/index.html" "$source_dir/webui/static/app.css" \
             "$source_dir/webui/static/app.js" "$source_dir/webui/static/qrcodegen.js" "$deploy_dir/webui/static/"
@@ -168,11 +171,16 @@ jobs:
             "$source_dir/packaging/systemd/ikev2-web-users-apply.service" \
             "$source_dir/packaging/systemd/ikev2-web-limits.service" \
             "$source_dir/packaging/systemd/ikev2-web-limits.timer" \
+            "$source_dir/packaging/systemd/ikev2-web-telegram-apply.service" \
+            "$source_dir/packaging/systemd/ikev2-telegram.service" \
+            "$source_dir/packaging/systemd/ikev2-telegram-collect.service" \
+            "$source_dir/packaging/systemd/ikev2-telegram-collect.timer" \
             "$deploy_dir/packaging/systemd/"
           sudo -n /usr/bin/install -o root -g root -m 0644 \
             "$source_dir/packaging/render-arvan-proxy.py" "$deploy_dir/packaging/"
           sudo -n /usr/bin/install -o root -g root -m 0755 \
             "$source_dir/packaging/install-arvan-proxy.sh" \
+            "$source_dir/packaging/install-telegram-bot.sh" \
             "$source_dir/packaging/reset-webui-password.sh" "$deploy_dir/packaging/"
           sudo -n /usr/bin/install -o root -g root -m 0755 \
             "$source_dir/packaging/install-webui.sh" "$deploy_dir/packaging/install-webui.sh"

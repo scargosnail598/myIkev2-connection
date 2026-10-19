@@ -56,6 +56,15 @@ require_source_files() {
     "webui/sessions.py" \
     "webui/diagnostics.py" \
     "webui/metrics.py" \
+    "webui/telegram.py" \
+    "telegram_bot/__init__.py" \
+    "telegram_bot/app.py" \
+    "telegram_bot/status.py" \
+    "packaging/install-telegram-bot.sh" \
+    "packaging/systemd/ikev2-telegram.service" \
+    "packaging/systemd/ikev2-telegram-collect.service" \
+    "packaging/systemd/ikev2-telegram-collect.timer" \
+    "packaging/systemd/ikev2-web-telegram-apply.service" \
     "packaging/reset-webui-password.sh" \
     "packaging/systemd/ikev2-web-users-apply.service" \
     "packaging/systemd/ikev2-web-limits.service" \
@@ -77,6 +86,7 @@ install_source() {
   install -d -o root -g root -m 0755 \
     "$INSTALL_DIR" \
     "${INSTALL_DIR}/webui" \
+    "${INSTALL_DIR}/telegram_bot" \
     "${INSTALL_DIR}/webui/static"
 
   install -o root -g root -m 0755 \
@@ -96,7 +106,9 @@ install_source() {
     "${SOURCE_DIR}/webui/sessions.py" \
     "${SOURCE_DIR}/webui/diagnostics.py" \
     "${SOURCE_DIR}/webui/metrics.py" \
+    "${SOURCE_DIR}/webui/telegram.py" \
     "${INSTALL_DIR}/webui/"
+  install -o root -g root -m 0644 "${SOURCE_DIR}/telegram_bot/"*.py "${INSTALL_DIR}/telegram_bot/"
   install -o root -g root -m 0644 \
     "${SOURCE_DIR}/webui/static/index.html" \
     "${SOURCE_DIR}/webui/static/app.css" \
@@ -149,6 +161,9 @@ ensure_config() {
 }
 
 install_units() {
+  install -o root -g root -m 0644 \
+    "${SOURCE_DIR}/packaging/systemd/ikev2-web-telegram-apply.service" \
+    "${SYSTEMD_DIR}/ikev2-web-telegram-apply.service"
   install -d -o root -g root -m 0700 /var/lib/ikev2-web
   install -o root -g root -m 0644 \
     "${SOURCE_DIR}/packaging/systemd/ikev2-web-limits.service" \
@@ -307,6 +322,7 @@ install_webui() {
 
   ensure_service_account
   install_source
+  bash "${SCRIPT_DIR}/install-telegram-bot.sh" prepare
   ensure_config "$secure_cookie" "$password_stdin"
   install_units
   if [[ -f /var/lib/ikev2-easy-installer/state.env && -f /etc/ipsec.secrets ]]; then
@@ -333,6 +349,16 @@ install_webui() {
   fi
 
   verify_metrics_collection
+  runuser -u "$WEB_USER" -- /usr/bin/python3 -B -c '
+import sys
+sys.path.insert(0, "/opt/ikev2")
+from webui.broker import BrokerClient
+settings = BrokerClient().telegram_settings()
+assert settings.get("ok") is True and settings.get("installed") is True, "Telegram settings unavailable"
+assert settings.get("state_known") is True, "Telegram unit enablement unavailable"
+assert "bot_token" not in settings, "Telegram response must omit credentials"
+print("Telegram settings verified through the unprivileged broker client (no configuration changes).")
+'
 
   if [[ -f /etc/ikev2-web-proxy/origin.json ]]; then
     bash "${SCRIPT_DIR}/install-arvan-proxy.sh"

@@ -1,0 +1,28 @@
+[Unit]
+Description=Collect aggregate read-only IKEv2 status for Telegram
+After=strongswan-starter.service
+
+[Service]
+Type=oneshot
+User=root
+Group=ikev2-telegram
+WorkingDirectory=/opt/ikev2-telegram
+ExecStart=/usr/bin/python3 -B -m telegram_bot.status
+TimeoutStartSec=25
+RuntimeDirectory=ikev2-telegram
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
+UMask=0027
+NoNewPrivileges=true
+CapabilityBoundingSet=
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/run/ikev2-telegram
+InaccessiblePaths=-/etc/ikev2-telegram -/etc/ikev2-web -/etc/ipsec.secrets -/etc/ipsec.d/private -/var/lib/ikev2-web
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_NETLINK

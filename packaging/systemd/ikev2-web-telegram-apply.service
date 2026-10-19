@@ -1,0 +1,24 @@
+[Unit]
+Description=Apply validated private Telegram bot settings
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/ikev2
+ExecStart=/usr/bin/python3 -B -m webui.telegram
+TimeoutStartSec=100
+UMask=0077
+NoNewPrivileges=true
+CapabilityBoundingSet=
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/etc/ikev2-telegram /run/ikev2-web/telegram
+InaccessiblePaths=-/etc/ipsec.secrets -/etc/ipsec.d/private -/etc/ikev2-web -/var/lib/ikev2-easy-installer -/var/lib/ikev2-web
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX

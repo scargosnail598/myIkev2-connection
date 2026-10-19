@@ -64,7 +64,9 @@ async function fixture(t, options = {}) {
   state.userLimits = options.userLimits || {};
   const limitsFor = (username) => state.userLimits[username] || { byte_limit: null, validity_seconds: null,
     used_bytes: 0, first_connected_at: null, reset_at: 1792238400, blocked: null, suspended: false };
-  const calls = { dashboard: 0, commands: 0, logout: 0, sessions: 0, diagnostics: 0, metrics: 0, userChanges: [], exports: [], limitChanges: [], security: [], logins: [] };
+  state.telegram = { ok: true, installed: true, configured: true, enabled: false, allowed_user_ids: [42],
+    state_known: true, bot_state: "inactive", collector_state: "inactive", revision: "telegram-fixture-revision", ...options.telegram };
+  const calls = { dashboard: 0, commands: 0, logout: 0, sessions: 0, diagnostics: 0, metrics: 0, userChanges: [], exports: [], limitChanges: [], security: [], logins: [], telegram: [] };
   const session = () => ({ authenticated: state.authenticated, username: state.authenticated ? "browser-test-admin" : null, csrf_token: state.authenticated ? "browser-test-csrf" : null });
   page.on("pageerror", (error) => errors.push(error.message));
   await page.route("**/api/**", async (route) => {
@@ -118,6 +120,18 @@ async function fixture(t, options = {}) {
         return json({ enabled: false });
       }
       if (operation === "cancel") return json({ cancelled: true });
+    }
+    if (endpoint === "/api/telegram") {
+      if (!state.authenticated) return json({ message: "Sign in to continue." }, 401);
+      if (request.method() === "GET") return json(state.telegram);
+      assert.equal(request.headers()["x-csrf-token"], "browser-test-csrf");
+      const payload = request.postDataJSON();
+      calls.telegram.push(payload);
+      if (state.telegramHold) await state.telegramHold;
+      if (state.telegramFailure) return json({ message: "Telegram change could not be confirmed." }, 503);
+      state.telegram = { ...state.telegram, configured: true, enabled: payload.enabled, allowed_user_ids: payload.allowed_user_ids,
+        bot_state: payload.enabled ? "active" : "inactive", collector_state: payload.enabled ? "active" : "inactive" };
+      return json({ ok: true });
     }
     if (endpoint === "/api/metrics") {
       calls.metrics += 1;
@@ -1040,6 +1054,47 @@ test("two-factor setup cancel, navigation and expiry clear the setup key", async
   await waitText(page, "#security-error", "Setup expired");
   assert.equal(await page.locator("#security-secret").inputValue(), "");
   assert.equal(await page.locator("#security-setup").isVisible(), false);
+});
+
+test("telegram settings preserve saved tokens and apply private account settings", async (t) => {
+  const { page, calls } = await fixture(t);
+  await page.locator('[data-view="telegram"]').click();
+  await waitText(page, "#telegram-status", "Reports disabled");
+  assert.equal(await page.locator("#telegram-token").inputValue(), "");
+  await page.locator("#telegram-enabled").check();
+  await page.locator("#telegram-users").fill("42, 99");
+  await page.locator("#telegram-save").click();
+  await waitText(page, "#telegram-status", "Reports enabled");
+  assert.deepEqual(calls.telegram[0], { revision: "telegram-fixture-revision", enabled: true, allowed_user_ids: [42, 99] });
+  const token = "123456:" + "x".repeat(35);
+  await page.locator("#telegram-token").fill(token);
+  await page.locator("#telegram-save").click();
+  await page.waitForFunction(() => document.querySelector("#telegram-save").disabled === false);
+  assert.equal(calls.telegram[1].bot_token, token);
+  assert.equal(await page.locator("#telegram-token").inputValue(), "");
+  await page.locator("#telegram-token").fill(token);
+  await page.locator('[data-view="overview"]').click();
+  assert.equal(await page.locator("#telegram-token").inputValue(), "");
+});
+
+test("telegram failed changes require refresh and clear pending tokens", async (t) => {
+  const { page, state, calls } = await fixture(t, { telegramFailure: true });
+  await page.locator('[data-view="telegram"]').click();
+  await waitText(page, "#telegram-status", "Reports disabled");
+  await page.locator("#telegram-token").fill("123456:" + "x".repeat(35));
+  await page.locator("#telegram-save").click();
+  await waitText(page, "#telegram-error", "not confirmed");
+  assert.equal(calls.telegram.length, 1);
+  assert.equal(await page.locator("#telegram-token").inputValue(), "");
+  assert.equal(await page.locator("#telegram-save").isDisabled(), true);
+  state.telegramFailure = false;
+  await page.locator("#telegram-refresh").click();
+  await page.waitForFunction(() => document.querySelector("#telegram-save").disabled === false);
+  assert.equal(calls.telegram.length, 1);
+  state.authenticated = false;
+  await page.locator("#telegram-refresh").click();
+  await page.locator("#login-view").waitFor({ state: "visible" });
+  assert.equal(await page.locator("#telegram-token").inputValue(), "");
 });
 
 test("security handles unavailable settings, rejects delayed setup and expires sessions", async (t) => {

@@ -48,6 +48,9 @@ let securityGeneration = 0;
 let securityBusy = false;
 let securityEnabled = null;
 let securityTimer = null;
+let telegramGeneration = 0;
+let telegramBusy = false;
+let telegramSnapshot = null;
 
 async function requestJson(path, options = {}, timeout = 15000) {
   const controller = new AbortController();
@@ -94,6 +97,7 @@ function finishConfirmation(accepted) {
 function showLogin(message = "") {
   sessionVersion += 1;
   csrfToken = null;
+  resetTelegram();
   resetSecurity();
   resetUsers();
   resetSessions();
@@ -120,6 +124,7 @@ function showLogin(message = "") {
 function showApp(session) {
   sessionVersion += 1;
   csrfToken = session.csrf_token;
+  resetTelegram();
   resetSecurity();
   resetUsers();
   resetSessions();
@@ -164,7 +169,7 @@ function setMode(label, controlled) {
 }
 
 function syncControls() {
-  const busy = Boolean(pendingAction || confirmation || logoutPending || userPending || securityBusy || userDialog.open || shareDialog.open || limitsDialog.open);
+  const busy = Boolean(pendingAction || confirmation || logoutPending || userPending || securityBusy || telegramBusy || userDialog.open || shareDialog.open || limitsDialog.open);
   const canControl = Boolean(csrfToken && dashboardFresh && dashboard?.capabilities.service_actions);
   refreshButton.disabled = !csrfToken || dashboardLoading || busy;
   refreshButton.textContent = dashboardLoading ? "Refreshing…" : "Refresh status ↻";
@@ -184,6 +189,7 @@ function syncControls() {
   syncDiagnosticsControls();
   syncMetricsControls();
   syncSecurityControls();
+  syncTelegramControls();
   if (pendingAction) $("#action-progress").textContent = `${operationLabels[pendingAction.operation]} request for ${pendingAction.label} is running. Please wait…`;
 }
 
@@ -448,7 +454,7 @@ async function initialize() {
 connectionRetry.addEventListener("click", initialize);
 window.setInterval(() => {
   if (document.visibilityState === "visible") {
-    if (["#diagnostics", "#security"].includes(location.hash)) return;
+    if (["#diagnostics", "#security", "#telegram"].includes(location.hash)) return;
     if (location.hash === "#sessions") loadSessions();
     else if (location.hash === "#users") {
       if (!$("#users-list").contains(document.activeElement) && document.activeElement !== $("#users-search")) loadUsers();
@@ -458,7 +464,7 @@ window.setInterval(() => {
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
     loadMetrics();
-    if (["#diagnostics", "#security"].includes(location.hash)) return;
+    if (["#diagnostics", "#security", "#telegram"].includes(location.hash)) return;
     if (location.hash === "#sessions") loadSessions();
     else if (location.hash === "#users") loadUsers();
     else loadDashboard();
@@ -488,13 +494,15 @@ function selectView() {
   closeShareDialog();
   closeLimitsDialog();
   syncControls();
-  const view = ["#users", "#sessions", "#diagnostics", "#security"].includes(location.hash) ? location.hash.slice(1) : "overview";
-  $("#workspace-title").textContent = { overview: "Overview", users: "Users", sessions: "Sessions", diagnostics: "Diagnostics", security: "Security" }[view];
+  const view = ["#users", "#sessions", "#diagnostics", "#security", "#telegram"].includes(location.hash) ? location.hash.slice(1) : "overview";
+  $("#workspace-title").textContent = { overview: "Overview", users: "Users", sessions: "Sessions", diagnostics: "Diagnostics", security: "Security", telegram: "Telegram" }[view];
   $("#overview").hidden = view !== "overview";
   $("#users-view").hidden = view !== "users";
   $("#sessions-view").hidden = view !== "sessions";
   $("#diagnostics-view").hidden = view !== "diagnostics";
   $("#security-view").hidden = view !== "security";
+  $("#telegram-view").hidden = view !== "telegram";
+  resetTelegram();
   resetSecurity();
   document.querySelectorAll("[data-view]").forEach((link) => {
     const active = link.dataset.view === view;
@@ -507,6 +515,7 @@ function selectView() {
   else if (view === "sessions") loadSessions();
   else if (view === "diagnostics") loadDiagnostics();
   else if (view === "security") loadSecurity();
+  else if (view === "telegram") loadTelegram();
   else { loadDashboard(); loadMetrics(); }
 }
 
@@ -1377,6 +1386,113 @@ $("#security-cancel").addEventListener("click", async () => {
   }
 });
 
+function resetTelegram() {
+  telegramGeneration += 1;
+  telegramBusy = false;
+  telegramSnapshot = null;
+  $("#telegram-token").value = "";
+  $("#telegram-users").value = "";
+  $("#telegram-enabled").checked = false;
+  $("#telegram-status").textContent = "Loading Telegram settings…";
+  $("#telegram-token-status").textContent = "";
+  $("#telegram-error").hidden = true;
+}
+
+function syncTelegramControls() {
+  const busy = telegramBusy || !csrfToken || Boolean(pendingAction || confirmation || logoutPending || userPending || securityBusy);
+  const writable = telegramSnapshot?.installed === true && telegramSnapshot?.state_known === true;
+  $("#telegram-form").querySelectorAll("input, button").forEach((element) => { element.disabled = busy || !writable; });
+  $("#telegram-refresh").disabled = busy;
+  $("#telegram-save").textContent = telegramBusy ? "Please wait…" : "Save Telegram settings";
+  $("#telegram-form").setAttribute("aria-busy", String(telegramBusy));
+}
+
+function telegramError(error) {
+  if (error.status === 401) { showLogin("Your session expired. Sign in again."); return; }
+  $("#telegram-error").textContent = error.message;
+  $("#telegram-error").hidden = false;
+}
+
+async function loadTelegram() {
+  if (!csrfToken || telegramBusy) return;
+  const generation = telegramGeneration;
+  telegramBusy = true;
+  telegramSnapshot = null;
+  $("#telegram-token").value = "";
+  $("#telegram-error").hidden = true;
+  syncControls();
+  try {
+    const data = await requestJson("/api/telegram", {}, 25000);
+    if (generation !== telegramGeneration) return;
+    if (data.ok !== true || typeof data.installed !== "boolean" || typeof data.configured !== "boolean"
+        || typeof data.enabled !== "boolean" || !Array.isArray(data.allowed_user_ids)
+        || !data.allowed_user_ids.every((value) => Number.isSafeInteger(value) && value > 0)
+        || typeof data.revision !== "string") throw new Error("Telegram settings could not be confirmed. Refresh settings.");
+    telegramSnapshot = data;
+    $("#telegram-enabled").checked = data.enabled;
+    $("#telegram-users").value = data.allowed_user_ids.join(", ");
+    $("#telegram-token-status").textContent = data.configured ? "A token is saved. Leave the token field blank to keep it." : "No token saved yet.";
+    $("#telegram-status").textContent = !data.installed
+      ? "Telegram services are not prepared. Update the server's Web UI installation."
+      : `Reports ${data.enabled ? "enabled" : "disabled"} · Bot: ${stateLabels[data.bot_state] || "Unknown"} · Collector timer: ${stateLabels[data.collector_state] || "Unknown"}`;
+    if (data.installed && data.state_known !== true) throw new Error("Service settings are unavailable. Refresh before saving.");
+  } catch (error) {
+    if (generation !== telegramGeneration) return;
+    telegramSnapshot = null;
+    $("#telegram-status").textContent = "Telegram settings unavailable.";
+    telegramError(error);
+  } finally {
+    if (generation === telegramGeneration) { telegramBusy = false; syncControls(); }
+  }
+}
+
+$("#telegram-refresh").addEventListener("click", loadTelegram);
+$("#telegram-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!csrfToken || telegramBusy || !telegramSnapshot?.installed || !telegramSnapshot?.state_known) return;
+  const rawIds = $("#telegram-users").value.trim();
+  if (rawIds && !/^[0-9]+(?:\s*,\s*[0-9]+)*$/.test(rawIds)) {
+    telegramError(new Error("Enter numeric user IDs separated by commas.")); return;
+  }
+  const ids = rawIds ? [...new Set(rawIds.split(",").map((value) => Number(value.trim())))] : [];
+  const token = $("#telegram-token").value.trim();
+  const enabled = $("#telegram-enabled").checked;
+  if (ids.length > 100 || ids.some((value) => !Number.isSafeInteger(value) || value <= 0 || value >= 2 ** 52)
+      || ((enabled || token || telegramSnapshot.configured || ids.length) && (!ids.length || (!token && !telegramSnapshot.configured)))) {
+    telegramError(new Error("Provide a bot token and at least one valid Telegram user ID.")); return;
+  }
+  const payload = { revision: telegramSnapshot.revision, enabled, allowed_user_ids: ids };
+  if (token) payload.bot_token = token;
+  const generation = telegramGeneration;
+  $("#telegram-token").value = "";
+  $("#telegram-error").hidden = true;
+  telegramBusy = true;
+  syncControls();
+  let saved = false;
+  try {
+    const data = await requestJson("/api/telegram", {
+      method: "POST", headers: { "Content-Type": "application/json", "X-CSRF-Token": csrfToken }, body: JSON.stringify(payload),
+    }, 125000);
+    if (generation !== telegramGeneration) return;
+    if (data.ok !== true) throw new Error("Telegram update was not confirmed.");
+    saved = true;
+    showToast("Telegram settings saved. Request /status from an allowed private chat to check connectivity.");
+  } catch (error) {
+    if (generation !== telegramGeneration) return;
+    telegramSnapshot = null;
+    telegramError(new Error(`Change was not confirmed. ${error.message} Refresh settings before retrying.`));
+    if (error.status === 401) showLogin("Your session expired. Sign in again.");
+  } finally {
+    delete payload.bot_token;
+    if (generation === telegramGeneration) {
+      telegramBusy = false;
+      syncControls();
+      if (saved) await loadTelegram();
+    }
+  }
+});
+
+window.addEventListener("pagehide", resetTelegram);
 window.addEventListener("hashchange", selectView);
 
 initialize();

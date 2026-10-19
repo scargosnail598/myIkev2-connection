@@ -52,6 +52,7 @@
           <a class="nav-item" href="#sessions" data-view="sessions"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12h4l3-8 6 16 3-8h4"/></svg><span class="nav-label">Sessions</span></a>
           <a class="nav-item" href="#diagnostics" data-view="diagnostics"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6 M12 3v4 M5 7l2 2 M19 7l-2 2 M12 13l3-3 M20 15a8 8 0 1 1-16 0 8 8 0 0 1 16 0"/></svg><span class="nav-label">Diagnostics</span></a>
           <a class="nav-item" href="#security" data-view="security"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 4v5c0 5-8 9-8 9s-8-4-8-9V7z M8 12l3 3 5-6"/></svg><span class="nav-label">Security</span></a>
+          <a class="nav-item" href="#telegram" data-view="telegram"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 11 18-8-5 18-5-7-8-3z M11 14l10-11"/></svg><span class="nav-label">Telegram</span></a>
         </nav>
         <button id="logout" class="sidebar-foot" type="button" aria-label="Sign out" title="Sign out">
           <span class="pulse"></span>
@@ -225,6 +226,28 @@
         </dl>
         <div id="diagnostics-list" class="diagnostics-list" aria-busy="false"></div>
         <footer><span>Checks run on opening or on request. Local checks do not confirm DNS, public reachability or client routing. Certificate checks cover dates only.</span><span id="diagnostics-updated">Awaiting first check</span></footer>
+      </main>
+      <main id="telegram-view" hidden>
+        <header><div><p class="eyebrow">SERVER MONITOR</p><h1 class="overview-title">Telegram</h1>
+          <p class="overview-copy">Configure private /status reports for your Telegram accounts.</p></div></header>
+        <section class="security-card" aria-labelledby="telegram-title">
+          <h2 id="telegram-title">Telegram bot settings</h2>
+          <p id="telegram-status" role="status">Loading Telegram settings…</p>
+          <p id="telegram-token-status" class="muted"></p>
+          <p id="telegram-error" class="broker-notice" role="alert" hidden></p>
+          <button id="telegram-refresh" class="secondary-button" type="button">Refresh settings</button>
+          <form id="telegram-form" class="user-form" autocomplete="off">
+            <label class="checkbox-label"><input id="telegram-enabled" type="checkbox">Enable Telegram reports</label>
+            <label for="telegram-token">Bot token</label>
+            <input id="telegram-token" type="password" autocomplete="new-password" maxlength="150" spellcheck="false" placeholder="Leave blank to keep the saved token" aria-describedby="telegram-token-copy">
+            <small id="telegram-token-copy">Create a dedicated bot with @BotFather. Saved tokens are never displayed. Enter a token only to set or replace it.</small>
+            <label for="telegram-users">Allowed Telegram user IDs</label>
+            <input id="telegram-users" type="text" maxlength="2200" autocomplete="off" spellcheck="false" placeholder="123456789, 987654321" aria-describedby="telegram-users-copy">
+            <small id="telegram-users-copy">Numeric user IDs, separated by commas. Only these accounts receive replies in private chats. Usernames and group IDs are not supported.</small>
+            <p class="muted">Enabled bots send hostname, IP addresses, versions and usage to Telegram when an allowed user requests /status. Saving applies only to Telegram services. Local service state does not confirm Telegram connectivity.</p>
+            <button id="telegram-save" class="primary-button" type="submit">Save Telegram settings</button>
+          </form>
+        </section>
       </main>
       <main id="security-view" hidden>
         <header><div><p class="eyebrow">ACCOUNT PROTECTION</p><h1 class="overview-title">Security</h1>

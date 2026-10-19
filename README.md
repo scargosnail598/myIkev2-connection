@@ -83,6 +83,34 @@ every 30 seconds, so totals survive VPN service and server restarts.
 
 The Windows utility supports both Full Tunnel and Proxy Mode without requiring separate VPN profiles.
 
+## Optional Telegram status bot
+
+Use `/status` in a private Telegram chat to see the hostname, installed server
+and StrongSwan versions, local IPv4/IPv6 addresses, uptime, system load, RAM,
+active VPN session/user counts, TCP/UDP socket counts, selected-interface traffic
+and VPN service status. `/start` and `/help` show the available commands.
+Only explicitly allowed numeric Telegram user IDs receive replies.
+
+Install/update the Web UI from a full checkout on the Ubuntu VPN server:
+
+```bash
+sudo ./packaging/install-webui.sh install
+```
+
+Open **Telegram** in the panel, enter the token from your dedicated
+[@BotFather](https://t.me/BotFather) bot and allowed numeric Telegram user IDs,
+choose **Enable Telegram reports**, and save. This page also replaces tokens,
+edits allowed accounts, shows local service states and disables reports.
+Saved tokens are never returned to the browser; a blank token preserves the
+existing one. Web UI deployment prepares the bot without prompting for a token
+or enabling an unconfigured bot. The standalone CLI remains optional.
+
+The bot uses outbound HTTPS polling with no webhook or inbound port. It runs as
+a separate unprivileged user, consumes an aggregate local snapshot every 30
+seconds, and cannot control services or read VPN credentials. The private token
+stays in `/etc/ikev2-telegram/config.json`, outside the checkout. It works without
+the Web UI. See [setup, report semantics, troubleshooting and removal](docs/telegram-bot.md).
+
 ## Web UI
 
 The repository includes an authenticated, local-only management dashboard. It

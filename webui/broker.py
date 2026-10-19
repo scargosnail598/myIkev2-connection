@@ -24,6 +24,7 @@ from webui.metrics import MetricsReader
 from webui.limits import validate_limits
 from webui.sessions import SessionReader
 from webui.users import UserError, UserManager, validate_change, validate_export
+from webui.telegram import TelegramManager, validate_settings
 
 
 PROTOCOL_VERSION = 1
@@ -221,7 +222,11 @@ class BrokerRequestHandler(socketserver.StreamRequestHandler):
         if action == "ping":
             installed = installation_state()
             self._reply({"ok": True, "version": PROTOCOL_VERSION, "installed": installed,
-                         "user_management": installed is True, "profile_export": installed is True, "user_limits": installed is True, "session_monitoring": installed is True, "diagnostics": True, "metrics": True})
+                         "user_management": installed is True, "profile_export": installed is True, "user_limits": installed is True, "session_monitoring": installed is True, "diagnostics": True, "metrics": True,
+                         "telegram_settings": self.server.telegram.store.installed()})
+            return
+        if action in {"telegram_settings", "telegram_save"}:
+            self._telegram(request, peer_uid)
             return
         if action == "metrics":
             if set(request) != {"version", "action"}:
@@ -282,6 +287,27 @@ class BrokerRequestHandler(socketserver.StreamRequestHandler):
             return
         self._reply(response)
 
+    def _telegram(self, request: dict, peer_uid: int) -> None:
+        try:
+            if request["action"] == "telegram_settings":
+                if set(request) != {"version", "action"}:
+                    raise UserError("invalid_fields", "Telegram status accepts no arguments.")
+                self._reply(self.server.telegram.settings())
+                return
+            validate_settings(request)
+            fields = {"peer_uid": peer_uid, "target": "telegram", "operation": "save", "action": "telegram_settings"}
+            self.server.audit.write(**fields, stage="requested", ok=None)
+            try:
+                response = self.server.telegram.save(request)
+            except UserError as error:
+                response = error.result()
+            self.server.audit.write(**fields, stage="completed", ok=response.get("ok") is True)
+            self._reply(response)
+        except UserError as error:
+            self._reply(error.result())
+        except (OSError, ValueError):
+            self._reply({"ok": False, "status": 503, "message": "Telegram configuration or audit storage is unavailable."})
+
     def _users(self, request: dict, peer_uid: int) -> None:
         action = request["action"]
         fields = None
@@ -337,6 +363,7 @@ class BrokerServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
         sessions: SessionReader | None = None,
         diagnostics: DiagnosticsReader | None = None,
         metrics: MetricsReader | None = None,
+        telegram: TelegramManager | None = None,
     ):
         self.socket_path = socket_path
         self.allowed_uid = allowed_uid
@@ -346,6 +373,7 @@ class BrokerServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
         self.sessions = sessions or SessionReader()
         self.diagnostics = diagnostics or DiagnosticsReader()
         self.metrics = metrics or MetricsReader()
+        self.telegram = telegram or TelegramManager()
         self._prepare_socket_path(socket_gid)
         super().__init__(str(socket_path), BrokerRequestHandler)
         os.chown(socket_path, 0 if os.geteuid() == 0 else os.geteuid(), socket_gid)
@@ -427,6 +455,12 @@ class BrokerClient:
 
     def metrics(self) -> dict:
         return self.request({"action": "metrics"})
+
+    def telegram_settings(self) -> dict:
+        return self.request({"action": "telegram_settings"}, timeout=20)
+
+    def save_telegram(self, payload: dict) -> dict:
+        return self.request({**payload, "action": "telegram_save"}, timeout=120)
 
     def diagnostics(self) -> dict:
         return self.request({"action": "diagnostics"}, timeout=25)

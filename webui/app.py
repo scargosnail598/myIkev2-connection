@@ -75,11 +75,13 @@ class SystemStatusProvider:
         session_monitoring = False
         diagnostics = False
         metrics = False
+        telegram_settings = False
         if self._broker:
             try:
                 status = self._broker.status()
                 broker_available = status.get("ok") is True
                 metrics = broker_available and status.get("metrics") is True
+                telegram_settings = broker_available and status.get("telegram_settings") is True
                 diagnostics = broker_available and status.get("diagnostics") is True
                 session_monitoring = broker_available and status.get("session_monitoring") is True
                 user_limits = broker_available and status.get("user_limits") is True
@@ -102,6 +104,7 @@ class SystemStatusProvider:
                 "session_monitoring": session_monitoring,
                 "diagnostics": diagnostics,
                 "metrics": metrics,
+                "telegram_settings": telegram_settings,
             },
         }
 
@@ -168,6 +171,10 @@ class Ikev2RequestHandler(BaseHTTPRequestHandler):
                 self._send_json(result)
             else:
                 self._send_json({"message": "Server metrics could not be read."}, HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+        if path == "/api/telegram":
+            if self._require_session() is not None:
+                self._telegram_result(self.broker.telegram_settings)
             return
         if path == "/api/diagnostics":
             if self._require_session() is None:
@@ -280,6 +287,17 @@ class Ikev2RequestHandler(BaseHTTPRequestHandler):
                 result = self.auth.cancel_two_factor(token)
             self._send_json(result)
             return
+        if path == "/api/telegram":
+            try:
+                payload = self._read_json()
+            except ValueError as error:
+                self._send_json({"message": str(error)}, HTTPStatus.BAD_REQUEST)
+                return
+            if set(payload) - {"revision", "enabled", "allowed_user_ids", "bot_token"}:
+                self._send_json({"message": "Unsupported Telegram settings fields."}, HTTPStatus.BAD_REQUEST)
+                return
+            self._telegram_result(lambda: self.broker.save_telegram(payload))
+            return
         parts = path.strip("/").split("/")
         if len(parts) == 3 and parts[:2] == ["api", "users"]:
             if parts[2] not in {"create", "reset", "delete", "export", "limits_set", "usage_reset"}:
@@ -316,6 +334,21 @@ class Ikev2RequestHandler(BaseHTTPRequestHandler):
             {"error": "write_operations_disabled", "message": "Privileged broker is not enabled."},
             status=HTTPStatus.METHOD_NOT_ALLOWED,
         )
+
+    def _telegram_result(self, operation) -> None:
+        try:
+            result = operation()
+        except BrokerError:
+            self._send_json({"message": "Telegram settings are unavailable. Update the Web UI and broker."}, HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+        if result.get("ok") is True:
+            # Never relay a token, even if an incompatible broker includes extra fields.
+            allowed = {"ok", "installed", "configured", "enabled", "allowed_user_ids", "bot_state", "collector_state", "state_known", "revision"}
+            self._send_json({key: value for key, value in result.items() if key in allowed})
+        else:
+            status = result.get("status", 503)
+            self._send_json({"message": result.get("message", "Telegram settings are unavailable.")},
+                            status if type(status) is int and status in {400, 409, 503} else 503)
 
     def _user_result(self, operation) -> None:
         try:

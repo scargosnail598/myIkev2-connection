@@ -9,6 +9,7 @@ on:
       - ".github/workflows/ci.yml"
       - "tests/**"
       - "webui/**"
+      - "telegram_bot/**"
       - "packaging/**"
       - ".github/workflows/deploy-webui.yml"
   pull_request:
@@ -19,6 +20,7 @@ on:
       - ".github/workflows/ci.yml"
       - "tests/**"
       - "webui/**"
+      - "telegram_bot/**"
       - "packaging/**"
       - ".github/workflows/deploy-webui.yml"
 
@@ -37,8 +39,8 @@ jobs:
 
       - name: Check Bash scripts
         run: |
-          bash -n ikev2-strongswan-ubuntu.sh ikev2-linux-client.sh packaging/install-webui.sh packaging/reset-webui-password.sh packaging/install-arvan-proxy.sh
-          shellcheck --severity=warning ikev2-strongswan-ubuntu.sh ikev2-linux-client.sh packaging/install-webui.sh packaging/reset-webui-password.sh packaging/install-arvan-proxy.sh
+          bash -n ikev2-strongswan-ubuntu.sh ikev2-linux-client.sh packaging/install-webui.sh packaging/reset-webui-password.sh packaging/install-arvan-proxy.sh packaging/install-telegram-bot.sh
+          shellcheck --severity=warning ikev2-strongswan-ubuntu.sh ikev2-linux-client.sh packaging/install-webui.sh packaging/reset-webui-password.sh packaging/install-arvan-proxy.sh packaging/install-telegram-bot.sh
 
       - name: Check Web UI JavaScript syntax
         run: |
@@ -46,7 +48,7 @@ jobs:
           node --check webui/static/qrcodegen.js
           node --check tests/test_webui_browser.cjs
 
-      - name: Test ACME and Web UI
+      - name: Test ACME, Web UI and Telegram bot
         run: python3 -B -m unittest discover -s tests -v
 
       - name: Check PowerShell syntax

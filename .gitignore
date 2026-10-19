@@ -6,3 +6,4 @@ captures/
 __pycache__/
 *.py[cod]
 webui-config.json
+telegram-bot-config.json

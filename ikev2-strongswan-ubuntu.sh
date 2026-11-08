@@ -6,7 +6,7 @@ IFS=$'\n\t'
 # Uses StrongSwan, EAP-MSCHAPv2, selectable Private CA or ACME trust, and IPv4 full-tunnel NAT.
 
 INSTALLER_NAME="ikev2-easy-installer"
-CURRENT_INSTALLER_VERSION="6.4.10-en"
+CURRENT_INSTALLER_VERSION="6.4.11-en"
 INSTALLER_VERSION="$CURRENT_INSTALLER_VERSION"
 
 STATE_DIR="/var/lib/${INSTALLER_NAME}"
@@ -215,7 +215,7 @@ run_webui_tool() (
     install-webui.sh|setup-cdn-proxy.sh) ;;
     *) warn "Unsupported Web UI tool."; return 1 ;;
   esac
-  local source_dir version artifact base_url work_dir expected actual dependency
+  local source_dir version artifact work_dir expected actual dependency
   source_dir=$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")") || return 1
   for dependency in python3 curl sha256sum; do
     if ! command_exists "$dependency"; then
@@ -231,15 +231,12 @@ run_webui_tool() (
   if [[ ! -f "${source_dir}/packaging/${tool}" ]]; then
     version=$(installer_semver)
     artifact="ikev2-webui-v${version}.tar.gz"
-    base_url="https://github.com/${GITHUB_REPO}/releases/download/${GITHUB_RELEASE_TAG_PREFIX}${version}"
     work_dir=$(mktemp -d) || return 1
     trap 'rm -rf -- "$work_dir"' EXIT
     info "Downloading optional Web UI bundle for server v${version}..."
-    if ! curl -fsSL --retry 3 --connect-timeout 10 --max-time 120 \
-        -o "${work_dir}/${artifact}" "${base_url}/${artifact}" ||
-        ! curl -fsSL --retry 3 --connect-timeout 10 --max-time 30 \
-        -o "${work_dir}/SHA256SUMS" "${base_url}/SHA256SUMS"; then
-      warn "The matching Web UI release bundle is unavailable. Use a full repository checkout and run: sudo bash packaging/install-webui.sh install"
+    if ! download_release_asset "${GITHUB_RELEASE_TAG_PREFIX}${version}" "$artifact" "${work_dir}/${artifact}" ||
+        ! download_release_asset "${GITHUB_RELEASE_TAG_PREFIX}${version}" SHA256SUMS "${work_dir}/SHA256SUMS"; then
+      warn "Could not download the matching Web UI bundle through either GitHub route. Check connectivity/rate limits and retry, or use a full repository checkout."
       return 1
     fi
     expected=$(awk -v file="$artifact" '$2 == file || $2 == "./" file {print $1; exit}' "${work_dir}/SHA256SUMS") || return 1
@@ -279,6 +276,87 @@ PYTHON
     return 1
   fi
   bash "${source_dir}/packaging/${tool}" "$@"
+)
+
+
+# The public asset API bypasses the browser-download gateway when it fails.
+# Callers still verify the release SHA256SUMS before using any downloaded code.
+download_release_asset() (
+  local release_tag="$1" asset_name="$2" destination="$3"
+  local stage asset_id api_digest actual
+  [[ "$release_tag" =~ ^server-v[0-9]+\.[0-9]+\.[0-9]+$ &&
+      "$asset_name" =~ ^[A-Za-z0-9._-]+$ ]] || {
+    warn "Invalid release asset request."
+    return 1
+  }
+  stage=$(mktemp -d) || return 1
+  trap 'rm -rf -- "$stage"' EXIT
+  if curl -fsSL --proto '=https' --proto-redir '=https' \
+      --connect-timeout 10 --max-time 30 \
+      -o "$stage/asset" "https://github.com/${GITHUB_REPO}/releases/download/${release_tag}/${asset_name}"; then
+    mv -f -- "$stage/asset" "$destination"
+    return $?
+  fi
+
+  warn "Direct GitHub download failed; trying the public asset API for ${asset_name}."
+  command -v python3 >/dev/null 2>&1 || {
+    warn "Python 3 is required for the API fallback. Install python3 and retry."
+    return 1
+  }
+  if ! curl -fsSL --proto '=https' --proto-redir '=https' --retry 2 \
+      --connect-timeout 10 --max-time 30 \
+      -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28' \
+      -o "$stage/release.json" "https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${release_tag}"; then
+    warn "GitHub release metadata could not be fetched; check connectivity and API rate limits."
+    return 1
+  fi
+  if ! python3 - "$stage/release.json" "$release_tag" "$asset_name" > "$stage/asset-info" <<'PYTHON'
+import json
+from pathlib import Path
+import re
+import sys
+try:
+    release = json.loads(Path(sys.argv[1]).read_text())
+    if release.get("tag_name") != sys.argv[2] or release.get("draft") or release.get("prerelease"):
+        raise ValueError()
+    assets = [item for item in release["assets"] if item.get("name") == sys.argv[3]]
+    if len(assets) != 1:
+        raise ValueError()
+    asset = assets[0]
+    if type(asset.get("id")) is not int or asset["id"] <= 0 or asset.get("state", "uploaded") != "uploaded":
+        raise ValueError()
+    digest = asset.get("digest") or ""
+    if digest and not re.fullmatch(r"sha256:[a-fA-F0-9]{64}", digest):
+        raise ValueError()
+    print(asset["id"])
+    print(digest)
+except (OSError, ValueError, KeyError, TypeError, AttributeError):
+    raise SystemExit("GitHub metadata does not identify exactly one matching published asset") from None
+PYTHON
+  then
+    warn "The requested file was not found in valid matching release metadata."
+    return 1
+  fi
+  {
+    IFS= read -r asset_id
+    IFS= read -r api_digest
+  } < "$stage/asset-info"
+  if ! curl -fsSL --proto '=https' --proto-redir '=https' --retry 2 \
+      --connect-timeout 10 --max-time 120 \
+      -H 'Accept: application/octet-stream' -H 'X-GitHub-Api-Version: 2022-11-28' \
+      -o "$stage/asset" "https://api.github.com/repos/${GITHUB_REPO}/releases/assets/${asset_id}"; then
+    warn "GitHub asset API download failed; the destination was not changed."
+    return 1
+  fi
+  if [[ -n "$api_digest" ]]; then
+    actual=$(sha256sum "$stage/asset") || return 1
+    actual=${actual%% *}
+    [[ "${api_digest,,}" == "sha256:${actual,,}" ]] || {
+      warn "GitHub API asset digest verification failed; the destination was not changed."
+      return 1
+    }
+  fi
+  mv -f -- "$stage/asset" "$destination"
 )
 
 install_optional_webui() {
@@ -892,14 +970,8 @@ perform_installer_update() (
   tmp_artifact="$tmp_dir/$artifact"
 
   log "Downloading release ${release_tag}..."
-  curl -fsSL --retry 3 --connect-timeout 10 --max-time 120 \
-    -o "$tmp_artifact" \
-    "https://github.com/${GITHUB_REPO}/releases/download/${release_tag}/${artifact}" \
-    || die "Failed to download ${artifact}."
-  curl -fsSL --retry 3 --connect-timeout 10 --max-time 30 \
-    -o "$sums" \
-    "https://github.com/${GITHUB_REPO}/releases/download/${release_tag}/SHA256SUMS" \
-    || die "Failed to download release checksums."
+  download_release_asset "$release_tag" "$artifact" "$tmp_artifact" || die "Failed to download ${artifact}."
+  download_release_asset "$release_tag" SHA256SUMS "$sums" || die "Failed to download release checksums."
 
   expected="$(awk -v file="$artifact" '$2 == file || $2 == "./" file {print $1; exit}' "$sums")" || die "Unable to read release checksums."
   [[ "$expected" =~ ^[a-fA-F0-9]{64}$ ]] || die "No valid SHA256 entry found for ${artifact}."

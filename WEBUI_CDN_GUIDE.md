@@ -51,6 +51,13 @@ hostname and port. It does not change the VPN, DNS, CA trust or firewall rules.
 For an encrypted CDN-to-origin leg use your own HTTPS reverse proxy below;
 this wizard's origin transport is HTTP.
 
+If release downloads fail with HTTP 504, installer 6.4.11 and later automatically
+try the public GitHub asset API, without a token. The exact release and asset
+are checked, any API digest is verified, and the release SHA256SUMS check stays
+mandatory. API failures/rate limits still stop setup safely. On 6.4.10 or older,
+manually update the installer first if its direct-only updater is also blocked.
+A gateway error does not mean the Web UI package is absent from the release.
+
 ## 1. Prepare the panel and hostname
 
 Install the panel on the Ubuntu VPN server:

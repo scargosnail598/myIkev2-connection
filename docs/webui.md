@@ -23,7 +23,9 @@ sudo bash ./ikev2-strongswan-ubuntu.sh webui
 The main script uses the checkout beside it when `packaging/install-webui.sh`
 is present. Otherwise it downloads `ikev2-webui-v<server-version>.tar.gz` and
 `SHA256SUMS` from the matching `server-v<server-version>` GitHub Release,
-verifies the SHA256 checksum, checks archive paths/types, and installs from a
+uses the public asset API if the browser-download URL fails (including 504),
+validates matching metadata and any API digest, verifies the mandatory release
+SHA256 checksum, checks archive paths/types, and installs from a
 private temporary directory which it removes on exit. It never falls back to
 an arbitrary branch or a different version. The standalone route requires
 Python 3, curl, CA certificates and coreutils; on a minimal Ubuntu image install

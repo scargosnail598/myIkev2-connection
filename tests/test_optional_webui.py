@@ -2,6 +2,7 @@
 
 import hashlib
 import io
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -77,18 +78,25 @@ exit "${HELPER_EXIT:-0}"
         digest = hashlib.sha256(archive.read_bytes()).hexdigest()
         sums = self.root / "fixture.sums"
         sums.write_text(f"{digest}  ./ikev2-webui-v9.8.7.tar.gz\n")
-        self.env.update(FIXTURE_BUNDLE=str(archive), FIXTURE_SUMS=str(sums))
+        self.metadata = self.root / "release.json"
+        self.write_metadata()
+        self.env.update(FIXTURE_BUNDLE=str(archive), FIXTURE_SUMS=str(sums),
+                        FIXTURE_METADATA=str(self.metadata))
         curl = self.bin / "curl"
         curl.write_text('''#!/usr/bin/env bash
 set -Eeuo pipefail
 printf 'curl %s\\n' "${!#}" >> "$TRACE"
 [[ "${FAIL_DOWNLOAD:-no}" != yes ]] || exit 22
+if [[ "${FAIL_DIRECT:-no}" == yes && "${!#}" == https://github.com/* ]]; then exit 22; fi
 while [[ $# -gt 0 ]]; do
   if [[ "$1" == -o ]]; then target="$2"; shift; fi
   url="$1"
   shift
 done
 case "$url" in
+  */releases/tags/server-v9.8.7) cp "$FIXTURE_METADATA" "$target" ;;
+  */releases/assets/101) cp "$FIXTURE_BUNDLE" "$target" ;;
+  */releases/assets/102) cp "$FIXTURE_SUMS" "$target" ;;
   */ikev2-webui-v9.8.7.tar.gz) cp "$FIXTURE_BUNDLE" "$target" ;;
   */SHA256SUMS) cp "$FIXTURE_SUMS" "$target" ;;
   *) exit 99 ;;
@@ -96,6 +104,75 @@ esac
 ''')
         curl.chmod(0o755)
         return sums
+
+    def write_metadata(self):
+        self.metadata.write_text(json.dumps({"tag_name": "server-v9.8.7", "draft": False,
+            "prerelease": False, "assets": [
+                {"id": 101, "name": "ikev2-webui-v9.8.7.tar.gz", "state": "uploaded",
+                 "digest": "sha256:" + hashlib.sha256((self.root / "fixture.tar.gz").read_bytes()).hexdigest()},
+                {"id": 102, "name": "SHA256SUMS", "state": "uploaded",
+                 "digest": "sha256:" + hashlib.sha256((self.root / "fixture.sums").read_bytes()).hexdigest()},
+            ]}))
+
+    def test_gateway_failure_uses_public_api_for_bundle_and_checksums(self):
+        self.bundle()
+        self.env["FAIL_DIRECT"] = "yes"
+        result = self.run_script(WRAPPER + '\ninstall_webui\n')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("trying the public asset API", result.stderr)
+        self.assertIn("releases/assets/101", self.calls())
+        self.assertIn("releases/assets/102", self.calls())
+        self.assertIn("panel install", self.calls())
+        self.assertEqual(list(self.scratch.iterdir()), [])
+
+    def test_api_fallback_keeps_password_stdin_available(self):
+        self.helper = self.helper.replace('exit "${HELPER_EXIT:-0}"',
+                                          'cat > "$TRACE.stdin"\nexit "${HELPER_EXIT:-0}"')
+        self.bundle()
+        self.env["FAIL_DIRECT"] = "yes"
+        result = self.run_script(WRAPPER + '\ninstall_webui --password-stdin\n', "disposable-password")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(Path(str(self.trace) + ".stdin").read_text(), "disposable-password")
+        self.assertNotIn("disposable-password", result.stdout + result.stderr + self.calls())
+
+    def test_api_fallback_rejects_wrong_release_or_asset(self):
+        self.bundle()
+        self.env["FAIL_DIRECT"] = "yes"
+        for updates in ({"tag_name": "server-v0.0.1"}, {"draft": True},
+                        {"prerelease": True}, {"assets": []},
+                        {"assets": [{"id": "101", "name": "ikev2-webui-v9.8.7.tar.gz"}]}):
+            with self.subTest(updates=updates):
+                self.write_metadata()
+                metadata = json.loads(self.metadata.read_text())
+                metadata.update(updates)
+                self.metadata.write_text(json.dumps(metadata))
+                result = self.run_script(WRAPPER + '\ninstall_webui\n')
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn("panel install", self.calls())
+                self.assertEqual(list(self.scratch.iterdir()), [])
+
+    def test_api_fallback_rejects_digest_mismatch(self):
+        self.bundle()
+        self.env["FAIL_DIRECT"] = "yes"
+        metadata = json.loads(self.metadata.read_text())
+        metadata["assets"][0]["digest"] = "sha256:" + "0" * 64
+        self.metadata.write_text(json.dumps(metadata))
+        result = self.run_script(WRAPPER + '\ninstall_webui\n')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("digest verification failed", result.stderr)
+        self.assertNotIn("panel install", self.calls())
+        self.assertEqual(list(self.scratch.iterdir()), [])
+
+    def test_api_digest_does_not_replace_mandatory_release_checksum(self):
+        sums = self.bundle()
+        sums.write_text("0" * 64 + "  ikev2-webui-v9.8.7.tar.gz\n")
+        self.write_metadata()  # API digests match both downloaded files.
+        self.env["FAIL_DIRECT"] = "yes"
+        result = self.run_script(WRAPPER + '\ninstall_webui\n')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("checksum verification failed", result.stderr)
+        self.assertNotIn("panel install", self.calls())
+        self.assertEqual(list(self.scratch.iterdir()), [])
 
     def test_checkout_install_passes_options_without_download(self):
         self.local_helper()

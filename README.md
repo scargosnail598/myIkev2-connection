@@ -6,7 +6,7 @@ or install the optional Web UI during initial setup or later.
 
 | Component | File | Version / platform |
 | --- | --- | --- |
-| VPN server | `ikev2-strongswan-ubuntu.sh` | 6.4.10 / Ubuntu 22.04, 24.04 |
+| VPN server | `ikev2-strongswan-ubuntu.sh` | 6.4.11 / Ubuntu 22.04, 24.04 |
 | Windows client | `ikev2-windows-client.ps1` | 6.4.7 / PowerShell 5.1+ |
 | Linux client | `ikev2-linux-client.sh` | 1.9.8 / Ubuntu 22.04, 24.04 |
 | Web UI | `packaging/install-webui.sh` | Python 3 + systemd; optional |
@@ -209,9 +209,17 @@ removed on success or failure. State-write failure attempts to restore the
 previous script. Self-update does not restart VPN services or deploy Web UI/CDN
 application files; use `webui` separately to update those components.
 
-Version **6.4.10** includes the CDN wizard and these updater fixes. Publishing
-its server release is required before a deployed 6.4.9 installer can receive it
-automatically. Preparing source files does not publish a release.
+Version **6.4.11** adds a public GitHub asset API fallback when browser download
+URLs fail (for example with HTTP 504). It applies to the installer, Web UI/CDN
+bundle and checksum file. No GitHub account/token is required. The fallback
+validates the exact release/asset, checks its API digest when supplied and keeps
+the mandatory release checksum checks. Python 3 is needed for this fallback.
+API failure, rate limits or invalid metadata stop the operation without running
+downloaded code. No mirror, branch archive or other version is used.
+
+Installers up to 6.4.10 lack this fallback. If their own updater is blocked,
+manually update the installer to 6.4.11 first, then retry `update`, `webui` or
+`cdn`. VPN provisioning does not need to be repeated.
 
 ## Connect Windows or Linux
 
@@ -297,8 +305,8 @@ are unchanged from `linux-v1.9.8` and `windows-v6.4.7`, so publish this server
 version without moving or recreating those tags:
 
 ```bash
-git tag -a server-v6.4.10 -m "Server v6.4.10"
-git push origin server-v6.4.10
+git tag -a server-v6.4.11 -m "Server v6.4.11"
+git push origin server-v6.4.11
 ```
 
 When changing a client, bump its embedded version and publish its new component

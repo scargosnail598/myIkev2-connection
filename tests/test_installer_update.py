@@ -10,6 +10,7 @@ import unittest
 
 REPO = Path(__file__).resolve().parents[1]
 SOURCE = (REPO / 'ikev2-strongswan-ubuntu.sh').read_text().split('\nmain "$@"\n', 1)[0]
+DOWNLOAD = SOURCE[SOURCE.index("\ndownload_release_asset() (") + 1:SOURCE.index("\ninstall_optional_webui() {")]
 FUNCTIONS = SOURCE[SOURCE.index('\ninstaller_semver() {') + 1:SOURCE.index('\ngenerate_password() {')]
 MAIN = SOURCE[SOURCE.index('\nmain() {') + 1:]
 
@@ -43,11 +44,15 @@ url="${!#}"
 printf '%s\n' "$url" >> "$TRACE"
 if [[ "$url" == */releases/latest ]]; then cat "$FIXTURE_RELEASE"; exit 0; fi
 [[ "${DOWNLOAD_FAIL:-no}" != yes ]] || exit 22
+if [[ "${FAIL_DIRECT:-no}" == yes && "$url" == https://github.com/* ]]; then exit 22; fi
 while [[ $# -gt 0 ]]; do
   if [[ "$1" == -o ]]; then output="$2"; shift; fi
   shift
 done
 case "$url" in
+  */releases/tags/server-v6.4.10) cp "$FIXTURE_RELEASE" "$output" ;;
+  */releases/assets/201) cp "$FIXTURE_ARTIFACT" "$output" ;;
+  */releases/assets/202) cp "$FIXTURE_SUMS" "$output" ;;
   */SHA256SUMS) cp "$FIXTURE_SUMS" "$output" ;;
   *.sh) cp "$FIXTURE_ARTIFACT" "$output" ;;
   *) exit 99 ;;
@@ -69,6 +74,13 @@ exec /usr/bin/mv "$@"
         digest = hashlib.sha256(self.artifact.read_bytes()).hexdigest()
         self.sums = self.root / 'sums'
         self.sums.write_text(f'{digest}  ./ikev2-strongswan-ubuntu-v6.4.10.sh\n')
+        release = json.loads(self.release.read_text())
+        release['assets'] = [
+            {'id': 201, 'name': 'ikev2-strongswan-ubuntu-v6.4.10.sh', 'digest': 'sha256:' + digest},
+            {'id': 202, 'name': 'SHA256SUMS',
+             'digest': 'sha256:' + hashlib.sha256(self.sums.read_bytes()).hexdigest()},
+        ]
+        self.release.write_text(json.dumps(release, indent=2))
 
     def run_update(self, relaunch=False, dispatch=False):
         prelude = '''set -Eeuo pipefail
@@ -92,7 +104,7 @@ die() { printf '%s\\n' "$*" >&2; exit 1; }
 ask_yes_no() { [[ "${CONFIRM:-yes}" == yes ]]; }
 '''
         invocation = 'main update' if dispatch else ('update_installer --relaunch' if relaunch else 'update_installer')
-        self.original_script = prelude + FUNCTIONS + (MAIN if dispatch else '') + '\n' + invocation + '\nprintf "OLD-TAIL\\n"\n'
+        self.original_script = prelude + DOWNLOAD + FUNCTIONS + (MAIN if dispatch else '') + '\n' + invocation + '\nprintf "OLD-TAIL\\n"\n'
         self.script.write_text(self.original_script)
         return subprocess.run(['bash', str(self.script)], env=self.env,
                               text=True, capture_output=True, timeout=15)
@@ -134,6 +146,15 @@ ask_yes_no() { [[ "${CONFIRM:-yes}" == yes ]]; }
         self.assertEqual(len(backups), 1)
         self.assertEqual(backups[0].read_text(), self.original_script)
         self.assertIn('Run the installer again', result.stdout)
+        self.assert_cleanup()
+
+    def test_updater_uses_api_fallback_and_keeps_version_and_checksum_checks(self):
+        self.env['FAIL_DIRECT'] = 'yes'
+        result = self.run_update()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.script.read_bytes(), self.artifact.read_bytes())
+        self.assertIn('releases/assets/201', self.trace.read_text())
+        self.assertIn('releases/assets/202', self.trace.read_text())
         self.assert_cleanup()
 
     def test_update_before_vpn_install_does_not_require_managed_state(self):

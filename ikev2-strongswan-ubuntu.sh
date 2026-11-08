@@ -195,7 +195,75 @@ reset_webui_password() {
 }
 
 show_about() {
-  printf '\nIKEv2 StrongSwan Server v%s manages VPN installation, certificates, users, firewall, routing, DNS, client profiles, and optional SOCKS5 Proxy Mode on Ubuntu.\n\n' "$CURRENT_INSTALLER_VERSION"
+  printf '\nIKEv2 StrongSwan Server v%s manages VPN installation, certificates, users, firewall, routing, DNS, client profiles, optional SOCKS5 Proxy Mode, and an optional Web UI on Ubuntu.\n\n' "$CURRENT_INSTALLER_VERSION"
+}
+
+# Prefer a checkout; standalone release scripts fetch the matching, checked bundle.
+install_webui() (
+  local source_dir version artifact base_url work_dir expected actual dependency
+  source_dir=$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")") || return 1
+  for dependency in python3 curl sha256sum; do
+    if ! command_exists "$dependency"; then
+      warn "Web UI requires ${dependency}. Install prerequisites with: sudo apt-get install python3 curl ca-certificates coreutils"
+      return 1
+    fi
+  done
+
+  if [[ ! -f "${source_dir}/packaging/install-webui.sh" ]]; then
+    version=$(installer_semver)
+    artifact="ikev2-webui-v${version}.tar.gz"
+    base_url="https://github.com/${GITHUB_REPO}/releases/download/${GITHUB_RELEASE_TAG_PREFIX}${version}"
+    work_dir=$(mktemp -d) || return 1
+    trap 'rm -rf -- "$work_dir"' EXIT
+    info "Downloading optional Web UI bundle for server v${version}..."
+    if ! curl -fsSL --retry 3 --connect-timeout 10 --max-time 120 \
+        -o "${work_dir}/${artifact}" "${base_url}/${artifact}" ||
+        ! curl -fsSL --retry 3 --connect-timeout 10 --max-time 30 \
+        -o "${work_dir}/SHA256SUMS" "${base_url}/SHA256SUMS"; then
+      warn "The matching Web UI release bundle is unavailable. Use a full repository checkout and run: sudo bash packaging/install-webui.sh install"
+      return 1
+    fi
+    expected=$(awk -v file="$artifact" '$2 == file || $2 == "./" file {print $1; exit}' "${work_dir}/SHA256SUMS") || return 1
+    actual=$(sha256sum "${work_dir}/${artifact}") || return 1
+    actual=${actual%% *}
+    if [[ ! "$expected" =~ ^[a-fA-F0-9]{64}$ || "${actual,,}" != "${expected,,}" ]]; then
+      warn "Web UI checksum verification failed; no downloaded code was run."
+      return 1
+    fi
+
+    # Reject links and paths outside the three application directories before extraction.
+    if ! python3 - "${work_dir}/${artifact}" "${work_dir}/source" <<'PYTHON'
+from pathlib import Path, PurePosixPath
+import sys
+import tarfile
+
+with tarfile.open(sys.argv[1], "r:gz") as archive:
+    members = archive.getmembers()
+    for member in members:
+        path = PurePosixPath(member.name)
+        if (path.is_absolute() or ".." in path.parts or not path.parts
+                or path.parts[0] not in {"webui", "telegram_bot", "packaging"}
+                or not (member.isfile() or member.isdir())):
+            raise SystemExit("Unsafe Web UI bundle member")
+    Path(sys.argv[2]).mkdir(mode=0o700)
+    archive.extractall(sys.argv[2], members=members)
+PYTHON
+    then
+      warn "Could not safely extract the Web UI bundle."
+      return 1
+    fi
+    source_dir="${work_dir}/source"
+  fi
+
+  info "Installing the optional Web UI (loopback only); set the panel admin password when prompted."
+  bash "${source_dir}/packaging/install-webui.sh" install "$@"
+)
+
+install_optional_webui() {
+  if ! install_webui; then
+    warn "Optional Web UI installation did not complete. The VPN installation is complete; panel files or services may be partially installed."
+    warn "Review the error and retry with: sudo bash $0 webui"
+  fi
 }
 
 on_error() {
@@ -1855,7 +1923,7 @@ show_install_result() {
 install_vpn() {
   [[ ! -f "$STATE_FILE" ]] || die "A managed installation already exists. Run status or uninstall first."
 
-  local detected_iface detected_ip overlap
+  local detected_iface detected_ip overlap webui_requested="no"
   detected_iface=$(default_interface)
   [[ -n "$detected_iface" ]] || die "No default IPv4 route was found."
   detected_ip=$(interface_ipv4 "$detected_iface")
@@ -2008,6 +2076,13 @@ install_vpn() {
 
   collect_users
 
+  printf '\n%bOptional Web UI%b\n' "$BOLD" "$RESET"
+  printf '  Install the management panel and root broker after VPN setup; access through an SSH tunnel.\n'
+  printf '  Standalone scripts download the matching release bundle and verify its SHA256 checksum.\n'
+  if ask_yes_no "Install the Web UI management panel too?" N; then
+    webui_requested="yes"
+  fi
+
   printf '\n%bInstallation summary%b\n' "$BOLD" "$RESET"
   printf '  Server ID          : %s\n' "$SERVER_ID"
   printf '  Internet interface : %s\n' "$OUT_IF"
@@ -2027,6 +2102,8 @@ install_vpn() {
   else
     printf '  SOCKS5 Proxy Mode  : disabled\n'
   fi
+
+  printf '  Install Web UI     : %s\n' "$webui_requested"
 
   if ! ask_yes_no "Proceed with installation?" Y; then
     info "Installation canceled by the user."
@@ -2057,6 +2134,9 @@ install_vpn() {
     write_state
   fi
   show_install_result
+  if [[ "$webui_requested" == "yes" ]]; then
+    install_optional_webui
+  fi
 }
 
 safe_purge_new_packages() {
@@ -4027,8 +4107,9 @@ interactive_menu() {
       printf '  11) Uninstall\n'
       printf '  12) About\n'
       printf '  13) Reset Web UI Password\n'
-      printf '  14) Exit\n'
-      read -r -p 'Choose [1-14]: ' choice || true
+      printf '  14) Install / Update Web UI\n'
+      printf '  15) Exit\n'
+      read -r -p 'Choose [1-15]: ' choice || true
 
       case "$choice" in
         1)
@@ -4081,6 +4162,10 @@ interactive_menu() {
           pause_main_menu
           ;;
         14)
+          install_webui || warn "Web UI installation did not complete. Review the message above and retry."
+          pause_main_menu
+          ;;
+        15)
           printf '\nExiting...\n'
           exit 0
           ;;
@@ -4118,11 +4203,12 @@ interactive_menu() {
 
 usage() {
   cat <<EOF
-Usage: $0 [install|upgrade|reconnect|update|status|certificate|renew|logs|disconnect|diagnostics|start|stop|restart|proxy-start|proxy-stop|proxy-restart|start-all|stop-all|reset-webui-password|uninstall]
+Usage: $0 [install|upgrade|reconnect|update|status|certificate|renew|logs|disconnect|diagnostics|start|stop|restart|proxy-start|proxy-stop|proxy-restart|start-all|stop-all|webui|reset-webui-password|uninstall]
 
 Commands:
-  install        Full interactive IKEv2 installation; all previous features are retained.
-  upgrade        Add or update private SOCKS5 Proxy Mode on an existing managed installation.\n  reconnect      Enable DPD-based stale-session recovery without changing certificates or users.
+  install        Interactive IKEv2 installation with an optional Web UI prompt.
+  upgrade        Add or update private SOCKS5 Proxy Mode on an existing managed installation.
+  reconnect      Enable DPD-based stale-session recovery without changing certificates or users.
   update         Check the latest GitHub Release and safely update this installer only.
   status         Show VPN, StrongSwan, firewall, and Proxy Mode status.
   certificate    Show certificate status and expiry.
@@ -4138,6 +4224,7 @@ Commands:
   proxy-restart  Restart the private SOCKS5 Proxy Mode service.
   start-all      Start firewall/NAT, IKEv2, and configured Proxy Mode.
   stop-all       Stop Proxy Mode, IKEv2, and firewall/NAT after confirmation.
+  webui          Install/update the optional Web UI; accepts --secure-cookie and --password-stdin.
   reset-webui-password
                  Reset the Web UI password (optional --password-stdin); sign out panel sessions.
   uninstall      Remove managed configuration and restore previous files/services.
@@ -4153,7 +4240,12 @@ main() {
   require_root
   initialize_logging
   check_ubuntu
-  # A panel password reset does not need VPN logging/timer reconfiguration.
+  # Panel commands do not need VPN logging/timer reconfiguration.
+  if [[ "${1:-}" == "webui" ]]; then
+    shift
+    install_webui "$@"
+    return
+  fi
   if [[ "${1:-}" == "reset-webui-password" ]]; then
     shift
     reset_webui_password "$@"

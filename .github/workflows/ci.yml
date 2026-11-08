@@ -39,8 +39,8 @@ jobs:
 
       - name: Check Bash scripts
         run: |
-          bash -n ikev2-strongswan-ubuntu.sh ikev2-linux-client.sh packaging/install-webui.sh packaging/reset-webui-password.sh packaging/install-arvan-proxy.sh packaging/install-telegram-bot.sh
-          shellcheck --severity=warning ikev2-strongswan-ubuntu.sh ikev2-linux-client.sh packaging/install-webui.sh packaging/reset-webui-password.sh packaging/install-arvan-proxy.sh packaging/install-telegram-bot.sh
+          bash -n ikev2-strongswan-ubuntu.sh ikev2-linux-client.sh packaging/install-webui.sh packaging/reset-webui-password.sh packaging/install-cdn-proxy.sh packaging/install-telegram-bot.sh
+          shellcheck --severity=warning ikev2-strongswan-ubuntu.sh ikev2-linux-client.sh packaging/install-webui.sh packaging/reset-webui-password.sh packaging/install-cdn-proxy.sh packaging/install-telegram-bot.sh
 
       - name: Check Web UI JavaScript syntax
         run: |

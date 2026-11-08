@@ -240,7 +240,7 @@ if [[ $# -eq 0 ]]; then interactive_menu; else main "$@"; fi
                     transcript.extend(os.read(master, 4096))
         try:
             if main_menu:
-                read_until(b"Choose [1-14]:")
+                read_until(b"Choose [1-15]:")
                 os.write(master, b"13\n")
             read_until(b"minimum 12 characters")
             os.write(master, (NEW_PASSWORD + "\n").encode())
@@ -248,7 +248,7 @@ if [[ $# -eq 0 ]]; then interactive_menu; else main "$@"; fi
             os.write(master, (confirmation + "\n").encode())
             if main_menu:
                 read_until(b"Press Enter to return to the main menu")
-                os.write(master, b"\n14\n")
+                os.write(master, b"\n15\n")
             process.wait(timeout=10)
             while select.select([master], [], [], 0.1)[0]:
                 try:
@@ -271,7 +271,7 @@ if [[ $# -eq 0 ]]; then interactive_menu; else main "$@"; fi
         code, output = self.interactive(NEW_PASSWORD, main_menu=True)
         self.assertEqual(code, 0, output)
         self.assertIn("13) Reset Web UI Password", output)
-        self.assertIn("14) Exit", output)
+        self.assertIn("15) Exit", output)
         self.assert_password_changed_safely(output)
 
     def test_main_menu_mismatch_returns_to_menu_without_restart(self):

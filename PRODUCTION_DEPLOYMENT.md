@@ -2,13 +2,15 @@
 
 This guide explains how to prepare an Ubuntu StrongSwan server and configure GitHub Actions to deploy the server installer safely.
 
+All deployment examples are placeholders. Replace them with your own settings:
+
 The examples use:
 
-- Server IP: `155.117.13.45`
-- SSH port: `9011`
+- Server IP: `203.0.113.10`
+- SSH port: `22`
 - Installer: `ikev2-strongswan-ubuntu.sh`
 
-> Port `9011` is treated as the SSH port. StrongSwan still requires UDP ports `500` and `4500` for IKEv2.
+> Port `22` is treated as the SSH port. StrongSwan still requires UDP ports `500` and `4500` for IKEv2.
 
 ## 1. Prepare the Server
 
@@ -18,7 +20,7 @@ Configure the provider firewall or security group with:
 
 | Protocol | Port | Source | Purpose |
 |---|---:|---|---|
-| TCP | `9011` | Your administration IPs | SSH |
+| TCP | `22` | Your administration IPs | SSH |
 | UDP | `500` | `0.0.0.0/0` | IKEv2 |
 | UDP | `4500` | `0.0.0.0/0` | IKEv2 NAT-T |
 
@@ -32,22 +34,22 @@ client egress.
 Verify that SSH is listening on the expected port before closing the current session:
 
 ```bash
-sudo ss -lntp | grep ':9011'
+sudo ss -lntp | grep ':22'
 ```
 
-The first installation should be performed manually because it asks for the server identity, VPN subnet, DNS servers, CA name, VPN users, and optional Proxy Mode settings.
+The first installation should be performed manually because it asks for the server identity, VPN subnet, DNS servers, certificate mode, VPN users, optional Proxy Mode settings, and whether to install the Web UI. The Web UI defaults to No; accepting installs it after VPN verification and prompts for a separate panel admin password. A standalone script needs a matching published Web UI release bundle; use a full checkout for unreleased revisions. See [Web UI installation and SSH access](docs/webui.md#install-with-working-service-controls).
 
 Copy the installer to the server and run it:
 
 ```bash
-scp -P 9011 ikev2-strongswan-ubuntu.sh admin@155.117.13.45:/tmp/
-ssh -p 9011 admin@155.117.13.45
+scp -P 22 ikev2-strongswan-ubuntu.sh admin@203.0.113.10:/tmp/
+ssh -p 22 admin@203.0.113.10
 
 chmod +x /tmp/ikev2-strongswan-ubuntu.sh
 sudo /tmp/ikev2-strongswan-ubuntu.sh install
 ```
 
-Use `155.117.13.45` as the server address or identity unless you have a DNS hostname that clients will use instead.
+Use `203.0.113.10` as the server address or identity unless you have a DNS hostname that clients will use instead.
 
 After installation, verify the server:
 
@@ -56,6 +58,8 @@ sudo /tmp/ikev2-strongswan-ubuntu.sh status
 sudo /tmp/ikev2-strongswan-ubuntu.sh diagnostics
 sudo ss -lunp | grep -E ':(500|4500)\\b'
 ```
+
+For optional public panel hosting, use the [provider-neutral CDN guide](WEBUI_CDN_GUIDE.md). Keep real hostnames and CDN networks in the server configuration or GitHub environment variables; never commit them.
 
 ## 2. Create a Dedicated Deployment Key
 
@@ -75,7 +79,7 @@ Install only the public key on the server:
 
 ```bash
 ssh-copy-id -i ~/.ssh/ikev2_github_actions_production.pub \\
-  -p 9011 admin@155.117.13.45
+  -p 22 admin@203.0.113.10
 ```
 
 If `ssh-copy-id` is unavailable, append the public key manually while logged in through the existing administrative session:
@@ -90,7 +94,7 @@ Test the key before adding it to GitHub:
 
 ```bash
 ssh -i ~/.ssh/ikev2_github_actions_production \\
-  -p 9011 admin@155.117.13.45 'id && sudo -n true'
+  -p 22 admin@203.0.113.10 'id && sudo -n true'
 ```
 
 The command must succeed without asking for an SSH password. The deployment account needs passwordless `sudo` for the specific deployment commands, or a carefully restricted sudo policy. Do not store a sudo password in GitHub Secrets.
@@ -102,7 +106,7 @@ GitHub Actions must verify the server host key. Do not disable host-key checking
 First inspect the key from a trusted administration connection:
 
 ```bash
-ssh-keyscan -p 9011 155.117.13.45
+ssh-keyscan -p 22 203.0.113.10
 ```
 
 Compare the displayed fingerprint with the fingerprint shown by the server owner or cloud console. After verification, save the complete `ssh-keyscan` output as the `PRODUCTION_KNOWN_HOSTS` value.
@@ -128,8 +132,8 @@ Under **Settings > Environments > production > Variables**, add:
 
 | Name | Value | Secret? |
 |---|---|---|
-| `PRODUCTION_HOST` | `155.117.13.45` | No |
-| `PRODUCTION_PORT` | `9011` | No |
+| `PRODUCTION_HOST` | `203.0.113.10` | No |
+| `PRODUCTION_PORT` | `22` | No |
 | `PRODUCTION_USER` | Your dedicated SSH user, for example `deploy` | No |
 | `PRODUCTION_INSTALL_DIR` | `/opt/ikev2` | No |
 
@@ -142,7 +146,7 @@ Under **Settings > Environments > production > Secrets**, add:
 | Name | Value |
 |---|---|
 | `PRODUCTION_SSH_PRIVATE_KEY` | Complete contents of the Ed25519 private key file |
-| `PRODUCTION_KNOWN_HOSTS` | Verified `ssh-keyscan` output for port `9011` |
+| `PRODUCTION_KNOWN_HOSTS` | Verified `ssh-keyscan` output for port `22` |
 
 The private key must include its complete header and footer:
 
@@ -263,10 +267,10 @@ of `PRODUCTION_INSTALL_DIR`, which is used only for the VPN server script.
 The workflow copies source files into root-owned `/opt/ikev2-web-deploy` using
 the existing passwordless `/usr/bin/install` permission, then runs the installer
 from that fixed path. Add its sudoers rule once with
-`sudo visudo -f /etc/sudoers.d/ikev2-web-deploy` (replace `saeed` if needed):
+`sudo visudo -f /etc/sudoers.d/ikev2-web-deploy` (replace `deploy` if needed):
 
 ```sudoers
-saeed ALL=(root) NOPASSWD: /opt/ikev2-web-deploy/packaging/install-webui.sh install --password-stdin
+deploy ALL=(root) NOPASSWD: /opt/ikev2-web-deploy/packaging/install-webui.sh install --password-stdin
 ```
 
 This grants root-level Web UI deployment. It does not require a passwordless
@@ -308,7 +312,7 @@ capability while preserving the current password.
 The listener remains private. With the example server above, connect using:
 
 ```bash
-ssh -p 9011 -N -L 8787:127.0.0.1:8787 saeed@155.117.13.45
+ssh -p 22 -N -L 8787:127.0.0.1:8787 deploy@203.0.113.10
 ```
 
 Then open `http://127.0.0.1:8787`. To disable access, use
@@ -326,7 +330,7 @@ installation itself does not change VPN routing, DNS, firewall, or CA trust.
 - Keep the deployment key limited to this repository and environment.
 - Restrict the key in `authorized_keys` if your operational model supports it.
 - Keep UDP `500` and `4500` open in the provider firewall.
-- Keep SSH `9011` restricted to trusted administration IPs where possible.
+- Keep SSH `22` restricted to trusted administration IPs where possible.
 - Back up `/var/lib/ikev2-easy-installer/backups/` securely.
 - Never commit CA keys, server keys, passwords, `.ikev` profiles, or private SSH keys.
 - Run the installer diagnostics after any manual server change:
@@ -343,7 +347,7 @@ Verify the key, username, and sudo access:
 
 ```bash
 ssh -i ~/.ssh/ikev2_github_actions_production \\
-  -p 9011 admin@155.117.13.45 'sudo -n true'
+  -p 22 admin@203.0.113.10 'sudo -n true'
 ```
 
 ### Host key verification failed
@@ -354,8 +358,8 @@ Do not disable verification. Check whether the server was rebuilt, verify its ne
 
 Check all of the following:
 
-- Provider firewall allows TCP `9011` from GitHub-hosted runners or the configured source.
-- SSH is listening on `9011`.
+- Provider firewall allows TCP `22` from GitHub-hosted runners or the configured source.
+- SSH is listening on `22`.
 - The server has a public route.
 - UDP `500` and `4500` are allowed for VPN clients.
 

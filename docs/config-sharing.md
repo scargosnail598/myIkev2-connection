@@ -59,7 +59,7 @@ URI is ASCII and limited to **2953 bytes**, the QR byte-mode capacity at version
 40 with low error correction. Exports exceeding that limit fail with a message
 suggesting the installer's `.ikev` file export.
 
-The profile uses the same fields as the [CLI export](../README.md#portable-ikev-client-profiles):
+The profile uses the same fields as the [CLI export](server.md#portable-ikev-client-profiles):
 
 | Field | Meaning |
 | --- | --- |

@@ -78,8 +78,8 @@ require_source_files() {
     "packaging/systemd/${BROKER_SERVICE}" \
     "packaging/systemd/${WEB_SERVICE}" \
     "packaging/systemd/ikev2-web-proxy.service" \
-    "packaging/install-arvan-proxy.sh" \
-    "packaging/render-arvan-proxy.py"; do
+    "packaging/install-cdn-proxy.sh" \
+    "packaging/render-cdn-proxy.py"; do
     [[ -f "${SOURCE_DIR}/${path}" ]] || die "Required source file is missing: ${path}"
   done
 }
@@ -363,7 +363,7 @@ print("Telegram settings verified through the unprivileged broker client (no con
 '
 
   if [[ -f /etc/ikev2-web-proxy/origin.json ]]; then
-    bash "${SCRIPT_DIR}/install-arvan-proxy.sh"
+    bash "${SCRIPT_DIR}/install-cdn-proxy.sh"
   fi
 
   printf '\nWeb UI installed successfully.\n'

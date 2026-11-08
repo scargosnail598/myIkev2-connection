@@ -112,6 +112,11 @@ jobs:
           cp "${{ needs.validate.outputs.linux }}" "dist/"
           cp "${{ needs.validate.outputs.windows }}" "dist/"
 
+          # Include only tracked application files; never package local credentials.
+          git archive --format=tar.gz \
+            --output="dist/ikev2-webui-v${{ needs.validate.outputs.server_version }}.tar.gz" \
+            HEAD webui telegram_bot packaging
+
           cat > dist/RELEASE.json <<EOF
           {
             "channel": "stable",
@@ -125,6 +130,7 @@ jobs:
               "server": "ikev2-strongswan-ubuntu-v${{ needs.validate.outputs.server_version }}.sh",
               "linux": "$(basename "${{ needs.validate.outputs.linux }}")",
               "windows": "$(basename "${{ needs.validate.outputs.windows }}")",
+              "webui": "ikev2-webui-v${{ needs.validate.outputs.server_version }}.tar.gz",
               "checksums": "SHA256SUMS"
             }
           }

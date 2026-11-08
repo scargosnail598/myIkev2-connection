@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       verify_public_only:
-        description: Only verify the public HTTPS endpoint through Arvan from the origin server (no install)
+        description: Only verify the configured public HTTPS endpoint through the CDN (no install)
         type: boolean
         default: false
-      publish_arvan:
-        description: Publish through unprivileged Caddy on HTTP 8080 for p.mahanfreenet.ir (Arvan peers only)
+      publish_cdn:
+        description: Configure a CDN origin using production environment hostname, port and network ranges
         type: boolean
         default: false
       inspect_origin:
@@ -45,8 +45,8 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          bash -n packaging/install-webui.sh packaging/reset-webui-password.sh packaging/install-arvan-proxy.sh packaging/install-telegram-bot.sh
-          shellcheck packaging/install-webui.sh packaging/reset-webui-password.sh packaging/install-arvan-proxy.sh packaging/install-telegram-bot.sh
+          bash -n packaging/install-webui.sh packaging/reset-webui-password.sh packaging/install-cdn-proxy.sh packaging/install-telegram-bot.sh
+          shellcheck packaging/install-webui.sh packaging/reset-webui-password.sh packaging/install-cdn-proxy.sh packaging/install-telegram-bot.sh
           node --check webui/static/app.js
           node --check webui/static/qrcodegen.js
           python3 -B -m unittest discover -s tests -p 'test_webui.py' -v
@@ -61,7 +61,7 @@ jobs:
           python3 -B -m unittest discover -s tests -p 'test_sessions.py' -v
           python3 -B -m unittest discover -s tests -p 'test_diagnostics.py' -v
           python3 -B -m unittest discover -s tests -p 'test_metrics.py' -v
-          python3 -B -m unittest discover -s tests -p 'test_arvan_proxy.py' -v
+          python3 -B -m unittest discover -s tests -p 'test_cdn_proxy.py' -v
 
       - name: Configure SSH
         shell: bash
@@ -104,14 +104,18 @@ jobs:
               -p CapabilityBoundingSet -p UnitFileState -p ActiveState
             [[ $(systemctl show ikev2-web-proxy.service -p User --value) == ikev2-proxy ]]
             systemctl is-enabled --quiet ikev2-web-proxy.service
-            curl --fail --silent --show-error --max-time 5 \
-              --header 'Host: p.mahanfreenet.ir' --header 'X-Forwarded-Proto: https' \
-              http://127.0.0.1:8080/api/health
+            python3 -B - <<'PYTHON'
+          import json
+          import subprocess
+          from pathlib import Path
+          settings = json.loads(Path("/etc/ikev2-web-proxy/origin.json").read_text())
+          subprocess.run(["curl", "--fail", "--silent", "--show-error", "--max-time", "5",
+                          "--header", "Host: " + settings["hostname"],
+                          "--header", "X-Forwarded-Proto: https",
+                          "http://127.0.0.1:" + str(settings["port"]) + "/api/health"], check=True)
+          PYTHON
             printf '\nCaddy runtime identity, autostart and loopback proxy health verified.\n'
           fi
-          printf 'Public origin HTTPS health:\n'
-          curl --silent --show-error --max-time 5 --resolve p.mahanfreenet.ir:443:127.0.0.1 \
-            --output /dev/null --write-out 'HTTP %{http_code}\n' https://p.mahanfreenet.ir/api/health || true
           REMOTE
 
       - name: Install or update Web UI and verify health
@@ -120,7 +124,10 @@ jobs:
         env:
           INITIAL_PASSWORD: ${{ secrets.PRODUCTION_WEBUI_PASSWORD }}
           RESET_ADMIN_PASSWORD: ${{ inputs.reset_admin_password }}
-          PUBLISH_ARVAN: ${{ inputs.publish_arvan }}
+          PUBLISH_CDN: ${{ inputs.publish_cdn }}
+          CDN_HOSTNAME: ${{ vars.PRODUCTION_WEBUI_HOSTNAME }}
+          CDN_ORIGIN_PORT: ${{ vars.PRODUCTION_CDN_ORIGIN_PORT }}
+          CDN_NETWORKS: ${{ vars.PRODUCTION_CDN_NETWORKS }}
         run: |
           # Staging paths are deliberately expanded locally after validation.
           # shellcheck disable=SC2029
@@ -138,6 +145,24 @@ jobs:
             printf 'Set PRODUCTION_WEBUI_PASSWORD to at least 12 characters before resetting credentials.\n' >&2
             exit 1
           fi
+          if [[ "$PUBLISH_CDN" == "true" ]]; then
+            # Deployment-specific settings stay in environment variables and temporary files.
+            python3 -B - <<'PYTHON'
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+          import sys
+          root = Path(os.environ["RUNNER_TEMP"])
+          settings = {"hostname": os.environ["CDN_HOSTNAME"],
+                      "port": int(os.environ["CDN_ORIGIN_PORT"] or "8080")}
+          (root / "ikev2-origin.json").write_text(json.dumps(settings) + "\n")
+          (root / "ikev2-cdn-ips.txt").write_text(os.environ["CDN_NETWORKS"] + "\n")
+          subprocess.run([sys.executable, "-B", "packaging/render-cdn-proxy.py",
+                          str(root / "ikev2-origin.json"), str(root / "ikev2-cdn-ips.txt")],
+                         check=True, stdout=subprocess.DEVNULL)
+          PYTHON
+          fi
           # Report the effective deployment policy before changing server files.
           ssh "${ssh_args[@]}" "$remote" 'sudo -n -l'
           remote_stage=$(ssh "${ssh_args[@]}" "$remote" 'mktemp -d /tmp/ikev2-web.XXXXXXXX')
@@ -149,8 +174,12 @@ jobs:
           # Archive tracked sources only: never upload local configs, keys, or caches.
           git archive --format=tar.gz --output="$RUNNER_TEMP/ikev2-web.tar.gz" HEAD webui telegram_bot packaging
           ssh "${ssh_args[@]}" "$remote" "tar -xz -C '$remote_stage'" < "$RUNNER_TEMP/ikev2-web.tar.gz"
+          if [[ "$PUBLISH_CDN" == "true" ]]; then
+            ssh "${ssh_args[@]}" "$remote" "cat > '$remote_stage/origin.json'" < "$RUNNER_TEMP/ikev2-origin.json"
+            ssh "${ssh_args[@]}" "$remote" "cat > '$remote_stage/cdn-ips.txt'" < "$RUNNER_TEMP/ikev2-cdn-ips.txt"
+          fi
           # Publish root-owned sources to the fixed path allowed by sudoers.
-          ssh "${ssh_args[@]}" "$remote" bash -s -- "$remote_stage" "$PUBLISH_ARVAN" <<'REMOTE'
+          ssh "${ssh_args[@]}" "$remote" bash -s -- "$remote_stage" "$PUBLISH_CDN" <<'REMOTE'
           set -Eeuo pipefail
           source_dir="$1"
           deploy_dir=/opt/ikev2-web-deploy
@@ -178,9 +207,9 @@ jobs:
             "$source_dir/packaging/systemd/ikev2-telegram-collect.timer" \
             "$deploy_dir/packaging/systemd/"
           sudo -n /usr/bin/install -o root -g root -m 0644 \
-            "$source_dir/packaging/render-arvan-proxy.py" "$deploy_dir/packaging/"
+            "$source_dir/packaging/render-cdn-proxy.py" "$deploy_dir/packaging/"
           sudo -n /usr/bin/install -o root -g root -m 0755 \
-            "$source_dir/packaging/install-arvan-proxy.sh" \
+            "$source_dir/packaging/install-cdn-proxy.sh" \
             "$source_dir/packaging/install-telegram-bot.sh" \
             "$source_dir/packaging/reset-webui-password.sh" "$deploy_dir/packaging/"
           sudo -n /usr/bin/install -o root -g root -m 0755 \
@@ -188,7 +217,9 @@ jobs:
           if [[ "$2" == "true" ]]; then
             sudo -n /usr/bin/install -d -o root -g root -m 0755 /etc/ikev2-web-proxy
             sudo -n /usr/bin/install -o root -g root -m 0644 \
-              "$source_dir/packaging/arvan-origin.json" /etc/ikev2-web-proxy/origin.json
+              "$source_dir/origin.json" /etc/ikev2-web-proxy/origin.json
+            sudo -n /usr/bin/install -o root -g root -m 0644 \
+              "$source_dir/cdn-ips.txt" /etc/ikev2-web-proxy/cdn-ips.txt
           fi
           REMOTE
           # The initial password travels over SSH stdin, never in arguments or logs.
@@ -218,8 +249,8 @@ jobs:
             printf 'Admin login and authenticated dashboard verified.\n'
           fi
 
-      - name: Verify public HTTPS from origin through Arvan without credentials
-        if: ${{ !inputs.inspect_origin && (inputs.publish_arvan || inputs.verify_public_only) }}
+      - name: Verify configured public HTTPS through the CDN without credentials
+        if: ${{ !inputs.inspect_origin && (inputs.publish_cdn || inputs.verify_public_only) }}
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -229,26 +260,18 @@ jobs:
             -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" /usr/bin/python3 -B - <<'PY'
           from urllib.error import HTTPError
           from urllib.request import urlopen
+          from pathlib import Path
           import json
-          import socket
-          import subprocess
 
-          base = "https://p.mahanfreenet.ir"
+          settings_path = Path("/etc/ikev2-web-proxy/origin.json")
+          if not settings_path.is_file():
+              raise SystemExit("Configure the CDN origin before verifying public HTTPS")
+          settings = json.loads(settings_path.read_text())
+          base = "https://" + settings["hostname"]
           try:
               response = urlopen(base + "/api/health", timeout=30)
           except HTTPError as error:
-              origin_denial = error.read(80) == b"Forbidden"
-              print("CDN health error:", error.code, "server:", error.headers.get("Server"),
-                    "type:", error.headers.get("Content-Type"),
-                    "origin_denial:", origin_denial)
-              if (error.code == 403 and error.headers.get("Server", "").lower() == "arvancloud"
-                      and error.headers.get("Content-Type", "").lower().startswith("text/html")
-                      and not origin_denial):
-                  print("::warning::Arvan denied this probe before reaching the origin. Public HTTPS checks were skipped; verify from a permitted visitor network. CDN restrictions were preserved.")
-                  raise SystemExit(0)
-              print("CDN DNS:", sorted({entry[4][0] for entry in socket.getaddrinfo("p.mahanfreenet.ir", 443)}))
-              subprocess.run(["ss", "-Hnt", "sport = :8080"], check=False)
-              raise SystemExit("Public CDN health failed; access restrictions were preserved")
+              raise SystemExit(f"CDN health returned HTTP {error.code}; verify from an allowed visitor network and check origin connectivity. Access restrictions were preserved.")
           with response:
               assert response.status == 200
               assert json.load(response).get("status") == "ok"
@@ -266,4 +289,4 @@ jobs:
       - name: Remove SSH credentials from runner
         if: always()
         shell: bash
-        run: rm -f -- "$RUNNER_TEMP/ikev2-production-key" "$RUNNER_TEMP/ikev2-known-hosts"
+        run: rm -f -- "$RUNNER_TEMP/ikev2-production-key" "$RUNNER_TEMP/ikev2-known-hosts" "$RUNNER_TEMP/ikev2-origin.json" "$RUNNER_TEMP/ikev2-cdn-ips.txt"

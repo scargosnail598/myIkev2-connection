@@ -20,11 +20,15 @@ PROXY_BINARY=/usr/local/lib/ikev2-web/caddy
 
 stage=$(mktemp -d /tmp/ikev2-proxy.XXXXXXXX)
 trap 'rm -rf -- "$stage"' EXIT
-curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
-  --connect-timeout 10 --max-time 60 --retry 2 \
-  https://www.arvancloud.ir/fa/ips.txt --output "$stage/arvan-ips.txt"
-python3 -B "$SCRIPT_DIR/render-arvan-proxy.py" "$PROXY_DIR/origin.json" \
-  "$stage/arvan-ips.txt" > "$stage/Caddyfile"
+# CDN address ranges are supplied by the administrator, never hardcoded to a vendor.
+[[ -f "$PROXY_DIR/cdn-ips.txt" && ! -L "$PROXY_DIR/cdn-ips.txt" ]] || {
+  printf 'Install the current CDN CIDRs at %s/cdn-ips.txt first.\n' "$PROXY_DIR" >&2; exit 1;
+}
+[[ $(stat -c '%u:%a' "$PROXY_DIR/cdn-ips.txt") == '0:644' ]] || {
+  printf 'CDN network list must be root-owned, mode 0644.\n' >&2; exit 1;
+}
+python3 -B "$SCRIPT_DIR/render-cdn-proxy.py" "$PROXY_DIR/origin.json" \
+  "$PROXY_DIR/cdn-ips.txt" > "$stage/Caddyfile"
 readarray -t origin < <(python3 -c 'import json; c=json.load(open("/etc/ikev2-web-proxy/origin.json")); print(c["hostname"]); print(c["port"])')
 if ! systemctl is-active --quiet ikev2-web-proxy.service && \
     [[ -n $(ss -H -lnt "sport = :${origin[1]}") ]]; then
@@ -57,7 +61,6 @@ install -o root -g root -m 0755 "$stage/package/usr/bin/caddy" "$PROXY_BINARY.ne
 mv -f "$PROXY_BINARY.new" "$PROXY_BINARY"
 install -o root -g root -m 0644 "$stage/Caddyfile" "$PROXY_DIR/Caddyfile.new"
 mv -f "$PROXY_DIR/Caddyfile.new" "$PROXY_DIR/Caddyfile"
-install -o root -g root -m 0644 "$stage/arvan-ips.txt" "$PROXY_DIR/arvan-ips.txt"
 install -o root -g root -m 0644 "$SCRIPT_DIR/systemd/ikev2-web-proxy.service" \
   /etc/systemd/system/ikev2-web-proxy.service
 runuser -u ikev2-proxy -- "$PROXY_BINARY" validate --config "$PROXY_DIR/Caddyfile" --adapter caddyfile

@@ -1,0 +1,29 @@
+[Unit]
+Description=Refresh the configured CDN origin IP allowlist
+After=network-online.target ikev2-web-proxy.service
+Wants=network-online.target
+ConditionPathExists=/etc/ikev2-web-proxy/origin.json
+ConditionPathExists=/etc/ikev2-web-proxy/Caddyfile
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/python3 -B /usr/local/lib/ikev2-web/cdn-networks.py refresh
+TimeoutStartSec=180
+RuntimeDirectory=ikev2-cdn-networks
+RuntimeDirectoryMode=0700
+Environment=XDG_CONFIG_HOME=/run/ikev2-cdn-networks
+Environment=XDG_DATA_HOME=/run/ikev2-cdn-networks
+UMask=0077
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictNamespaces=true
+SystemCallFilter=~@mount
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/etc/ikev2-web-proxy
+InaccessiblePaths=-/etc/ipsec.secrets -/etc/ipsec.d/private -/etc/ikev2-web -/etc/ikev2-telegram
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

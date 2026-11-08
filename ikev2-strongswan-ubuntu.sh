@@ -6,7 +6,7 @@ IFS=$'\n\t'
 # Uses StrongSwan, EAP-MSCHAPv2, selectable Private CA or ACME trust, and IPv4 full-tunnel NAT.
 
 INSTALLER_NAME="ikev2-easy-installer"
-CURRENT_INSTALLER_VERSION="6.4.11-en"
+CURRENT_INSTALLER_VERSION="6.4.12-en"
 INSTALLER_VERSION="$CURRENT_INSTALLER_VERSION"
 
 STATE_DIR="/var/lib/${INSTALLER_NAME}"
@@ -216,6 +216,7 @@ run_webui_tool() (
     *) warn "Unsupported Web UI tool."; return 1 ;;
   esac
   local source_dir version artifact work_dir expected actual dependency
+  version=$(installer_semver)
   source_dir=$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")") || return 1
   for dependency in python3 curl sha256sum; do
     if ! command_exists "$dependency"; then
@@ -224,12 +225,16 @@ run_webui_tool() (
     fi
   done
 
-  if [[ ! -f "${source_dir}/packaging/${tool}" && "$tool" == "setup-cdn-proxy.sh" &&
-      -f "/opt/ikev2/packaging/${tool}" && ! -L "/opt/ikev2/packaging/${tool}" ]]; then
-    source_dir=/opt/ikev2
+  if [[ ! -f "${source_dir}/packaging/${tool}" || ! -f "${source_dir}/packaging/TOOL_VERSION" ||
+      "$(cat -- "${source_dir}/packaging/TOOL_VERSION" 2>/dev/null)" != "$version" ]]; then
+    source_dir=''
+    if [[ "$tool" == "setup-cdn-proxy.sh" && -f "/opt/ikev2/packaging/${tool}" &&
+        ! -L "/opt/ikev2/packaging/${tool}" && -f /opt/ikev2/packaging/TOOL_VERSION &&
+        "$(cat /opt/ikev2/packaging/TOOL_VERSION)" == "$version" ]]; then
+      source_dir=/opt/ikev2
+    fi
   fi
-  if [[ ! -f "${source_dir}/packaging/${tool}" ]]; then
-    version=$(installer_semver)
+  if [[ -z "$source_dir" ]]; then
     artifact="ikev2-webui-v${version}.tar.gz"
     work_dir=$(mktemp -d) || return 1
     trap 'rm -rf -- "$work_dir"' EXIT
@@ -271,8 +276,9 @@ PYTHON
     source_dir="${work_dir}/source"
   fi
 
-  if [[ ! -f "${source_dir}/packaging/${tool}" ]]; then
-    warn "This Web UI bundle does not include the requested tool. Update the Web UI or use a full current repository checkout."
+  if [[ ! -f "${source_dir}/packaging/${tool}" || ! -f "${source_dir}/packaging/TOOL_VERSION" ||
+      "$(cat -- "${source_dir}/packaging/TOOL_VERSION" 2>/dev/null)" != "$version" ]]; then
+    warn "This Web UI bundle does not include the requested tool at the matching version. Update the Web UI or use a full current repository checkout."
     return 1
   fi
   bash "${source_dir}/packaging/${tool}" "$@"

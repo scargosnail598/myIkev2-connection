@@ -52,9 +52,11 @@ class CdnInstallerInputTests(unittest.TestCase):
         # CI may be unprivileged. Check fixture ownership against the test user.
         source = source.replace("'0:755'", f"'{os.getuid()}:755'")
         source = source.replace("'0:644'", f"'{os.getuid()}:644'")
+        source = source.replace("'0:600'", f"'{os.getuid()}:600'")
         self.script = self.root / "install.sh"
         self.script.write_text(source)
         shutil.copyfile(REPO / "packaging/render-cdn-proxy.py", self.root / "render-cdn-proxy.py")
+        shutil.copyfile(REPO / "packaging/cdn-networks.py", self.root / "cdn-networks.py")
         self.bin = self.root / "bin"
         self.bin.mkdir()
         self.trace = self.root / "trace"
@@ -106,6 +108,57 @@ class CdnInstallerInputTests(unittest.TestCase):
         result = self.install()
         self.assertEqual(result.returncode, 79, result.stderr)
         self.assertEqual(self.trace.read_text(), "apt reached\n")
+
+
+    def test_complete_install_enables_auto_timer_or_disables_it_for_manual_mode(self):
+        # Run the installer end-to-end against temporary application/unit paths;
+        # package, identity and service commands are all local test executables.
+        source = self.script.read_text()
+        library = self.root / "lib"
+        units = self.root / "units"
+        application = self.root / "application"
+        units.mkdir()
+        (application / "webui").mkdir(parents=True)
+        (application / "webui/__init__.py").touch()
+        (application / "webui/manage.py").write_text("# fixture cookie helper; no host configuration access\n")
+        source = source.replace('/usr/local/lib/ikev2-web', str(library))
+        source = source.replace('/etc/systemd/system', str(units))
+        source = source.replace('/etc/ikev2-web-proxy', str(self.config))
+        source = source.replace('/opt/ikev2', str(application))
+        source = source.replace('-o root -g root', f'-o {os.getuid()} -g {os.getgid()}')
+        self.script.write_text(source)
+        shutil.copytree(REPO / 'packaging/systemd', self.root / 'systemd')
+        stubs = {
+            'apt-get': 'if [[ "$1" == download ]]; then touch caddy_fixture.deb; fi',
+            'dpkg-deb': '''target="${!#}"
+mkdir -p "$target/usr/bin"
+printf '#!/usr/bin/env bash\\nexit 0\\n' > "$target/usr/bin/caddy"
+chmod 755 "$target/usr/bin/caddy"''',
+            'getent': 'exit 0',
+            'runuser': 'exit 0',
+            'curl': 'exit 0',
+            'systemctl': 'printf "systemctl %s\\n" "$*" >> "$TRACE"',
+        }
+        for name, body in stubs.items():
+            binary = self.bin / name
+            binary.write_text('#!/usr/bin/env bash\nset -euo pipefail\n' + body + '\n')
+            binary.chmod(0o755)
+        self.network_file('8.8.8.0/24\n')
+        import json
+        for automatic in (False, True):
+            with self.subTest(automatic=automatic):
+                settings = {'hostname': 'panel.example.com', 'port': 8080}
+                if automatic:
+                    settings['network_source'] = {'provider': 'cloudflare'}
+                (self.config / 'origin.json').write_text(json.dumps(settings))
+                self.trace.write_text('')
+                result = self.install()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                expected = 'enable --now' if automatic else 'disable --now'
+                self.assertIn(f'systemctl {expected} ikev2-web-cdn-networks.timer', self.trace.read_text())
+                self.assertTrue((library / 'cdn-networks.py').is_file())
+                self.assertTrue((units / 'ikev2-web-cdn-networks.service').is_file())
+                self.assertTrue((units / 'ikev2-web-cdn-networks.timer').is_file())
 
 
 @unittest.skipUnless(CADDY, "Install caddy or set CADDY_BINARY for real proxy integration tests")

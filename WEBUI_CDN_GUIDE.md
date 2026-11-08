@@ -26,9 +26,11 @@ sudo bash ./ikev2-strongswan-ubuntu.sh cdn
 ```
 
 This wizard prepares the **managed HTTP origin** described below. It checks the
-local panel, asks for a hostname and origin port, and accepts provider CIDRs
-from a local file or multiline paste. Existing hostname/port values are defaults;
-you can also keep the current network list. It validates all inputs, checks port
+local panel and asks for a hostname, origin port and network source. Choose
+**4) ArvanCloud**, **5) Cloudflare** or **6) another CDN's public HTTPS text feed**
+for automatic retrieval. Local CIDR files and multiline paste remain available.
+Existing hostname/port values are defaults; keeping an existing list also keeps
+its automatic source when one is configured. It validates all inputs, checks port
 availability and shows a summary before an explicit confirmation (default No).
 Cancellation or invalid inputs leave existing settings unchanged.
 
@@ -40,8 +42,9 @@ installation returns an error and leaves new settings saved for retry; packages
 and services may be partially installed. It does not automatically roll back.
 
 The wizard is retained at `/opt/ikev2/packaging/setup-cdn-proxy.sh` by new panel
-installations. The main script prefers a checkout, otherwise uses this installed
-helper, otherwise downloads the verified matching release bundle. An older
+installations. The main script uses checkout/installed tools only if `packaging/TOOL_VERSION`
+matches its server version; otherwise it downloads the verified matching release
+bundle. An older
 panel/release without the wizard needs a Web UI update or a full checkout.
 No real deployment values are written into the repository.
 
@@ -57,6 +60,82 @@ are checked, any API digest is verified, and the release SHA256SUMS check stays
 mandatory. API failures/rate limits still stop setup safely. On 6.4.10 or older,
 manually update the installer first if its direct-only updater is also blocked.
 A gateway error does not mean the Web UI package is absent from the release.
+
+## Automatic CDN network feeds
+
+Available in server **6.4.12** with the matching Web UI/CDN sources. No API token
+is required for the built-in public sources:
+
+| Wizard option | Source |
+| --- | --- |
+| 4 — ArvanCloud | [Official text feed](https://www.arvancloud.ir/fa/ips.txt) |
+| 5 — Cloudflare | [Official API](https://developers.cloudflare.com/api/resources/ips/), including IPv4 and IPv6 |
+| 6 — Other CDN | Public HTTPS text URL, one CIDR per line |
+
+Custom feeds must use HTTPS, port 443, without credentials, query parameters or
+fragments. HTTPS redirects are validated too. Feed downloads are bounded in
+time and size; empty lists, private/loopback addresses, `/0`, non-aligned CIDRs,
+HTML, unsuccessful API replies and incomplete Cloudflare lists are rejected.
+No provider ranges or production settings are committed to this repository.
+The source selection is stored in the root-owned `origin.json` as, for example:
+
+```json
+{"hostname": "panel.example.com", "port": 8080, "network_source": {"provider": "cloudflare"}}
+```
+
+The initial wizard fetch must succeed before settings can be applied. Subsequent
+refreshes run daily via `ikev2-web-cdn-networks.timer`, with up to 30 minutes of
+random delay and a persistent missed-run check after boot. The root worker
+fetches/validates ranges, renders and validates a candidate Caddyfile, then
+atomically replaces the range/config files and restarts **only the CDN proxy**.
+The Caddy admin API remains disabled. The proxy's local health is verified;
+restart/health failure restores the previous files and attempts to restart and
+verify the prior configuration. An unsuccessful rollback is reported as an error.
+Unchanged ranges/config do not restart the proxy. A stopped proxy is not started
+by the worker. VPN services, panel credentials, CA trust, DNS and firewall rules
+are not changed. A restart can briefly interrupt in-flight panel requests.
+
+Network/parse/validation failure keeps the current allowlist; there is no
+fallback to all peers. When retrieval keeps failing, that list becomes stale
+and may eventually block new CDN egress ranges. Inspect the service journal and
+fix the feed or select a different source through the wizard. The worker shares
+a configuration lock with the wizard and proxy installer. Its sandbox permits
+writes only to proxy settings and private runtime storage; VPN secrets/keys and
+panel/Telegram authentication settings are inaccessible. The worker has no
+Linux capabilities; namespace creation and mount syscalls are blocked. Full
+privileged integration should be verified on a disposable Ubuntu VM.
+
+```bash
+systemctl status ikev2-web-cdn-networks.timer
+sudo journalctl -u ikev2-web-cdn-networks.service -n 30 --no-pager
+sudo systemctl start ikev2-web-cdn-networks.service
+```
+
+Choosing manual file/paste mode removes the automatic source and disables the
+timer. Keeping an existing list retains its source and refresh policy. To pause
+automation while preserving settings:
+
+```bash
+sudo systemctl disable --now ikev2-web-cdn-networks.timer
+sudo systemctl stop ikev2-web-cdn-networks.service
+```
+
+Redeploying an automatically configured proxy enables its timer again. To
+persistently switch off automatic refresh, rerun the wizard and choose manual
+file/paste input. Sources without `network_source` remain manual on upgrade.
+Any IP allowlists in your provider firewall or OS firewall are managed separately;
+this feature updates Caddy's peer restrictions only.
+
+For an existing server, update the complete project sources at the permanent
+installer checkout (including `packaging/`), then redeploy the panel and rerun
+the CDN wizard. Do not reinstall the VPN. The version guard also lets an updated
+standalone server script fetch matching tools rather than execute an old wizard.
+Full sources remain useful when GitHub release/API routes are unavailable:
+
+```bash
+sudo bash /opt/ikev2-installer/packaging/install-webui.sh install
+sudo bash /opt/ikev2-installer/ikev2-strongswan-ubuntu.sh cdn
+```
 
 ## 1. Prepare the panel and hostname
 
@@ -137,8 +216,9 @@ sudo chown root:root /etc/ikev2-web-proxy/origin.json
 sudo chmod 0644 /etc/ikev2-web-proxy/origin.json
 ```
 
-Obtain the **origin-facing egress IP ranges** from your chosen provider's
-authoritative documentation/API. Save the current IPv4 and IPv6 CIDRs in a local
+The interactive wizard can obtain **origin-facing egress IP ranges**
+automatically as described above. For manual setup, obtain them from your
+provider's authoritative documentation/API. Save the current IPv4 and IPv6 CIDRs in a local
 text file with one network per line, without comments, commas or HTML. The
 helper validates public, network-aligned CIDRs and rejects an empty list,
 private/loopback ranges and `/0`. No provider list or live address is bundled.
@@ -167,8 +247,8 @@ allowlist does not authenticate your particular CDN account.
 
 Subsequent Web UI deployments preserve `origin.json`, regenerate the proxy from
 `cdn-ips.txt`, refresh the extracted Caddy binary and restart the managed proxy.
-Update the network file when the provider changes its ranges, then rerun the
-helper. Ordinary APT upgrades do not update the extracted binary. Existing
+Automatic sources refresh daily; manual mode requires updating the network
+file and rerunning the helper when the provider changes its ranges. Ordinary APT upgrades do not update the extracted binary. Existing
 proxy installations must prepare `cdn-ips.txt` before their next deployment.
 Missing/invalid input stops proxy setup; it never opens access to all peers.
 
@@ -189,7 +269,9 @@ source files. Run **Deploy Production Web UI** with `publish_cdn=true` for the
 managed HTTP helper. It validates these values, copies them to the fixed origin
 paths and installs the panel/proxy. No repository file contains your hostname or
 network list. Normal deployments with `publish_cdn=false` retain existing origin
-settings. `inspect_origin` only reports service/listener state;
+settings. Selecting `publish_cdn=true` supplies a manual network list from the
+environment and disables automatic refresh; configure automatic mode through
+the wizard afterwards. `inspect_origin` only reports service/listener state;
 `verify_public_only` checks the public HTTPS endpoint using the server's
 `origin.json`, without installing anything or sending login credentials.
 
@@ -223,7 +305,8 @@ public DNS, TLS, CDN policy or provider firewall connectivity.
 ## 5. Roll back or return to SSH access
 
 If the interactive wizard replaced an existing setup, its `backups/setup.*`
-directory holds the previous origin, CIDRs and Caddyfile. Restore the relevant
+directory holds the previous origin, CIDRs and Caddyfile. Stop the automatic
+refresh timer/worker before restoring settings. Restore the relevant
 files from the reported backup into `/etc/ikev2-web-proxy/`, preserving root
 ownership and mode 0644, then restart the proxy after validating the restored
 configuration. Only files that existed before setup are backed up. These
@@ -233,6 +316,8 @@ Restore your prior proxy/CDN configuration if publication fails. For the managed
 helper, stop future automatic proxy activation by removing its trigger config:
 
 ```bash
+sudo systemctl disable --now ikev2-web-cdn-networks.timer
+sudo systemctl stop ikev2-web-cdn-networks.service
 sudo systemctl disable --now ikev2-web-proxy.service
 sudo rm -- /etc/ikev2-web-proxy/origin.json
 ```

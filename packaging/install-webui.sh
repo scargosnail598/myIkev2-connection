@@ -80,7 +80,11 @@ require_source_files() {
     "packaging/systemd/ikev2-web-proxy.service" \
     "packaging/setup-cdn-proxy.sh" \
     "packaging/install-cdn-proxy.sh" \
-    "packaging/render-cdn-proxy.py"; do
+    "packaging/render-cdn-proxy.py" \
+    "packaging/cdn-networks.py" \
+    "packaging/TOOL_VERSION" \
+    "packaging/systemd/ikev2-web-cdn-networks.service" \
+    "packaging/systemd/ikev2-web-cdn-networks.timer"; do
     [[ -f "${SOURCE_DIR}/${path}" ]] || die "Required source file is missing: ${path}"
   done
 }
@@ -102,9 +106,11 @@ install_source() {
     "${SOURCE_DIR}/packaging/setup-cdn-proxy.sh" \
     "${SOURCE_DIR}/packaging/install-cdn-proxy.sh" "${INSTALL_DIR}/packaging/"
   install -o root -g root -m 0644 \
-    "${SOURCE_DIR}/packaging/render-cdn-proxy.py" "${INSTALL_DIR}/packaging/"
+    "${SOURCE_DIR}/packaging/render-cdn-proxy.py" "${SOURCE_DIR}/packaging/cdn-networks.py" "${SOURCE_DIR}/packaging/TOOL_VERSION" "${INSTALL_DIR}/packaging/"
   install -o root -g root -m 0644 \
-    "${SOURCE_DIR}/packaging/systemd/ikev2-web-proxy.service" "${INSTALL_DIR}/packaging/systemd/"
+    "${SOURCE_DIR}/packaging/systemd/ikev2-web-proxy.service" \
+    "${SOURCE_DIR}/packaging/systemd/ikev2-web-cdn-networks.service" \
+    "${SOURCE_DIR}/packaging/systemd/ikev2-web-cdn-networks.timer" "${INSTALL_DIR}/packaging/systemd/"
 
   install -o root -g root -m 0644 \
     "${SOURCE_DIR}/webui/__init__.py" \

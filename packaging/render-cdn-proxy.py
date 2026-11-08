@@ -8,15 +8,7 @@ import re
 import sys
 
 
-def render(settings: dict, networks_text: str) -> str:
-    hostname = settings["hostname"]
-    port = settings["port"]
-    if not isinstance(hostname, str) or len(hostname) > 253 or not re.fullmatch(
-        r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}", hostname
-    ):
-        raise ValueError("Invalid origin hostname")
-    if type(port) is not int or not 1024 <= port <= 65535 or port == 8787:
-        raise ValueError("Origin port must be unprivileged and different from the backend port")
+def parse_networks(networks_text: str) -> list[str]:
     networks = []
     for line in networks_text.splitlines():
         line = line.strip()
@@ -28,6 +20,19 @@ def render(settings: dict, networks_text: str) -> str:
         networks.append(str(network))
     if not networks:
         raise ValueError("CDN network list is empty")
+    return list(dict.fromkeys(networks))
+
+
+def render(settings: dict, networks_text: str) -> str:
+    hostname = settings["hostname"]
+    port = settings["port"]
+    if not isinstance(hostname, str) or len(hostname) > 253 or not re.fullmatch(
+        r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}", hostname
+    ):
+        raise ValueError("Invalid origin hostname")
+    if type(port) is not int or not 1024 <= port <= 65535 or port == 8787:
+        raise ValueError("Origin port must be unprivileged and different from the backend port")
+    networks = parse_networks(networks_text)
     ranges = " ".join(dict.fromkeys(networks))
     return f"""{{
     admin off

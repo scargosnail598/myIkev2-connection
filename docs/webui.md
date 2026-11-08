@@ -172,8 +172,10 @@ when an HTTPS reverse proxy will be used instead of a loopback HTTP/SSH tunnel.
 
 To prepare the installed panel for a CDN interactively, choose **15) Configure
 Web UI for CDN** or run `sudo bash ./ikev2-strongswan-ubuntu.sh cdn`. The wizard
-collects the hostname, HTTP origin port and CIDRs (file, paste or existing list),
-validates them, backs up existing settings and asks before applying changes.
+collects the hostname, HTTP origin port and network source. Choose ArvanCloud,
+Cloudflare or a public HTTPS text feed for automatic CIDRs and daily refresh;
+manual files, paste and the existing list are also supported. It validates
+inputs, backs up existing settings and asks before applying changes.
 New panel installations retain it at `/opt/ikev2/packaging/setup-cdn-proxy.sh`.
 The main script uses a checkout, installed helper or verified release bundle.
 For provider configuration, verification and rollback, follow the
@@ -188,10 +190,11 @@ It does not change firewall, VPN, DNS or CA trust settings.
 For GitHub Actions, set `PRODUCTION_WEBUI_HOSTNAME`, `PRODUCTION_CDN_ORIGIN_PORT`
 and `PRODUCTION_CDN_NETWORKS` in the `production` environment, then select
 `publish_cdn`. Normal redeployments preserve the server's origin settings and
-local network list; refresh the list from your provider's authoritative source
-when its ranges change. Existing proxy installations need the generic
-`cdn-ips.txt` before their next deployment. No provider network list is fetched
-automatically. The dedicated Caddy service remains unprivileged, listens on a
+network-source settings and list. Automatic sources use the daily
+`ikev2-web-cdn-networks.timer`; manual sources disable this timer. Download or
+validation failures keep the previous list; apply failures attempt to restore
+the list/config and restart the previous proxy. Existing proxy installations
+without `network_source` stay manual until configured through the wizard. The dedicated Caddy service remains unprivileged, listens on a
 port above 1023 (default 8080), and uses an APT-authenticated binary. Ordinary
 APT upgrades do not update that extracted binary; rerun the helper to refresh it.
 Manage it with `sudo systemctl start|stop|restart ikev2-web-proxy`.

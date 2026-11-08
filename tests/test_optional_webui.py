@@ -63,6 +63,7 @@ exit "${HELPER_EXIT:-0}"
         packaging = self.root / "packaging"
         packaging.mkdir()
         (packaging / "install-webui.sh").write_text(self.helper)
+        (packaging / "TOOL_VERSION").write_text("9.8.7\n")
 
     def bundle(self, extra=None, tool="install-webui.sh"):
         archive = self.root / "fixture.tar.gz"
@@ -71,6 +72,10 @@ exit "${HELPER_EXIT:-0}"
             member = tarfile.TarInfo("packaging/" + tool)
             member.size = len(helper)
             output.addfile(member, io.BytesIO(helper))
+            stamp = b"9.8.7\n"
+            member = tarfile.TarInfo("packaging/TOOL_VERSION")
+            member.size = len(stamp)
+            output.addfile(member, io.BytesIO(stamp))
             if extra:
                 member = tarfile.TarInfo(extra)
                 member.size = 1
@@ -264,6 +269,16 @@ main webui --secure-cookie
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.calls(), "panel install --secure-cookie\n")
 
+    def test_stale_local_tools_are_skipped_for_the_matching_release(self):
+        self.local_helper()
+        (self.root / "packaging/TOOL_VERSION").write_text("9.8.6\n")
+        self.bundle(tool="setup-cdn-proxy.sh")
+        (self.root / "packaging/setup-cdn-proxy.sh").write_text('exit 99\n')
+        wrapper = WRAPPER.replace('/opt/ikev2/packaging/', str(self.root / "absent") + '/')
+        result = self.run_script(wrapper + '\nconfigure_cdn\n')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("releases/download/", self.calls())
+
     def test_main_cdn_dispatch_uses_checkout_without_vpn_reconfiguration(self):
         self.local_helper()
         (self.root / "packaging/setup-cdn-proxy.sh").write_text(self.helper)
@@ -299,6 +314,7 @@ main cdn
         installed = self.root / "installed"
         (installed / "packaging").mkdir(parents=True)
         (installed / "packaging/setup-cdn-proxy.sh").write_text(self.helper)
+        (installed / "packaging/TOOL_VERSION").write_text("9.8.7\n")
         wrapper = WRAPPER.replace('/opt/ikev2', str(installed))
         result = self.run_script(wrapper + '\nconfigure_cdn\n')
         self.assertEqual(result.returncode, 0, result.stderr)

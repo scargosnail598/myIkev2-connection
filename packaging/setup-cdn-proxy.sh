@@ -23,7 +23,7 @@ esac
 [[ ${EUID} -eq 0 ]] || die "Run with sudo or as root."
 command -v python3 >/dev/null || die "Python 3 is required."
 [[ -f "$WEB_CONFIG" ]] || die "Install the Web UI first: sudo bash ikev2-strongswan-ubuntu.sh webui"
-[[ -f "$SCRIPT_DIR/render-cdn-proxy.py" && -f "$SCRIPT_DIR/install-cdn-proxy.sh" ]] ||
+[[ -f "$SCRIPT_DIR/render-cdn-proxy.py" && -f "$SCRIPT_DIR/install-cdn-proxy.sh" && -f "$SCRIPT_DIR/cdn-networks.py" ]] ||
   die "The CDN helper files are missing. Update the Web UI or use a full checkout."
 curl --fail --silent --max-time 3 http://127.0.0.1:8787/api/health >/dev/null ||
   die "The local Web UI is unavailable. Start ikev2-web.service and check its health first."
@@ -93,13 +93,17 @@ PYTHON
 printf '\nUse current origin-facing CIDRs from your CDN provider, one per line.\n'
 printf '  1) Read a local network-list file\n'
 printf '  2) Paste network ranges\n'
-network_default=1
+printf '  4) Automatic: ArvanCloud official feed\n'
+printf '  5) Automatic: Cloudflare official API (IPv4 + IPv6)\n'
+printf '  6) Automatic: another CDN public HTTPS text feed\n'
+network_default=''
 if [[ -f "$PROXY_DIR/cdn-ips.txt" ]]; then
   printf '  3) Keep the existing network list\n'
   network_default=3
 fi
-read -r -p "Network input [$network_default]: " network_choice || exit 1
-case "${network_choice:-$network_default}" in
+read -r -p "Network input${network_default:+ [$network_default]}: " network_choice || exit 1
+network_choice=${network_choice:-$network_default}
+case "$network_choice" in
   1)
     read -r -p 'Path to the CDN CIDR file: ' network_path || exit 1
     [[ -f "$network_path" && -r "$network_path" ]] || die "The network-list file is not readable."
@@ -114,8 +118,24 @@ case "${network_choice:-$network_default}" in
   3)
     [[ -f "$PROXY_DIR/cdn-ips.txt" ]] || die "There is no existing network list."
     cp -- "$PROXY_DIR/cdn-ips.txt" "$stage/cdn-ips.txt"
+    if [[ -f "$PROXY_DIR/origin.json" ]]; then
+      python3 -B "$SCRIPT_DIR/cdn-networks.py" keep-source "$PROXY_DIR/origin.json" "$stage/origin.json"
+    fi
     ;;
-  *) die "Invalid network input selection." ;;
+  4|5|6)
+    case "$network_choice" in
+      4) provider=arvancloud ;;
+      5) provider=cloudflare ;;
+      6) provider=custom ;;
+    esac
+    source_args=(--provider "$provider" --settings "$stage/origin.json" --output "$stage/cdn-ips.txt")
+    if [[ "$provider" == custom ]]; then
+      read -r -p 'Public HTTPS CIDR feed URL (no credentials/query): ' feed_url || exit 1
+      source_args+=(--url "$feed_url")
+    fi
+    python3 -B "$SCRIPT_DIR/cdn-networks.py" fetch "${source_args[@]}"
+    ;;
+  *) die "Choose a CDN or a manual network input option." ;;
 esac
 
 # Validate everything before confirmation or writing system configuration.
@@ -136,7 +156,12 @@ fi
 printf '\nConfiguration summary\n'
 printf '  Public panel URL : https://%s\n' "$hostname"
 printf '  Origin transport : HTTP, port %s (unencrypted)\n' "$port"
-printf '  Allowed peers    : supplied CDN networks and loopback\n'
+source_mode=$(python3 -B "$SCRIPT_DIR/cdn-networks.py" source "$stage/origin.json")
+printf '  Allowed peers    : validated CDN networks and loopback\n'
+printf '  Network source   : %s\n' "$source_mode"
+if [[ "$source_mode" != manual ]]; then
+  printf '  Automatic refresh: daily; keep previous valid list on failure\n'
+fi
 printf '  Changes          : proxy installation/restart, panel restart, Secure cookies\n'
 read -r -p 'Apply these settings and install/restart the CDN proxy? [y/N]: ' answer || answer=''
 case "$answer" in
@@ -145,6 +170,13 @@ case "$answer" in
 esac
 
 install -d -o root -g root -m 0755 "$PROXY_DIR"
+# Share a lock with the periodic worker while committing the selected source/list.
+[[ ! -L "$PROXY_DIR/.networks.lock" ]] || die "Unsafe CDN configuration lock."
+umask 077
+exec {cdn_lock_fd}>>"$PROXY_DIR/.networks.lock"
+chmod 600 "$PROXY_DIR/.networks.lock"
+[[ $(stat -c '%u:%a' "$PROXY_DIR/.networks.lock") == '0:600' ]] || die "Unsafe CDN configuration lock owner."
+flock -x "$cdn_lock_fd"
 backup_dir=''
 if [[ -f "$PROXY_DIR/origin.json" || -f "$PROXY_DIR/cdn-ips.txt" || -f "$PROXY_DIR/Caddyfile" ]]; then
   [[ ! -L "$PROXY_DIR/backups" ]] || die "The backup directory must not be a symlink."
@@ -161,6 +193,8 @@ for name in origin.json cdn-ips.txt; do
   install -o root -g root -m 0644 "$stage/$name" "$PROXY_DIR/$name.new"
   mv -f -- "$PROXY_DIR/$name.new" "$PROXY_DIR/$name"
 done
+# The proxy installer takes the same lock and reads the committed configuration.
+flock -u "$cdn_lock_fd"
 if ! bash "$SCRIPT_DIR/install-cdn-proxy.sh"; then
   printf 'CDN proxy installation failed; new settings remain saved for retry. Service/files may be partially installed.\n' >&2
   [[ -z "$backup_dir" ]] || printf 'Previous settings are available in: %s\n' "$backup_dir" >&2

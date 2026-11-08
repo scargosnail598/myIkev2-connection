@@ -6,7 +6,7 @@ or install the optional Web UI during initial setup or later.
 
 | Component | File | Version / platform |
 | --- | --- | --- |
-| VPN server | `ikev2-strongswan-ubuntu.sh` | 6.4.11 / Ubuntu 22.04, 24.04 |
+| VPN server | `ikev2-strongswan-ubuntu.sh` | 6.4.12 / Ubuntu 22.04, 24.04 |
 | Windows client | `ikev2-windows-client.ps1` | 6.4.7 / PowerShell 5.1+ |
 | Linux client | `ikev2-linux-client.sh` | 1.9.8 / Ubuntu 22.04, 24.04 |
 | Web UI | `packaging/install-webui.sh` | Python 3 + systemd; optional |
@@ -127,11 +127,22 @@ sudo bash ./ikev2-strongswan-ubuntu.sh cdn
 ```
 
 The wizard checks local panel health and asks for the panel hostname, origin
-port (default 8080), and current provider egress CIDRs. Read the ranges from a
-local file, paste them one per line, or keep the existing list. It validates the
+port (default 8080), and how to obtain provider egress CIDRs. Choose **4) ArvanCloud**,
+**5) Cloudflare**, or **6) another CDN's public HTTPS text feed** for automatic
+retrieval. Local files, pasted CIDRs and keeping the existing list remain available.
+Automatic sources refresh daily; download/validation failures retain the previous
+valid list. Changes restart only the CDN proxy, with rollback on failed restart
+or health checks. No network change means no restart. The wizard validates the
 inputs and port availability, shows a summary, and requires confirmation before
 saving settings and installing/restarting the proxy. Existing origin, network
 and Caddy settings are backed up under `/etc/ikev2-web-proxy/backups/`.
+
+Version **6.4.12** adds automatic feeds. Update the complete Web UI/CDN sources
+before running the wizard. The installer checks `packaging/TOOL_VERSION` and
+uses local/installed tools only when their version matches the running script;
+otherwise it downloads the matching release bundle. The daily timer is
+`ikev2-web-cdn-networks.timer`; see the [CDN guide](WEBUI_CDN_GUIDE.md#automatic-cdn-network-feeds)
+for manual refresh, status, failure recovery and disabling automation.
 
 This uses an **HTTP origin**: the CDN-to-server leg is unencrypted. Browser HTTPS
 is required. Setup enables Secure cookies and restarts the panel/proxy with
@@ -301,12 +312,13 @@ bad CA, certificate renewal/rotation and relaunch on supported operating systems
 A suite release uses a new server tag matching the server script's version.
 Client version tags must exist; unchanged clients reuse their existing tags.
 Commit and push changes to `main` first. The client scripts in this checkout
-are unchanged from `linux-v1.9.8` and `windows-v6.4.7`, so publish this server
+are unchanged from `linux-v1.9.8` and `windows-v6.4.7`. Keep
+`packaging/TOOL_VERSION` in sync with the server version, then publish this server
 version without moving or recreating those tags:
 
 ```bash
-git tag -a server-v6.4.11 -m "Server v6.4.11"
-git push origin server-v6.4.11
+git tag -a server-v6.4.12 -m "Server v6.4.12"
+git push origin server-v6.4.12
 ```
 
 When changing a client, bump its embedded version and publish its new component

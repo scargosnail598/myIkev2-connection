@@ -61,6 +61,11 @@ jobs:
             exit 1
           }
 
+          [[ "$(cat packaging/TOOL_VERSION)" == "$server_version" ]] || {
+            echo "Web UI/CDN tool version must match the server version"
+            exit 1
+          }
+
           server_tag="server-v${server_version}"
           linux_tag="linux-v${linux_version}"
           windows_tag="windows-v${windows_version}"

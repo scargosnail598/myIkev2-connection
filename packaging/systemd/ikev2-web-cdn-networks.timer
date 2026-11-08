@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily refresh of CDN origin IP ranges
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=30m
+Persistent=true
+Unit=ikev2-web-cdn-networks.service
+
+[Install]
+WantedBy=timers.target

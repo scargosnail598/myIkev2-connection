@@ -198,6 +198,8 @@ jobs:
             "$source_dir/packaging/systemd/ikev2-web.service" \
             "$source_dir/packaging/systemd/ikev2-web-broker.service" \
             "$source_dir/packaging/systemd/ikev2-web-proxy.service" \
+            "$source_dir/packaging/systemd/ikev2-web-cdn-networks.service" \
+            "$source_dir/packaging/systemd/ikev2-web-cdn-networks.timer" \
             "$source_dir/packaging/systemd/ikev2-web-users-apply.service" \
             "$source_dir/packaging/systemd/ikev2-web-limits.service" \
             "$source_dir/packaging/systemd/ikev2-web-limits.timer" \
@@ -207,7 +209,7 @@ jobs:
             "$source_dir/packaging/systemd/ikev2-telegram-collect.timer" \
             "$deploy_dir/packaging/systemd/"
           sudo -n /usr/bin/install -o root -g root -m 0644 \
-            "$source_dir/packaging/render-cdn-proxy.py" "$deploy_dir/packaging/"
+            "$source_dir/packaging/render-cdn-proxy.py" "$source_dir/packaging/cdn-networks.py" "$source_dir/packaging/TOOL_VERSION" "$deploy_dir/packaging/"
           sudo -n /usr/bin/install -o root -g root -m 0755 \
             "$source_dir/packaging/setup-cdn-proxy.sh" \
             "$source_dir/packaging/install-cdn-proxy.sh" \

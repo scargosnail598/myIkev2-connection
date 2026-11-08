@@ -41,10 +41,24 @@ class CdnSetupTests(unittest.TestCase):
         source = source.replace('[[ ${EUID} -eq 0 ]]', '[[ 0 -eq 0 ]]')
         source = source.replace("'0:755'", f"'{os.getuid()}:755'")
         source = source.replace("'0:644'", f"'{os.getuid()}:644'")
+        source = source.replace("'0:600'", f"'{os.getuid()}:600'")
         source = source.replace('-o root -g root', f'-o {os.getuid()} -g {os.getgid()}')
         self.script = self.root / 'setup.sh'
         self.script.write_text(source)
         shutil.copyfile(REPO / 'packaging/render-cdn-proxy.py', self.root / 'render-cdn-proxy.py')
+        networks_source = (REPO / 'packaging/cdn-networks.py').read_text()
+        # All CLI validation/writes are real; only feed HTTP is replaced in the fixture.
+        networks_source = networks_source.replace('if __name__ == "__main__":', '''
+def fixture_fetch(source):
+    if os.environ.get("FETCH_FAIL") == "yes":
+        raise RuntimeError("fixture feed unavailable")
+    if network_source({"network_source": source}) is None:
+        raise ValueError("missing source")
+    return "8.8.8.0/24\\n"
+fetch_ranges = fixture_fetch
+if __name__ == "__main__":
+''')
+        (self.root / 'cdn-networks.py').write_text(networks_source)
         (self.root / 'install-cdn-proxy.sh').write_text('''#!/usr/bin/env bash
 printf 'proxy install\n' >> "$TRACE"
 exit "${INSTALL_EXIT:-0}"
@@ -171,12 +185,64 @@ exit "${INSTALL_EXIT:-0}"
         result = subprocess.run(['bash', '-euc', body], capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
         for name in ('setup-cdn-proxy.sh', 'install-cdn-proxy.sh', 'render-cdn-proxy.py',
-                     'systemd/ikev2-web-proxy.service'):
+                     'cdn-networks.py', 'TOOL_VERSION', 'systemd/ikev2-web-proxy.service',
+                     'systemd/ikev2-web-cdn-networks.service', 'systemd/ikev2-web-cdn-networks.timer'):
             self.assertTrue((installed / 'packaging' / name).is_file(), name)
         result = subprocess.run(['bash', str(installed / 'packaging/setup-cdn-proxy.sh'), '--help'],
                                 capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('HTTP CDN origin', result.stdout)
+
+    def test_automatic_provider_selection_records_source_and_shows_daily_refresh(self):
+        for choice, provider in (("4", "arvancloud"), ("5", "cloudflare")):
+            with self.subTest(provider=provider):
+                result = self.run_setup(f'panel.example.com\n8080\n{choice}\ny\n')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                settings = json.loads((self.config / 'origin.json').read_text())
+                self.assertEqual(settings['network_source'], {'provider': provider})
+                self.assertIn('Automatic refresh: daily', result.stdout)
+
+    def test_custom_https_feed_is_supported(self):
+        result = self.run_setup('panel.example.com\n8080\n6\nhttps://cdn.example.com/ips.txt\ny\n')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads((self.config / 'origin.json').read_text())['network_source'],
+                         {'provider': 'custom', 'url': 'https://cdn.example.com/ips.txt'})
+
+    def test_failed_automatic_download_preserves_existing_settings(self):
+        original = self.existing()
+        self.env['FETCH_FAIL'] = 'yes'
+        result = self.run_setup('panel.example.com\n8080\n4\ny\n')
+        self.assertNotEqual(result.returncode, 0)
+        for name, data in original.items():
+            self.assertEqual((self.config / name).read_text(), data)
+        self.assertFalse(self.trace.exists())
+
+    def test_keeping_existing_list_keeps_automatic_source(self):
+        self.existing()
+        origin = self.config / 'origin.json'
+        settings = json.loads(origin.read_text())
+        settings['network_source'] = {'provider': 'cloudflare'}
+        origin.write_text(json.dumps(settings))
+        result = self.run_setup('\n\n3\ny\n')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(origin.read_text())['network_source'], {'provider': 'cloudflare'})
+
+    def test_existing_networks_without_origin_can_be_kept_as_manual(self):
+        self.existing()
+        (self.config / 'origin.json').unlink()
+        result = self.run_setup('panel.example.com\n\n3\ny\n')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('network_source', json.loads((self.config / 'origin.json').read_text()))
+
+    def test_switching_to_manual_input_removes_automatic_source(self):
+        self.existing()
+        origin = self.config / 'origin.json'
+        settings = json.loads(origin.read_text())
+        settings['network_source'] = {'provider': 'cloudflare'}
+        origin.write_text(json.dumps(settings))
+        result = self.run_setup(self.file_input())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('network_source', json.loads(origin.read_text()))
 
     def test_unknown_arguments_are_rejected(self):
         result = self.run_setup('', '--unknown')

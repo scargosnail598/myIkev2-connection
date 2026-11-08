@@ -18,6 +18,14 @@ PROXY_BINARY=/usr/local/lib/ikev2-web/caddy
   printf 'Origin settings must be root-owned, mode 0644.\n' >&2; exit 1;
 }
 
+# Serialize deployments with the daily refresh worker and setup wizard.
+[[ ! -L "$PROXY_DIR/.networks.lock" ]] || { printf 'Unsafe CDN lock.\n' >&2; exit 1; }
+umask 077
+exec {cdn_lock_fd}>>"$PROXY_DIR/.networks.lock"
+chmod 600 "$PROXY_DIR/.networks.lock"
+[[ $(stat -c '%u:%a' "$PROXY_DIR/.networks.lock") == '0:600' ]] || { printf 'Unsafe CDN lock owner.\n' >&2; exit 1; }
+flock -x "$cdn_lock_fd"
+
 stage=$(mktemp -d /tmp/ikev2-proxy.XXXXXXXX)
 trap 'rm -rf -- "$stage"' EXIT
 # CDN address ranges are supplied by the administrator, never hardcoded to a vendor.
@@ -35,6 +43,8 @@ if ! systemctl is-active --quiet ikev2-web-proxy.service && \
   printf 'Origin port %s is already occupied; refusing to replace another service.\n' "${origin[1]}" >&2
   exit 1
 fi
+
+source_mode=$(python3 -B "$SCRIPT_DIR/cdn-networks.py" source "$PROXY_DIR/origin.json")
 
 # Extract only the binary from the distribution's authenticated APT package.
 # Do not install its package service: that could start an unwanted listener on 80.
@@ -57,6 +67,7 @@ if ! getent passwd ikev2-proxy >/dev/null; then
 fi
 
 install -d -o root -g root -m 0755 /usr/local/lib/ikev2-web
+install -o root -g root -m 0644 "$SCRIPT_DIR/cdn-networks.py" "$SCRIPT_DIR/render-cdn-proxy.py" /usr/local/lib/ikev2-web/
 install -o root -g root -m 0755 "$stage/package/usr/bin/caddy" "$PROXY_BINARY.new"
 mv -f "$PROXY_BINARY.new" "$PROXY_BINARY"
 install -o root -g root -m 0644 "$stage/Caddyfile" "$PROXY_DIR/Caddyfile.new"
@@ -69,6 +80,9 @@ runuser -u ikev2-proxy -- "$PROXY_BINARY" validate --config "$PROXY_DIR/Caddyfil
   python3 -B -m webui.manage configure-cookie --config /etc/ikev2-web/config.json
 )
 systemctl restart ikev2-web.service
+install -o root -g root -m 0644 \
+  "$SCRIPT_DIR/systemd/ikev2-web-cdn-networks.service" \
+  "$SCRIPT_DIR/systemd/ikev2-web-cdn-networks.timer" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable ikev2-web-proxy.service
 systemctl restart ikev2-web-proxy.service
@@ -78,4 +92,10 @@ curl --fail --silent --show-error --retry 15 --retry-connrefused --retry-delay 1
   "http://127.0.0.1:${origin[1]}/api/health" >/dev/null
 systemctl is-active --quiet ikev2-web-proxy.service
 printf 'Unprivileged Caddy origin ready on HTTP port %s for %s; only CDN peers and loopback accepted.\n' "${origin[1]}" "${origin[0]}"
+if [[ "$source_mode" == manual ]]; then
+  systemctl disable --now ikev2-web-cdn-networks.timer
+else
+  systemctl enable --now ikev2-web-cdn-networks.timer
+  printf 'Automatic %s network refresh enabled (daily).\n' "$source_mode"
+fi
 printf 'No firewall, VPN, DNS, port 80, or port 443 settings were changed.\n'

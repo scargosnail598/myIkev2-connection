@@ -51,7 +51,7 @@ sudo ./ikev2-strongswan-ubuntu.sh
 The interactive menu includes **About**, which briefly describes the server
 installer and displays its version. On managed installations, **13) Reset Web UI
 Password** changes the panel password, **14) Install / Update Web UI** installs the
-panel, and **15) Exit** closes the menu.
+panel, **15) Configure Web UI for CDN** prepares the CDN origin, and **16) Exit** closes the menu.
 
 On a fresh server choose:
 
@@ -66,6 +66,12 @@ If panel setup fails, the VPN remains installed. Retry with
 `sudo bash ./ikev2-strongswan-ubuntu.sh webui`.
 See [Web UI installation and access](webui.md#install-with-working-service-controls)
 for prerequisites, release bundles, SSH access and rollback.
+
+For an installed panel, run `sudo bash ./ikev2-strongswan-ubuntu.sh cdn` or
+choose **15) Configure Web UI for CDN**. The wizard collects the hostname,
+HTTP origin port and provider CIDRs, validates them and requests confirmation.
+It backs up existing proxy settings and installs/restarts only the panel/proxy;
+DNS and firewall setup remain manual. See [CDN setup and rollback](../WEBUI_CDN_GUIDE.md).
 
 ### Installation prompts
 
@@ -379,7 +385,8 @@ IKEv2 installation detected
 12) About
 13) Reset Web UI Password
 14) Install / Update Web UI
-15) Exit
+15) Configure Web UI for CDN
+16) Exit
 ```
 
 Choose:

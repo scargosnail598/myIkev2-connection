@@ -78,6 +78,7 @@ require_source_files() {
     "packaging/systemd/${BROKER_SERVICE}" \
     "packaging/systemd/${WEB_SERVICE}" \
     "packaging/systemd/ikev2-web-proxy.service" \
+    "packaging/setup-cdn-proxy.sh" \
     "packaging/install-cdn-proxy.sh" \
     "packaging/render-cdn-proxy.py"; do
     [[ -f "${SOURCE_DIR}/${path}" ]] || die "Required source file is missing: ${path}"
@@ -94,6 +95,16 @@ install_source() {
   install -o root -g root -m 0755 \
     "${SOURCE_DIR}/packaging/reset-webui-password.sh" \
     "${INSTALL_DIR}/reset-webui-password.sh"
+
+  # Retain CDN setup tools after installation from a temporary release bundle.
+  install -d -o root -g root -m 0755 "${INSTALL_DIR}/packaging/systemd"
+  install -o root -g root -m 0755 \
+    "${SOURCE_DIR}/packaging/setup-cdn-proxy.sh" \
+    "${SOURCE_DIR}/packaging/install-cdn-proxy.sh" "${INSTALL_DIR}/packaging/"
+  install -o root -g root -m 0644 \
+    "${SOURCE_DIR}/packaging/render-cdn-proxy.py" "${INSTALL_DIR}/packaging/"
+  install -o root -g root -m 0644 \
+    "${SOURCE_DIR}/packaging/systemd/ikev2-web-proxy.service" "${INSTALL_DIR}/packaging/systemd/"
 
   install -o root -g root -m 0644 \
     "${SOURCE_DIR}/webui/__init__.py" \
@@ -367,6 +378,7 @@ print("Telegram settings verified through the unprivileged broker client (no con
   fi
 
   printf '\nWeb UI installed successfully.\n'
+  printf 'Optional CDN setup: sudo bash /opt/ikev2/packaging/setup-cdn-proxy.sh\n'
   if [[ -f /etc/ikev2-web-proxy/origin.json ]]; then
     /usr/bin/python3 -c 'import json; c=json.load(open("/etc/ikev2-web-proxy/origin.json")); print("Open https://" + c["hostname"] + " through your CDN.")'
     return 0

@@ -199,7 +199,22 @@ show_about() {
 }
 
 # Prefer a checkout; standalone release scripts fetch the matching, checked bundle.
-install_webui() (
+install_webui() {
+  info "Installing the optional Web UI; set the panel admin password when prompted."
+  run_webui_tool install-webui.sh install "$@"
+}
+
+configure_cdn() {
+  run_webui_tool setup-cdn-proxy.sh "$@"
+}
+
+run_webui_tool() (
+  local tool="$1"
+  shift
+  case "$tool" in
+    install-webui.sh|setup-cdn-proxy.sh) ;;
+    *) warn "Unsupported Web UI tool."; return 1 ;;
+  esac
   local source_dir version artifact base_url work_dir expected actual dependency
   source_dir=$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")") || return 1
   for dependency in python3 curl sha256sum; do
@@ -209,7 +224,11 @@ install_webui() (
     fi
   done
 
-  if [[ ! -f "${source_dir}/packaging/install-webui.sh" ]]; then
+  if [[ ! -f "${source_dir}/packaging/${tool}" && "$tool" == "setup-cdn-proxy.sh" &&
+      -f "/opt/ikev2/packaging/${tool}" && ! -L "/opt/ikev2/packaging/${tool}" ]]; then
+    source_dir=/opt/ikev2
+  fi
+  if [[ ! -f "${source_dir}/packaging/${tool}" ]]; then
     version=$(installer_semver)
     artifact="ikev2-webui-v${version}.tar.gz"
     base_url="https://github.com/${GITHUB_REPO}/releases/download/${GITHUB_RELEASE_TAG_PREFIX}${version}"
@@ -255,8 +274,11 @@ PYTHON
     source_dir="${work_dir}/source"
   fi
 
-  info "Installing the optional Web UI (loopback only); set the panel admin password when prompted."
-  bash "${source_dir}/packaging/install-webui.sh" install "$@"
+  if [[ ! -f "${source_dir}/packaging/${tool}" ]]; then
+    warn "This Web UI bundle does not include the requested tool. Update the Web UI or use a full current repository checkout."
+    return 1
+  fi
+  bash "${source_dir}/packaging/${tool}" "$@"
 )
 
 install_optional_webui() {
@@ -4108,8 +4130,9 @@ interactive_menu() {
       printf '  12) About\n'
       printf '  13) Reset Web UI Password\n'
       printf '  14) Install / Update Web UI\n'
-      printf '  15) Exit\n'
-      read -r -p 'Choose [1-15]: ' choice || true
+      printf '  15) Configure Web UI for CDN\n'
+      printf '  16) Exit\n'
+      read -r -p 'Choose [1-16]: ' choice || true
 
       case "$choice" in
         1)
@@ -4166,6 +4189,10 @@ interactive_menu() {
           pause_main_menu
           ;;
         15)
+          configure_cdn || warn "CDN setup did not complete. Review the message above and retry."
+          pause_main_menu
+          ;;
+        16)
           printf '\nExiting...\n'
           exit 0
           ;;
@@ -4203,7 +4230,7 @@ interactive_menu() {
 
 usage() {
   cat <<EOF
-Usage: $0 [install|upgrade|reconnect|update|status|certificate|renew|logs|disconnect|diagnostics|start|stop|restart|proxy-start|proxy-stop|proxy-restart|start-all|stop-all|webui|reset-webui-password|uninstall]
+Usage: $0 [install|upgrade|reconnect|update|status|certificate|renew|logs|disconnect|diagnostics|start|stop|restart|proxy-start|proxy-stop|proxy-restart|start-all|stop-all|webui|cdn|reset-webui-password|uninstall]
 
 Commands:
   install        Interactive IKEv2 installation with an optional Web UI prompt.
@@ -4225,6 +4252,7 @@ Commands:
   start-all      Start firewall/NAT, IKEv2, and configured Proxy Mode.
   stop-all       Stop Proxy Mode, IKEv2, and firewall/NAT after confirmation.
   webui          Install/update the optional Web UI; accepts --secure-cookie and --password-stdin.
+  cdn            Interactively prepare the installed Web UI for an HTTP CDN origin.
   reset-webui-password
                  Reset the Web UI password (optional --password-stdin); sign out panel sessions.
   uninstall      Remove managed configuration and restore previous files/services.
@@ -4241,6 +4269,11 @@ main() {
   initialize_logging
   check_ubuntu
   # Panel commands do not need VPN logging/timer reconfiguration.
+  if [[ "${1:-}" == "cdn" ]]; then
+    shift
+    configure_cdn "$@"
+    return
+  fi
   if [[ "${1:-}" == "webui" ]]; then
     shift
     install_webui "$@"

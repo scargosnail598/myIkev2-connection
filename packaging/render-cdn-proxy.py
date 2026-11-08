@@ -55,4 +55,7 @@ def render(settings: dict, networks_text: str) -> str:
 
 
 if __name__ == "__main__":
-    print(render(json.loads(Path(sys.argv[1]).read_text()), Path(sys.argv[2]).read_text()), end="")
+    try:
+        print(render(json.loads(Path(sys.argv[1]).read_text()), Path(sys.argv[2]).read_text()), end="")
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise SystemExit(f"Invalid CDN configuration: {error}") from None

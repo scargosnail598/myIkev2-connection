@@ -118,6 +118,35 @@ This preserves the panel username, resets the password, disables panel 2FA and
 signs out sessions. It requires root/sudo and an installed Web UI. See
 [password reset and deployment details](docs/webui.md#install-with-working-service-controls).
 
+## Prepare the panel for a CDN
+
+After installing the Web UI, choose **15) Configure Web UI for CDN**, or run:
+
+```bash
+sudo bash ./ikev2-strongswan-ubuntu.sh cdn
+```
+
+The wizard checks local panel health and asks for the panel hostname, origin
+port (default 8080), and current provider egress CIDRs. Read the ranges from a
+local file, paste them one per line, or keep the existing list. It validates the
+inputs and port availability, shows a summary, and requires confirmation before
+saving settings and installing/restarting the proxy. Existing origin, network
+and Caddy settings are backed up under `/etc/ikev2-web-proxy/backups/`.
+
+This uses an **HTTP origin**: the CDN-to-server leg is unencrypted. Browser HTTPS
+is required. Setup enables Secure cookies and restarts the panel/proxy with
+root/sudo privileges; it does not restart the VPN or edit DNS/firewall rules.
+Configure the CDN record, disable caching and allow the origin TCP port only
+from CDN ranges yourself. See the [CDN guide](WEBUI_CDN_GUIDE.md) for HTTPS
+origin alternatives, verification and rollback.
+
+New Web UI installations retain the wizard at
+`/opt/ikev2/packaging/setup-cdn-proxy.sh`. The main installer uses the checkout,
+then the installed wizard, then a verified matching release bundle if needed.
+Update an older Web UI or use a full checkout if the installed helper or release
+bundle lacks this feature. If proxy installation fails after confirmation, new
+settings remain saved for retry; existing settings are available in the backup.
+
 ## Server management
 
 Run `sudo bash ./ikev2-strongswan-ubuntu.sh` without arguments for the menu:
@@ -129,14 +158,15 @@ Run `sudo bash ./ikev2-strongswan-ubuntu.sh` without arguments for the menu:
 4) Connected Clients             12) About
 5) Diagnostics                   13) Reset Web UI Password
 6) Show Last 100 Log Entries      14) Install / Update Web UI
-7) Export Client Profile (.ikev)  15) Exit
-8) SOCKS5 Proxy Mode
+7) Export Client Profile (.ikev)  15) Configure Web UI for CDN
+8) SOCKS5 Proxy Mode              16) Exit
 ```
 
 | Command | Action |
 | --- | --- |
 | `install` | Fresh interactive VPN setup, with an optional Web UI prompt |
 | `webui` | Install/update the panel; accepts `--secure-cookie`, `--password-stdin` |
+| `cdn` | Interactively configure the installed panel as an HTTP CDN origin |
 | `status`, `diagnostics` | Status and local health checks |
 | `certificate`, `renew` | Certificate status or ACME renewal |
 | `logs` | Last 100 installer log entries |

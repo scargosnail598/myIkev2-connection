@@ -16,6 +16,41 @@ The Web UI itself remains on loopback. A CDN cannot carry the IKEv2 VPN through
 this HTTP proxy: clients still connect directly to the VPN endpoint on UDP
 500/4500. Use a separate hostname for the panel if needed.
 
+## Interactive server setup
+
+If the Web UI is already installed, open the server installer's main menu and
+choose **15) Configure Web UI for CDN**, or run:
+
+```bash
+sudo bash ./ikev2-strongswan-ubuntu.sh cdn
+```
+
+This wizard prepares the **managed HTTP origin** described below. It checks the
+local panel, asks for a hostname and origin port, and accepts provider CIDRs
+from a local file or multiline paste. Existing hostname/port values are defaults;
+you can also keep the current network list. It validates all inputs, checks port
+availability and shows a summary before an explicit confirmation (default No).
+Cancellation or invalid inputs leave existing settings unchanged.
+
+After confirmation it saves `origin.json` and `cdn-ips.txt` under
+`/etc/ikev2-web-proxy`, then installs/restarts the proxy and panel and enables
+Secure cookies. Existing `origin.json`, `cdn-ips.txt` and `Caddyfile` are copied
+to a root-only `backups/setup.*` directory there before replacement. Failed
+installation returns an error and leaves new settings saved for retry; packages
+and services may be partially installed. It does not automatically roll back.
+
+The wizard is retained at `/opt/ikev2/packaging/setup-cdn-proxy.sh` by new panel
+installations. The main script prefers a checkout, otherwise uses this installed
+helper, otherwise downloads the verified matching release bundle. An older
+panel/release without the wizard needs a Web UI update or a full checkout.
+No real deployment values are written into the repository.
+
+You still configure the provider's DNS/CDN record, HTTPS, cache bypass and
+provider/server firewall yourself. The wizard prints the required origin
+hostname and port. It does not change the VPN, DNS, CA trust or firewall rules.
+For an encrypted CDN-to-origin leg use your own HTTPS reverse proxy below;
+this wizard's origin transport is HTTP.
+
 ## 1. Prepare the panel and hostname
 
 Install the panel on the Ubuntu VPN server:
@@ -179,6 +214,13 @@ restriction in place. A successful local health check alone does not prove
 public DNS, TLS, CDN policy or provider firewall connectivity.
 
 ## 5. Roll back or return to SSH access
+
+If the interactive wizard replaced an existing setup, its `backups/setup.*`
+directory holds the previous origin, CIDRs and Caddyfile. Restore the relevant
+files from the reported backup into `/etc/ikev2-web-proxy/`, preserving root
+ownership and mode 0644, then restart the proxy after validating the restored
+configuration. Only files that existed before setup are backed up. These
+backups do not undo package installation or the panel's Secure-cookie change.
 
 Restore your prior proxy/CDN configuration if publication fails. For the managed
 helper, stop future automatic proxy activation by removing its trigger config:

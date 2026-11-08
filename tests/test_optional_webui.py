@@ -63,11 +63,11 @@ exit "${HELPER_EXIT:-0}"
         packaging.mkdir()
         (packaging / "install-webui.sh").write_text(self.helper)
 
-    def bundle(self, extra=None):
+    def bundle(self, extra=None, tool="install-webui.sh"):
         archive = self.root / "fixture.tar.gz"
         with tarfile.open(archive, "w:gz") as output:
             helper = self.helper.encode()
-            member = tarfile.TarInfo("packaging/install-webui.sh")
+            member = tarfile.TarInfo("packaging/" + tool)
             member.size = len(helper)
             output.addfile(member, io.BytesIO(helper))
             if extra:
@@ -161,7 +161,7 @@ STATE_FILE="$TMPDIR/../state"
 install_webui() { printf 'panel install\\n' >> "$TRACE"; return "$HELPER_EXIT"; }
 pause_main_menu() { read -r _; }
 interactive_menu
-''', "14\n\n15\n")
+''', "14\n\n16\n")
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn("14) Install / Update Web UI", result.stdout)
                 self.assertIn("Exiting", result.stdout)
@@ -186,6 +186,60 @@ main webui --secure-cookie
 ''')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.calls(), "panel install --secure-cookie\n")
+
+    def test_main_cdn_dispatch_uses_checkout_without_vpn_reconfiguration(self):
+        self.local_helper()
+        (self.root / "packaging/setup-cdn-proxy.sh").write_text(self.helper)
+        result = self.run_script(WRAPPER + MAIN + '''
+require_root() { :; }
+initialize_logging() { :; }
+check_ubuntu() { :; }
+configure_connection_logging() { exit 99; }
+main cdn
+''')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.calls(), "panel \n")
+
+    def test_cdn_standalone_uses_verified_bundle(self):
+        self.bundle(tool="setup-cdn-proxy.sh")
+        wrapper = WRAPPER.replace('/opt/ikev2/packaging/', str(self.root / "absent") + '/')
+        result = self.run_script(wrapper + '\nconfigure_cdn\n')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("server-v9.8.7/ikev2-webui-v9.8.7.tar.gz", self.calls())
+        self.assertIn("panel \n", self.calls())
+        self.assertEqual(list(self.scratch.iterdir()), [])
+
+    def test_cdn_old_bundle_reports_missing_feature_without_running_other_tools(self):
+        self.bundle()
+        wrapper = WRAPPER.replace('/opt/ikev2/packaging/', str(self.root / "absent") + '/')
+        result = self.run_script(wrapper + '\nconfigure_cdn\n')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("does not include the requested tool", result.stderr)
+        self.assertNotIn("panel \n", self.calls())
+        self.assertEqual(list(self.scratch.iterdir()), [])
+
+    def test_cdn_uses_retained_installed_helper_without_download(self):
+        installed = self.root / "installed"
+        (installed / "packaging").mkdir(parents=True)
+        (installed / "packaging/setup-cdn-proxy.sh").write_text(self.helper)
+        wrapper = WRAPPER.replace('/opt/ikev2', str(installed))
+        result = self.run_script(wrapper + '\nconfigure_cdn\n')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.calls(), "panel \n")
+
+    def test_existing_server_menu_runs_cdn_and_recovers_from_failure(self):
+        (self.root / "state").touch()
+        self.env["HELPER_EXIT"] = "23"
+        result = self.run_script(functions("interactive_menu", "usage") + '''
+STATE_FILE="$TMPDIR/../state"
+configure_cdn() { printf 'cdn setup\\n' >> "$TRACE"; return "$HELPER_EXIT"; }
+pause_main_menu() { read -r _; }
+interactive_menu
+''', "15\n\n16\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("15) Configure Web UI for CDN", result.stdout)
+        self.assertIn("CDN setup did not complete", result.stderr)
+        self.assertEqual(self.calls(), "cdn setup\n")
 
     def fresh_install(self, panel="no", proceed="yes", helper_exit="0"):
         self.env.update(PANEL_CHOICE=panel, PROCEED_CHOICE=proceed, HELPER_EXIT=helper_exit)

@@ -168,7 +168,14 @@ ssh -L 8787:127.0.0.1:8787 user@server
 Then open `http://127.0.0.1:8787`. Pass `--secure-cookie` to the install command
 when an HTTPS reverse proxy will be used instead of a loopback HTTP/SSH tunnel.
 
-To publish the panel through a CDN, follow the [provider-neutral CDN guide](../WEBUI_CDN_GUIDE.md).
+To prepare the installed panel for a CDN interactively, choose **15) Configure
+Web UI for CDN** or run `sudo bash ./ikev2-strongswan-ubuntu.sh cdn`. The wizard
+collects the hostname, HTTP origin port and CIDRs (file, paste or existing list),
+validates them, backs up existing settings and asks before applying changes.
+New panel installations retain it at `/opt/ikev2/packaging/setup-cdn-proxy.sh`.
+The main script uses a checkout, installed helper or verified release bundle.
+For provider configuration, verification and rollback, follow the
+[provider-neutral CDN guide](../WEBUI_CDN_GUIDE.md).
 Keep deployment hostnames and address ranges outside the repository. You can use
 an existing HTTPS reverse proxy, or the optional `install-cdn-proxy.sh` helper
 when your provider supports HTTP origin connections. The helper uses the

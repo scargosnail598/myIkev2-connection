@@ -45,8 +45,8 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          bash -n packaging/install-webui.sh packaging/reset-webui-password.sh packaging/install-cdn-proxy.sh packaging/install-telegram-bot.sh
-          shellcheck packaging/install-webui.sh packaging/reset-webui-password.sh packaging/install-cdn-proxy.sh packaging/install-telegram-bot.sh
+          bash -n packaging/install-webui.sh packaging/reset-webui-password.sh packaging/install-cdn-proxy.sh packaging/setup-cdn-proxy.sh packaging/install-telegram-bot.sh
+          shellcheck packaging/install-webui.sh packaging/reset-webui-password.sh packaging/install-cdn-proxy.sh packaging/setup-cdn-proxy.sh packaging/install-telegram-bot.sh
           node --check webui/static/app.js
           node --check webui/static/qrcodegen.js
           python3 -B -m unittest discover -s tests -p 'test_webui.py' -v
@@ -209,6 +209,7 @@ jobs:
           sudo -n /usr/bin/install -o root -g root -m 0644 \
             "$source_dir/packaging/render-cdn-proxy.py" "$deploy_dir/packaging/"
           sudo -n /usr/bin/install -o root -g root -m 0755 \
+            "$source_dir/packaging/setup-cdn-proxy.sh" \
             "$source_dir/packaging/install-cdn-proxy.sh" \
             "$source_dir/packaging/install-telegram-bot.sh" \
             "$source_dir/packaging/reset-webui-password.sh" "$deploy_dir/packaging/"

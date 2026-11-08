@@ -6,7 +6,7 @@ IFS=$'\n\t'
 # Uses StrongSwan, EAP-MSCHAPv2, selectable Private CA or ACME trust, and IPv4 full-tunnel NAT.
 
 INSTALLER_NAME="ikev2-easy-installer"
-CURRENT_INSTALLER_VERSION="6.4.9-en"
+CURRENT_INSTALLER_VERSION="6.4.10-en"
 INSTALLER_VERSION="$CURRENT_INSTALLER_VERSION"
 
 STATE_DIR="/var/lib/${INSTALLER_NAME}"
@@ -837,17 +837,38 @@ latest_release_version() {
 }
 
 update_installer() {
+  local result=0
+  perform_installer_update || result=$?
+  if [[ "$result" -eq 10 ]]; then
+    if [[ "${1:-}" == "--relaunch" ]]; then
+      exec bash "$(readlink -f -- "$0")"
+    fi
+    info "Run the installer again to load the new version and menu."
+    return 0
+  fi
+  return "$result"
+}
+
+# Exit 10 means a new installer was installed; the caller can reload the menu.
+perform_installer_update() (
   require_root
-  local current latest tmp_dir artifact sums expected actual current_path backup_path tmp_artifact new_installer_version escaped_installer_version
+  local current latest tmp_dir artifact sums expected actual current_path backup_path
+  local tmp_artifact new_installer_version escaped_installer_version release_tag staging=''
   current="$(installer_semver)"
-  latest="$(latest_release_version)"
+  latest="$(latest_release_version)" || return 1
 
   printf '\n%bInstaller Update%b\n' "$BOLD" "$RESET"
   printf '  Current version : %s\n' "$current"
-  printf '  Latest version  : %s\n' "$latest"
+  printf '  Latest release  : %s\n' "$latest"
 
+  if [[ "$current" == "$latest" ]]; then
+    log "This installer matches the latest published release."
+    info "Changes pushed only to main are not installed by this release updater."
+    return 0
+  fi
   if ! version_is_newer "$current" "$latest"; then
-    log "The installer is already up to date."
+    warn "This script (v${current}) is newer than the latest published release (v${latest}). No downgrade was performed."
+    info "New main-branch features need a higher version and a published server release before this updater can install them."
     return 0
   fi
 
@@ -856,54 +877,70 @@ update_installer() {
     return 0
   }
 
-  current_path="$(readlink -f "$0")"
-  tmp_dir="$(mktemp -d "${STATE_DIR}/update.XXXXXX")"
+  current_path="$(readlink -f -- "$0")" || die "Unable to locate this installer."
+  mkdir -p "$STATE_DIR" "$BACKUP_DIR" || die "Unable to prepare installer update directories."
+  chmod 700 "$STATE_DIR" "$BACKUP_DIR" || die "Unable to secure installer update directories."
+  tmp_dir="$(mktemp -d "${STATE_DIR}/update.XXXXXX")" || die "Unable to create an update directory."
+  cleanup_installer_update() {
+    rm -rf -- "$tmp_dir"
+    if [[ -n "$staging" ]]; then rm -f -- "$staging"; fi
+  }
+  trap cleanup_installer_update EXIT
   artifact="ikev2-strongswan-ubuntu-v${latest}.sh"
   release_tag="${GITHUB_RELEASE_TAG_PREFIX}${latest}"
   sums="$tmp_dir/SHA256SUMS"
   tmp_artifact="$tmp_dir/$artifact"
-
-  cleanup_update_tmp() { rm -rf "$tmp_dir"; }
-  trap cleanup_update_tmp RETURN
 
   log "Downloading release ${release_tag}..."
   curl -fsSL --retry 3 --connect-timeout 10 --max-time 120 \
     -o "$tmp_artifact" \
     "https://github.com/${GITHUB_REPO}/releases/download/${release_tag}/${artifact}" \
     || die "Failed to download ${artifact}."
-
   curl -fsSL --retry 3 --connect-timeout 10 --max-time 30 \
     -o "$sums" \
     "https://github.com/${GITHUB_REPO}/releases/download/${release_tag}/SHA256SUMS" \
     || die "Failed to download release checksums."
 
-  expected="$(awk -v file="$artifact" '$2 == file || $2 == "./" file {print $1; exit}' "$sums")"
+  expected="$(awk -v file="$artifact" '$2 == file || $2 == "./" file {print $1; exit}' "$sums")" || die "Unable to read release checksums."
   [[ "$expected" =~ ^[a-fA-F0-9]{64}$ ]] || die "No valid SHA256 entry found for ${artifact}."
-  actual="$(sha256sum "$tmp_artifact" | awk '{print $1}')"
+  actual="$(sha256sum "$tmp_artifact")" || die "Unable to hash the downloaded installer."
+  actual=${actual%% *}
   [[ "${actual,,}" == "${expected,,}" ]] || die "SHA256 verification failed. The installer was not changed."
-
   bash -n "$tmp_artifact" || die "Downloaded installer failed bash syntax validation."
+  new_installer_version="$(sed -nE 's/^CURRENT_INSTALLER_VERSION="([^"]+)"$/\1/p' "$tmp_artifact")"
+  [[ "$new_installer_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ &&
+      "${new_installer_version%%-*}" == "$latest" ]] || die "Downloaded installer version does not match the release tag."
   if command_exists shellcheck; then
     shellcheck --severity=warning "$tmp_artifact" || die "Downloaded installer failed ShellCheck validation."
   fi
 
-  mkdir -p "$BACKUP_DIR"
-  chmod 700 "$BACKUP_DIR"
-  backup_path="$BACKUP_DIR/installer-v${current}-$(date +%Y%m%d-%H%M%S).sh"
-  cp -a "$current_path" "$backup_path"
+  # Prepare optional managed state before replacing the script. A standalone
+  # installer can update before the VPN has ever been provisioned.
+  if [[ -e "$STATE_FILE" || -L "$STATE_FILE" ]]; then
+    [[ -f "$STATE_FILE" && ! -L "$STATE_FILE" ]] || die "Managed state is not a regular file."
+    grep -q '^INSTALLER_VERSION=' "$STATE_FILE" || die "Managed state has no installer version; the installer was not changed."
+    cp -p -- "$STATE_FILE" "$tmp_dir/state.env" || die "Unable to stage managed state."
+    printf -v escaped_installer_version '%q' "$new_installer_version"
+    sed -i -E "s/^INSTALLER_VERSION=.*/INSTALLER_VERSION=${escaped_installer_version}/" "$tmp_dir/state.env" || die "Unable to stage the new state version."
+  fi
 
-  install -m 0755 "$tmp_artifact" "${current_path}.new"
-  mv -f "${current_path}.new" "$current_path"
-  new_installer_version="${latest}${CURRENT_INSTALLER_VERSION#"$current"}"
-  printf -v escaped_installer_version '%q' "$new_installer_version"
-  sed -i -E "s/^INSTALLER_VERSION=.*/INSTALLER_VERSION=${escaped_installer_version}/" "$STATE_FILE"
-  grep -q '^INSTALLER_VERSION=' "$STATE_FILE" || die "Installer updated, but the managed state version could not be recorded."
-  trap - RETURN
+  backup_path="$BACKUP_DIR/installer-v${current}-$(date +%Y%m%d-%H%M%S)-${BASHPID}.sh"
+  cp -p -- "$current_path" "$backup_path" || die "Unable to back up the current installer."
+  staging="$(mktemp "${current_path}.update.XXXXXX")" || die "Unable to stage the new installer."
+  install -m 0755 "$tmp_artifact" "$staging" || die "Unable to stage the new installer."
+  mv -f -- "$staging" "$current_path" || die "Unable to replace the installer."
+  if [[ -f "$tmp_dir/state.env" ]] && ! mv -f -- "$tmp_dir/state.env" "$STATE_FILE"; then
+    if install -m 0755 "$backup_path" "$staging" && mv -f -- "$staging" "$current_path"; then
+      die "Unable to record the new state version; the previous installer was restored."
+    fi
+    die "State update failed. Restore the previous installer from: ${backup_path}"
+  fi
 
   log "Installer updated successfully: v${current} -> v${latest}"
   info "Previous installer backup: ${backup_path}"
-  info "VPN configuration, certificates, users, and StrongSwan runtime were not modified."
-}
+  info "VPN configuration, certificates, users, StrongSwan runtime and Web UI were not modified."
+  return 10
+)
 
 generate_password() {
   openssl rand -hex 16
@@ -4169,7 +4206,7 @@ interactive_menu() {
           certificate_management_menu
           ;;
         10)
-          update_installer
+          update_installer --relaunch
           pause_main_menu
           ;;
         11)
@@ -4268,7 +4305,11 @@ main() {
   require_root
   initialize_logging
   check_ubuntu
-  # Panel commands do not need VPN logging/timer reconfiguration.
+  # Installer self-update and panel commands do not reconfigure VPN timers.
+  if [[ "${1:-}" == "update" ]]; then
+    update_installer
+    return
+  fi
   if [[ "${1:-}" == "cdn" ]]; then
     shift
     configure_cdn "$@"
@@ -4292,7 +4333,6 @@ main() {
     install) install_vpn ;;
     upgrade) upgrade_vpn ;;
     reconnect) apply_reconnect_policy ;;
-    update) update_installer ;;
     status) status_vpn ;;
     certificate) require_managed_installation; # shellcheck disable=SC1090
       source "$STATE_FILE"; initialize_certbot_state_defaults; show_certificate_status ;;

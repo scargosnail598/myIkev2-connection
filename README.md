@@ -6,7 +6,7 @@ or install the optional Web UI during initial setup or later.
 
 | Component | File | Version / platform |
 | --- | --- | --- |
-| VPN server | `ikev2-strongswan-ubuntu.sh` | 6.4.9 / Ubuntu 22.04, 24.04 |
+| VPN server | `ikev2-strongswan-ubuntu.sh` | 6.4.10 / Ubuntu 22.04, 24.04 |
 | Windows client | `ikev2-windows-client.ps1` | 6.4.7 / PowerShell 5.1+ |
 | Linux client | `ikev2-linux-client.sh` | 1.9.8 / Ubuntu 22.04, 24.04 |
 | Web UI | `packaging/install-webui.sh` | Python 3 + systemd; optional |
@@ -193,6 +193,26 @@ cumulative per-user traffic in `/var/lib/ikev2-easy-installer/traffic.tsv`
 every 30 seconds; this is separate from panel quota accounting. Current-session
 counters reset as sessions change. See [traffic limits and accounting](docs/user-limits.md).
 
+## How server updates are published
+
+`update` reads the latest **published GitHub Release**, not the `main` branch.
+A push/commit without a new release does not update deployed installers. A
+script newer than the published release is reported explicitly and is never
+downgraded. Equal versions mean the script matches that release, even if main
+contains later edits using the same version number.
+
+After a successful menu update the installer reloads, so new menu items appear
+immediately. A direct `update` command exits and asks you to run the new script
+again. Downloads require a valid checksum, Bash syntax and matching embedded
+release version; the previous script is backed up. Temporary downloads are
+removed on success or failure. State-write failure attempts to restore the
+previous script. Self-update does not restart VPN services or deploy Web UI/CDN
+application files; use `webui` separately to update those components.
+
+Version **6.4.10** includes the CDN wizard and these updater fixes. Publishing
+its server release is required before a deployed 6.4.9 installer can receive it
+automatically. Preparing source files does not publish a release.
+
 ## Connect Windows or Linux
 
 ### Portable `.ikev` client profiles
@@ -270,21 +290,22 @@ checks require Caddy. See the [Web UI guide](docs/webui.md) for browser checks.
 Manually verify provisioning, connect/disconnect, DNS, routing, bad credentials,
 bad CA, certificate renewal/rotation and relaunch on supported operating systems.
 
-A suite release uses component tags matching each script's embedded version.
-Commit and push changes first, then create all three tags at the same commit.
-For the versions currently in this checkout:
+A suite release uses a new server tag matching the server script's version.
+Client version tags must exist; unchanged clients reuse their existing tags.
+Commit and push changes to `main` first. The client scripts in this checkout
+are unchanged from `linux-v1.9.8` and `windows-v6.4.7`, so publish this server
+version without moving or recreating those tags:
 
 ```bash
-git tag -a linux-v1.9.8 -m "Linux client v1.9.8"
-git tag -a windows-v6.4.7 -m "Windows client v6.4.7"
-git tag -a server-v6.4.9 -m "Server v6.4.9"
-git push origin linux-v1.9.8 windows-v6.4.7
-git push origin server-v6.4.9
+git tag -a server-v6.4.10 -m "Server v6.4.10"
+git push origin server-v6.4.10
 ```
 
-Use new version numbers/tags for subsequent releases. The server tag triggers the
-release workflow. It packages the server script, both client scripts,
-`ikev2-webui-v<server-version>.tar.gz`, `RELEASE.json` and `SHA256SUMS`.
+When changing a client, bump its embedded version and publish its new component
+tag before the server tag. The server tag triggers the release workflow, which
+packages the current source versions into the server script, both client
+scripts, `ikev2-webui-v<server-version>.tar.gz`, `RELEASE.json` and `SHA256SUMS`.
+A pushed tag with a failed release workflow is not a published update.
 The Web UI bundle includes only tracked `webui/`, `telegram_bot/` and `packaging/`
 files. Local runtime credentials are not packaged.
 

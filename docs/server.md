@@ -431,6 +431,16 @@ StrongSwan  : unchanged / not restarted by this upgrade
 
 ---
 
+## Update the installer
+
+Choose **10) Update Installer** or run `sudo bash ./ikev2-strongswan-ubuntu.sh update`.
+Updates come from published server Releases. A newer script on main is not an
+available release; if your script is ahead of the published version, the
+updater reports this and keeps your current script. The menu reloads after a
+successful replacement. The CLI command completes without opening a menu.
+See [release/update behavior](../README.md#how-server-updates-are-published)
+for checksums, backups, rollback and separate panel updates.
+
 ## Check server status
 
 Run:

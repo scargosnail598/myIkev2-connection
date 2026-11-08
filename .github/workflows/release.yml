@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing server tag; matching Linux and Windows tags must point to the same commit"
+        description: "Existing server tag; tags for embedded client versions must exist (unchanged clients reuse tags)"
         required: true
         type: string
 

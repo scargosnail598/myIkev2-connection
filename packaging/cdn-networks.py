@@ -9,6 +9,8 @@ import json
 import os
 from pathlib import Path
 import runpy
+import re
+import shlex
 import stat
 import subprocess
 import tempfile
@@ -24,11 +26,49 @@ PROVIDERS = {
     "cloudflare": "https://api.cloudflare.com/client/v4/ips",
 }
 CONFIG_DIR = Path("/etc/ikev2-web-proxy")
+VPN_STATE = Path("/var/lib/ikev2-easy-installer/state.env")
 CADDY = "/usr/local/lib/ikev2-web/caddy"
 SERVICE = "ikev2-web-proxy.service"
 OWNER_UID = 0
 MAX_BYTES = 1024 * 1024
 MAX_NETWORKS = 8192
+
+
+
+def vpn_identity(path=None):
+    """Read only the managed IKE identity as data; never execute installer state."""
+    path = VPN_STATE if path is None else Path(path)
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return None
+    with os.fdopen(descriptor, "rb") as source:
+        info = os.fstat(source.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != OWNER_UID
+                or stat.S_IMODE(info.st_mode) != 0o600):
+            raise ValueError("Managed VPN state must be a root-owned regular file, mode 0600")
+        raw = source.read(MAX_BYTES + 1)
+    if len(raw) > MAX_BYTES:
+        raise ValueError("Managed VPN state exceeds the size limit")
+    identities = []
+    for line in raw.decode("utf-8").splitlines():
+        key, separator, value = line.partition("=")
+        if separator and key == "SERVER_ID":
+            parts = shlex.split(value)
+            if len(parts) != 1 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]{0,252}", parts[0]):
+                raise ValueError("Managed VPN identity is invalid; review SERVER_ID without changing certificate identity")
+            identities.append(parts[0])
+    if len(identities) != 1:
+        raise ValueError("Managed VPN state must contain exactly one SERVER_ID")
+    return identities[0]
+
+
+def validate_panel_identity(settings):
+    identity = vpn_identity()
+    hostname = settings.get("hostname")
+    if identity and isinstance(hostname, str) and hostname.rstrip(".").lower() == identity.rstrip(".").lower():
+        raise ValueError("Panel hostname must differ from the VPN SERVER_ID. Keep the VPN hostname DNS-only/direct and use a separate CDN hostname for the panel. VPN settings and certificates were not changed")
+    return identity
 
 
 def validate_url(url):
@@ -176,6 +216,7 @@ def proxy_health(settings):
 def refresh(directory=CONFIG_DIR, caddy=CADDY):
     with configuration_lock(directory):
         settings = json.loads(secure_read(directory / "origin.json"))
+        validate_panel_identity(settings)
         source = network_source(settings)
         if source is None:
             print("Manual CDN list; automatic refresh is disabled.")
@@ -231,6 +272,9 @@ def main():
     keep = actions.add_parser("keep-source")
     keep.add_argument("previous", type=Path)
     keep.add_argument("settings", type=Path)
+    actions.add_parser("identity")
+    check = actions.add_parser("check-host")
+    check.add_argument("settings", type=Path)
     actions.add_parser("refresh")
     args = parser.parse_args()
     if args.action == "fetch":
@@ -238,14 +282,21 @@ def main():
         if args.provider == "custom":
             source["url"] = args.url
         settings = json.loads(args.settings.read_text())
+        validate_panel_identity(settings)
         networks = fetch_ranges(source)
         render(settings, networks)
         settings["network_source"] = network_source({"network_source": source})
         atomic_write(args.output, networks.encode())
         atomic_write(args.settings, (json.dumps(settings) + "\n").encode())
         print(f'Validated {len(networks.splitlines())} CDN networks from {args.provider}.')
+    elif args.action == "identity":
+        print(vpn_identity() or "")
+    elif args.action == "check-host":
+        validate_panel_identity(json.loads(args.settings.read_text()))
     elif args.action == "source":
-        source = network_source(json.loads(args.settings.read_text()))
+        settings = json.loads(args.settings.read_text())
+        validate_panel_identity(settings)
+        source = network_source(settings)
         print(source["provider"] if source else "manual")
     elif args.action == "keep-source":
         source = network_source(json.loads(args.previous.read_text()))

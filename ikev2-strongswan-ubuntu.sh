@@ -6,7 +6,7 @@ IFS=$'\n\t'
 # Uses StrongSwan, EAP-MSCHAPv2, selectable Private CA or ACME trust, and IPv4 full-tunnel NAT.
 
 INSTALLER_NAME="ikev2-easy-installer"
-CURRENT_INSTALLER_VERSION="6.4.12-en"
+CURRENT_INSTALLER_VERSION="6.4.13-en"
 INSTALLER_VERSION="$CURRENT_INSTALLER_VERSION"
 
 STATE_DIR="/var/lib/${INSTALLER_NAME}"
@@ -2071,7 +2071,7 @@ install_vpn() {
   while true; do
     ask_value SERVER_ID \
       "Server address / identity" \
-      "Public FQDN or IPv4 address used by VPN clients. The same value is written into the server certificate." \
+      "Direct VPN FQDN or IPv4 address, with DNS-only routing to this server. Use a separate hostname for a CDN panel; this VPN identity is written into the server certificate." \
       "${detected_ip:-}"
     validate_server_id "$SERVER_ID" && break
     warn "Enter a valid FQDN, hostname, or IPv4 address."

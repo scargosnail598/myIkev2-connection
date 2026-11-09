@@ -77,7 +77,10 @@ DNS and firewall setup remain manual. See [CDN setup and rollback](../WEBUI_CDN_
 
 #### Server address / identity
 
-Enter the public IP address or hostname that clients will use.
+Enter the direct public IP address or DNS-only hostname that VPN clients will
+use. If you publish the Web UI through a CDN, give the panel a separate hostname.
+The VPN name is also the IKE/certificate identity and is exported into profiles;
+proxying its DNS record through an HTTP CDN breaks direct IKEv2 connectivity.
 
 Examples:
 

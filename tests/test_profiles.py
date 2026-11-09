@@ -50,6 +50,13 @@ class ProfileShareTests(unittest.TestCase):
         self.assertEqual(profile["remote_id"], profile["server"])
         self.assertFalse(result["includes_password"])
 
+    def test_panel_settings_never_replace_the_managed_vpn_endpoint(self):
+        self.settings('CERT_MODE=public\nPANEL_HOSTNAME=panel.example.test\n'
+                      'CDN_HOSTNAME=panel.example.test\nhostname=panel.example.test\n')
+        profile = self.decode(build_share(self.state, 'alice'))['profile']
+        self.assertEqual(profile['server'], 'vpn.example.test')
+        self.assertEqual(profile['remote_id'], 'vpn.example.test')
+
     def test_4096_bit_private_ca_password_ipv6_and_proxy_roundtrip_within_qr_capacity(self):
         self.settings("CERT_MODE=private\nIPV6_ENABLED=yes\nALLOW_STOCK_WINDOWS=yes\n"
                       "PROXY_ENABLED=yes\nPROXY_IP=10.254.254.1\nPROXY_PORT=1080\n")

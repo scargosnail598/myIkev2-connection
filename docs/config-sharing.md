@@ -22,6 +22,21 @@ Deliver it privately. Change the password or delete the account to block future
 authentication with old credentials; existing sessions are not disconnected.
 After CA rotation, regenerate profiles so recipients receive the current CA.
 
+## VPN endpoint versus panel hostname
+
+Exports use managed `SERVER_ID` for both `server` and `remote_id`. The panel's
+CDN hostname, browser URL and HTTP Host/forwarded headers do not change those
+fields; export requests cannot override them. QR encodes the same exported
+profile, so it retains the VPN endpoint even when viewed through a CDN.
+
+Keep the VPN hostname DNS-only, resolving directly to the IKEv2 server, and use
+a different CDN-proxied hostname for the panel. If the name in `SERVER_ID` is
+itself proxied, its exported value remains unchanged while DNS sends clients
+to CDN edges; VPN connectivity will fail. Restore direct DNS for that VPN name
+and move the panel to another hostname. Do not substitute an IP or change the
+Remote ID without checking certificate/client requirements. See
+[hostname separation and repair](../WEBUI_CDN_GUIDE.md#separate-the-panel-and-vpn-hostnames).
+
 ## Version 1 transport contract
 
 ```text

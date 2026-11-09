@@ -14,7 +14,53 @@ Browser --HTTPS--> CDN --HTTPS preferred / HTTP optional--> origin proxy
 
 The Web UI itself remains on loopback. A CDN cannot carry the IKEv2 VPN through
 this HTTP proxy: clients still connect directly to the VPN endpoint on UDP
-500/4500. Use a separate hostname for the panel if needed.
+500/4500. The panel and VPN must use distinct hostnames for this setup.
+Only the panel hostname is proxied; keep the VPN hostname DNS-only/direct.
+
+## Separate the panel and VPN hostnames
+
+| Role | Example | DNS / transport |
+| --- | --- | --- |
+| VPN endpoint and certificate identity | `vpn.example.com` | DNS-only A/AAAA to the VPN server; direct UDP 500/4500 |
+| Panel | `panel.example.com` | CDN-proxied record; HTTP/HTTPS origin proxy |
+
+The records can share the same origin IP. The CDN in this project handles only
+the panel's web requests. It does not relay IKEv2, ESP or the private SOCKS5
+endpoint. Profile `server` and `remote_id` come exclusively from managed
+`SERVER_ID` in `/var/lib/ikev2-easy-installer/state.env`, not the browser URL,
+HTTP Host/forwarded headers or `/etc/ikev2-web-proxy/origin.json`.
+
+Starting in **6.4.13**, the wizard displays the managed VPN identity and refuses
+the same hostname for the panel. Direct proxy deployments and scheduled refresh
+apply the same guard. State is read as data; DNS, StrongSwan settings, client
+exports, CA trust and certificates are not rewritten. Without managed VPN state,
+panel-only deployments can still configure a hostname. This equality check does
+not discover CDN proxying or aliases in your DNS provider; keep the VPN name and
+any CNAME targets direct too.
+
+If you already proxied the VPN hostname, preserve the name in `SERVER_ID` and
+its certificate: switch **that record back to DNS-only**, resolving to your VPN
+server. Create a different panel hostname, enable its CDN proxy/HTTPS settings,
+and rerun `cdn` with that panel name. Update the provider's origin Host header
+to match the new panel hostname and open the panel at its new URL. DNS caches
+may keep the prior CDN addresses until their TTL expires. Existing VPN profiles
+remain valid when their hostname/identity is preserved.
+
+Do not work around the failure by blindly replacing exported hostnames with an
+IP, disabling certificate validation or changing `SERVER_ID` alone. The managed
+identity is also used by StrongSwan and its certificate. If the originally
+chosen VPN identity really must change, that requires a coordinated certificate
+and VPN/client configuration change, separate from panel CDN setup.
+
+Read only the current identity, without exporting secrets:
+
+```bash
+sudo grep '^SERVER_ID=' /var/lib/ikev2-easy-installer/state.env
+```
+
+To migrate an existing collision, update the complete sources and run `cdn`
+with a separate panel hostname **before** a panel redeployment that would apply
+the old proxy settings. There is no need to uninstall/reinstall the VPN.
 
 ## Interactive server setup
 
@@ -145,8 +191,9 @@ Install the panel on the Ubuntu VPN server:
 sudo bash ./ikev2-strongswan-ubuntu.sh webui
 ```
 
-Select a panel hostname such as `panel.example.com`, add it to your CDN account,
-and configure its origin address using the server's public IP or an origin-only
+Select a panel hostname such as `panel.example.com`, different from the managed
+VPN identity, and add it to your CDN account.
+Configure its origin address using the server's public IP or an origin-only
 hostname. Enable the provider's DNS proxy/CDN mode for the panel record. Keep
 the origin destination separate from the proxied record to avoid routing loops.
 

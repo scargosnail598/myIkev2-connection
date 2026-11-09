@@ -18,6 +18,7 @@ class CdnSetupTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.config = self.root / "proxy"
+        self.vpn_state = self.root / 'vpn-state.env'
         self.web_config = self.root / "web-auth.json"
         self.web_config.write_text('{}')
         self.networks = self.root / "provider ranges.txt"
@@ -47,6 +48,9 @@ class CdnSetupTests(unittest.TestCase):
         self.script.write_text(source)
         shutil.copyfile(REPO / 'packaging/render-cdn-proxy.py', self.root / 'render-cdn-proxy.py')
         networks_source = (REPO / 'packaging/cdn-networks.py').read_text()
+        networks_source = networks_source.replace('VPN_STATE = Path("/var/lib/ikev2-easy-installer/state.env")',
+                                                  f'VPN_STATE = Path("{self.vpn_state}")')
+        networks_source = networks_source.replace('OWNER_UID = 0', f'OWNER_UID = {os.getuid()}')
         # All CLI validation/writes are real; only feed HTTP is replaced in the fixture.
         networks_source = networks_source.replace('if __name__ == "__main__":', '''
 def fixture_fetch(source):
@@ -81,6 +85,29 @@ exit "${INSTALL_EXIT:-0}"
             (self.config / name).write_text(value)
             (self.config / name).chmod(0o644)
         return values
+
+    def test_panel_and_vpn_hostnames_must_be_different(self):
+        self.vpn_state.write_text('SERVER_ID=panel.example.com\nCERT_MODE=public\n')
+        self.vpn_state.chmod(0o600)
+        original = self.vpn_state.read_bytes()
+        result = self.run_setup(self.file_input())
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Panel hostname must differ', result.stderr)
+        self.assertIn('DNS-only/direct', result.stderr)
+        self.assertEqual(self.vpn_state.read_bytes(), original)
+        self.assertFalse(self.config.exists())
+        self.assertFalse(self.trace.exists())
+
+    def test_separate_panel_hostname_preserves_vpn_identity(self):
+        self.vpn_state.write_text('SERVER_ID=vpn.example.com\nCERT_MODE=public\n')
+        self.vpn_state.chmod(0o600)
+        original = self.vpn_state.read_bytes()
+        result = self.run_setup(self.file_input())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('vpn.example.com', result.stdout)
+        self.assertIn('UDP 500/4500 stays direct', result.stdout)
+        self.assertEqual(self.vpn_state.read_bytes(), original)
+        self.assertEqual(json.loads((self.config / 'origin.json').read_text())['hostname'], 'panel.example.com')
 
     def test_file_input_creates_config_after_confirmation(self):
         result = self.run_setup(self.file_input())

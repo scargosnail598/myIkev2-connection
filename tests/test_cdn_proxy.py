@@ -56,7 +56,11 @@ class CdnInstallerInputTests(unittest.TestCase):
         self.script = self.root / "install.sh"
         self.script.write_text(source)
         shutil.copyfile(REPO / "packaging/render-cdn-proxy.py", self.root / "render-cdn-proxy.py")
-        shutil.copyfile(REPO / "packaging/cdn-networks.py", self.root / "cdn-networks.py")
+        helper = (REPO / "packaging/cdn-networks.py").read_text()
+        helper = helper.replace('VPN_STATE = Path("/var/lib/ikev2-easy-installer/state.env")',
+                                f'VPN_STATE = Path("{self.root / "vpn-state.env"}")')
+        helper = helper.replace('OWNER_UID = 0', f'OWNER_UID = {os.getuid()}')
+        (self.root / "cdn-networks.py").write_text(helper)
         self.bin = self.root / "bin"
         self.bin.mkdir()
         self.trace = self.root / "trace"
@@ -109,6 +113,16 @@ class CdnInstallerInputTests(unittest.TestCase):
         self.assertEqual(result.returncode, 79, result.stderr)
         self.assertEqual(self.trace.read_text(), "apt reached\n")
 
+
+    def test_direct_proxy_install_rejects_vpn_hostname_collision_before_apt(self):
+        state = self.root / 'vpn-state.env'
+        state.write_text('SERVER_ID=panel.example.com\n')
+        state.chmod(0o600)
+        self.network_file('8.8.8.0/24')
+        result = self.install()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Panel hostname must differ', result.stderr)
+        self.assertFalse(self.trace.exists())
 
     def test_complete_install_enables_auto_timer_or_disables_it_for_manual_mode(self):
         # Run the installer end-to-end against temporary application/unit paths;

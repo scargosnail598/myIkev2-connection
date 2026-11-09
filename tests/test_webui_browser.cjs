@@ -770,6 +770,9 @@ test("configuration QR scans back to the same link and optional password; PNG do
   assert.equal(decoded.data, uri);
   const envelope = JSON.parse(inflateSync(Buffer.from(uri.split("/").at(-1), "base64url")));
   assert.equal(envelope.profile.username, "alice");
+  assert.equal(envelope.profile.server, "vpn.example.test");
+  assert.equal(envelope.profile.remote_id, "vpn.example.test");
+  assert.notEqual(envelope.profile.server, new URL(page.url()).hostname);
   assert.equal(envelope.password, undefined);
   const downloadPromise = page.waitForEvent("download");
   await page.locator("#share-download").click();

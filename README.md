@@ -6,7 +6,7 @@ or install the optional Web UI during initial setup or later.
 
 | Component | File | Version / platform |
 | --- | --- | --- |
-| VPN server | `ikev2-strongswan-ubuntu.sh` | 6.4.12 / Ubuntu 22.04, 24.04 |
+| VPN server | `ikev2-strongswan-ubuntu.sh` | 6.4.13 / Ubuntu 22.04, 24.04 |
 | Windows client | `ikev2-windows-client.ps1` | 6.4.7 / PowerShell 5.1+ |
 | Linux client | `ikev2-linux-client.sh` | 1.9.8 / Ubuntu 22.04, 24.04 |
 | Web UI | `packaging/install-webui.sh` | Python 3 + systemd; optional |
@@ -125,6 +125,13 @@ After installing the Web UI, choose **15) Configure Web UI for CDN**, or run:
 ```bash
 sudo bash ./ikev2-strongswan-ubuntu.sh cdn
 ```
+
+Use separate hostnames: `vpn.example.com` resolves directly to the VPN server
+with CDN proxying **off**; `panel.example.com` is proxied through the CDN. Both
+can point to the same origin IP. Exported `.ikev` profiles, links and QR codes
+use the VPN installer's `SERVER_ID` for `server` and `remote_id`, independently
+of the panel URL. Version **6.4.13** shows this identity in the wizard and rejects
+a panel hostname equal to it. See [repairing shared-hostname DNS](WEBUI_CDN_GUIDE.md#separate-the-panel-and-vpn-hostnames).
 
 The wizard checks local panel health and asks for the panel hostname, origin
 port (default 8080), and how to obtain provider egress CIDRs. Choose **4) ArvanCloud**,
@@ -317,8 +324,8 @@ are unchanged from `linux-v1.9.8` and `windows-v6.4.7`. Keep
 version without moving or recreating those tags:
 
 ```bash
-git tag -a server-v6.4.12 -m "Server v6.4.12"
-git push origin server-v6.4.12
+git tag -a server-v6.4.13 -m "Server v6.4.13"
+git push origin server-v6.4.13
 ```
 
 When changing a client, bump its embedded version and publish its new component

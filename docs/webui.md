@@ -176,6 +176,10 @@ collects the hostname, HTTP origin port and network source. Choose ArvanCloud,
 Cloudflare or a public HTTPS text feed for automatic CIDRs and daily refresh;
 manual files, paste and the existing list are also supported. It validates
 inputs, backs up existing settings and asks before applying changes.
+The wizard displays the managed VPN identity and rejects using it as the CDN
+panel hostname. The panel URL never replaces profile `server`/`remote_id`;
+keep the VPN name DNS-only and use a separate CDN-proxied panel name. See
+[hostname separation](../WEBUI_CDN_GUIDE.md#separate-the-panel-and-vpn-hostnames).
 New panel installations retain it at `/opt/ikev2/packaging/setup-cdn-proxy.sh`.
 The main script uses a checkout, installed helper or verified release bundle.
 For provider configuration, verification and rollback, follow the

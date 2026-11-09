@@ -70,7 +70,12 @@ PYTHON
   fi
 fi
 
+vpn_server_id=$(python3 -B "$SCRIPT_DIR/cdn-networks.py" identity)
 printf '\nConfigure Web UI for a CDN\n'
+if [[ -n "$vpn_server_id" ]]; then
+  printf 'VPN endpoint / IKE identity: %s (keep DNS-only/direct to the VPN server)\n' "$vpn_server_id"
+fi
+printf 'The CDN hostname is for the panel only. Use a different hostname from the VPN endpoint.\n'
 printf 'The CDN must support HTTP origins. The CDN-to-server leg is unencrypted.\n'
 printf 'This installs/restarts the root-managed proxy and enables Secure panel cookies.\n'
 printf 'VPN services, DNS and firewall rules are not changed.\n\n'
@@ -89,6 +94,8 @@ except ValueError:
     raise SystemExit("Origin port must be an integer")
 Path(sys.argv[3]).write_text(json.dumps(settings) + "\n")
 PYTHON
+
+python3 -B "$SCRIPT_DIR/cdn-networks.py" check-host "$stage/origin.json"
 
 printf '\nUse current origin-facing CIDRs from your CDN provider, one per line.\n'
 printf '  1) Read a local network-list file\n'
@@ -155,6 +162,9 @@ if ! systemctl is-active --quiet ikev2-web-proxy.service && [[ -n $(ss -H -lnt "
 fi
 printf '\nConfiguration summary\n'
 printf '  Public panel URL : https://%s\n' "$hostname"
+if [[ -n "$vpn_server_id" ]]; then
+  printf '  VPN endpoint/ID  : %s (unchanged; UDP 500/4500 stays direct)\n' "$vpn_server_id"
+fi
 printf '  Origin transport : HTTP, port %s (unencrypted)\n' "$port"
 source_mode=$(python3 -B "$SCRIPT_DIR/cdn-networks.py" source "$stage/origin.json")
 printf '  Allowed peers    : validated CDN networks and loopback\n'

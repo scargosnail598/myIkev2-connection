@@ -94,6 +94,7 @@ class RefreshTests(unittest.TestCase):
             path.chmod(0o644)
         self.addCleanup(mock.patch.stopall)
         mock.patch.object(networks, 'OWNER_UID', os.getuid()).start()
+        mock.patch.object(networks, 'VPN_STATE', self.root / 'vpn-state.env').start()
         self.fetch = mock.patch.object(networks, 'fetch_ranges', return_value='8.8.4.0/24\n').start()
         self.command = mock.patch.object(networks, 'command', return_value=subprocess.CompletedProcess([], 0)).start()
         self.health = mock.patch.object(networks, 'proxy_health').start()
@@ -107,6 +108,32 @@ class RefreshTests(unittest.TestCase):
 
     def restarts(self):
         return [call for call in self.command.call_args_list if call.args[0][:2] == ['systemctl', 'restart']]
+
+    def test_refresh_refuses_panel_vpn_collision_without_fetching_or_restart(self):
+        state = self.root / 'vpn-state.env'
+        state.write_text('SERVER_ID=panel.example.com\n')
+        state.chmod(0o600)
+        with self.assertRaisesRegex(ValueError, 'Panel hostname must differ'):
+            self.refresh()
+        self.unchanged()
+        self.fetch.assert_not_called()
+        self.command.assert_not_called()
+
+    def test_identity_is_read_as_data_and_shell_assignments_are_never_executed(self):
+        state = self.root / 'vpn-state.env'
+        marker = self.root / 'must-not-exist'
+        state.write_text(f'SERVER_ID=$(touch {marker})\n')
+        state.chmod(0o600)
+        with self.assertRaises(ValueError):
+            networks.vpn_identity(state)
+        self.assertFalse(marker.exists())
+        state.write_text("SERVER_ID='VPN.EXAMPLE.COM.'\n")
+        self.assertEqual(networks.vpn_identity(state), 'VPN.EXAMPLE.COM.')
+        with self.assertRaisesRegex(ValueError, 'Panel hostname must differ'):
+            networks.validate_panel_identity({'hostname': 'vpn.example.com'})
+        state.write_text('SERVER_ID=vpn.example.com\nSERVER_ID=other.example.com\n')
+        with self.assertRaises(ValueError):
+            networks.vpn_identity(state)
 
     def test_success_updates_ranges_and_restarts_only_proxy(self):
         self.assertTrue(self.refresh())
@@ -212,6 +239,7 @@ spec = importlib.util.spec_from_file_location("refresh", sys.argv[1])
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 module.OWNER_UID = os.getuid()
+module.VPN_STATE = Path(sys.argv[2]) / "vpn-state.env"
 module.refresh(Path(sys.argv[2]))
 '''
             process = subprocess.Popen([sys.executable, '-B', '-c', code,

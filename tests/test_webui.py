@@ -1,4 +1,6 @@
 import json
+import base64
+import zlib
 from http.cookiejar import CookieJar
 import os
 from pathlib import Path
@@ -403,6 +405,38 @@ class WebServerTests(unittest.TestCase):
                 self.post_json("/api/users/export", payload, headers=headers)
             self.assertEqual(error.exception.code, 503)
             self.assertNotIn(b"private detail", error.exception.read())
+
+    def test_cdn_http_host_does_not_rewrite_exported_vpn_endpoint(self):
+        from webui.profiles import build_share
+        from webui.users import atomic_private
+        self.login()
+        payload = {'username': 'fixture-user', 'revision': 'fixture-revision', 'include_password': False}
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / 'state.env'
+            original = b'SERVER_ID=vpn.example.test\nCERT_MODE=public\n'
+            atomic_private(state, original)
+            with patch.object(self.broker, 'export_user', side_effect=lambda data: build_share(state, data['username'])):
+                for panel in ('panel.example.test', 'other-panel.example.test'):
+                    headers = {'X-CSRF-Token': self.csrf_token, 'Host': panel,
+                               'X-Forwarded-Host': panel, 'Forwarded': f'host={panel};proto=https'}
+                    with self.post_json('/api/users/export', payload, headers=headers) as response:
+                        result = json.load(response)
+                    encoded = result['uri'].rsplit('/', 1)[-1]
+                    envelope = json.loads(zlib.decompress(base64.urlsafe_b64decode(encoded + '=' * (-len(encoded) % 4))))
+                    self.assertEqual(envelope['profile']['server'], 'vpn.example.test')
+                    self.assertEqual(envelope['profile']['remote_id'], 'vpn.example.test')
+            self.assertEqual(state.read_bytes(), original)
+
+    def test_export_client_cannot_override_vpn_server_or_identity(self):
+        self.login()
+        payload = {'username': 'fixture-user', 'revision': 'fixture-revision', 'include_password': False}
+        original_calls = list(self.broker.calls)
+        for field in ('server', 'remote_id', 'hostname', 'panel_hostname'):
+            with self.subTest(field=field), self.assertRaises(HTTPError) as error:
+                self.post_json('/api/users/export', {**payload, field: 'panel.example.test'},
+                               headers={'X-CSRF-Token': self.csrf_token})
+            self.assertEqual(error.exception.code, 400)
+        self.assertEqual(self.broker.calls, original_calls)
 
     def test_users_require_login_and_responses_are_not_cached(self):
         with self.assertRaises(HTTPError) as raised:

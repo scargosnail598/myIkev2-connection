@@ -55,6 +55,7 @@ def read_settings(path):
 
 
 def build_share(state, username, password=None, certificate=CA_CERT):
+    # Both endpoint and certificate identity come from VPN state, never HTTP Host/CDN settings.
     settings = read_settings(state)
     server = settings["SERVER_ID"]
     profile = {

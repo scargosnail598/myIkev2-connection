@@ -6,7 +6,7 @@ IFS=$'\n\t'
 # Uses StrongSwan, EAP-MSCHAPv2, selectable Private CA or ACME trust, and IPv4 full-tunnel NAT.
 
 INSTALLER_NAME="ikev2-easy-installer"
-CURRENT_INSTALLER_VERSION="6.4.13-en"
+CURRENT_INSTALLER_VERSION="6.4.14-en"
 INSTALLER_VERSION="$CURRENT_INSTALLER_VERSION"
 
 STATE_DIR="/var/lib/${INSTALLER_NAME}"
@@ -366,10 +366,33 @@ PYTHON
 )
 
 install_optional_webui() {
+  local panel_hostname="${1:-}"
   if ! install_webui; then
     warn "Optional Web UI installation did not complete. The VPN installation is complete; panel files or services may be partially installed."
     warn "Review the error and retry with: sudo bash $0 webui"
+    return 0
   fi
+  if [[ -n "$panel_hostname" ]] && ! configure_cdn --hostname "$panel_hostname"; then
+    warn "Optional CDN setup did not complete. The VPN installation is complete; review the proxy error and retry with: sudo bash $0 cdn"
+  fi
+}
+
+collect_panel_hostname() {
+  local output_var="$1" panel_value
+  while true; do
+    ask_value panel_value \
+      "Web UI / CDN hostname" \
+      "Panel access only, for example panel.example.com. VPN profiles and the VPN certificate keep ${SERVER_ID}." \
+      ""
+    if ! validate_fqdn "$panel_value" || is_ipv4 "$panel_value"; then
+      warn "Enter a fully qualified panel DNS hostname, for example panel.example.com."
+    elif [[ "${panel_value,,}" == "${SERVER_ID,,}" ]]; then
+      warn "The panel hostname must differ from the direct VPN address / identity."
+    else
+      printf -v "$output_var" '%s' "${panel_value,,}"
+      return 0
+    fi
+  done
 }
 
 on_error() {
@@ -2025,7 +2048,7 @@ start_and_verify() {
 
 show_install_result() {
   printf '\n%b================ IKEv2 VPN READY ================%b\n' "$GREEN" "$RESET"
-  printf 'Server / Remote ID : %s\n' "$SERVER_ID"
+  printf 'VPN / Remote ID    : %s (direct; UDP 500/4500)\n' "$SERVER_ID"
   printf 'Internet interface : %s\n' "$OUT_IF"
   printf 'VPN subnet         : %s\n' "$VPN_SUBNET"
   printf 'DNS servers        : %s\n' "$DNS_SERVERS"
@@ -2060,7 +2083,7 @@ show_install_result() {
 install_vpn() {
   [[ ! -f "$STATE_FILE" ]] || die "A managed installation already exists. Run status or uninstall first."
 
-  local detected_iface detected_ip overlap webui_requested="no"
+  local detected_iface detected_ip overlap webui_requested="no" panel_hostname=""
   detected_iface=$(default_interface)
   [[ -n "$detected_iface" ]] || die "No default IPv4 route was found."
   detected_ip=$(interface_ipv4 "$detected_iface")
@@ -2070,7 +2093,7 @@ install_vpn() {
 
   while true; do
     ask_value SERVER_ID \
-      "Server address / identity" \
+      "VPN address / certificate identity" \
       "Direct VPN FQDN or IPv4 address, with DNS-only routing to this server. Use a separate hostname for a CDN panel; this VPN identity is written into the server certificate." \
       "${detected_ip:-}"
     validate_server_id "$SERVER_ID" && break
@@ -2156,7 +2179,7 @@ install_vpn() {
         if is_ipv4 "$SERVER_ID"; then
           warn "Public CA certificates require a DNS hostname, not an IPv4 address."
           while true; do
-            ask_value SERVER_ID "ACME domain" "Enter a valid FQDN, for example vpn.example.com." ""
+            ask_value SERVER_ID "VPN certificate domain (ACME)" "Direct VPN hostname, for example vpn.example.com; use a different hostname for the Web UI / CDN." ""
             validate_fqdn "$SERVER_ID" && break
             warn "Enter a valid fully qualified domain name."
           done
@@ -2218,10 +2241,21 @@ install_vpn() {
   printf '  Standalone scripts download the matching release bundle and verify its SHA256 checksum.\n'
   if ask_yes_no "Install the Web UI management panel too?" N; then
     webui_requested="yes"
+    printf '  The panel hostname is separate from the VPN address and certificate identity.\n'
+    if ask_yes_no "Configure the Web UI with a separate CDN hostname after installation?" N; then
+      collect_panel_hostname panel_hostname
+    fi
   fi
 
   printf '\n%bInstallation summary%b\n' "$BOLD" "$RESET"
-  printf '  Server ID          : %s\n' "$SERVER_ID"
+  printf '  VPN address / ID   : %s (direct; UDP 500/4500)\n' "$SERVER_ID"
+  if [[ -n "$panel_hostname" ]]; then
+    printf '  Web UI / CDN URL   : https://%s (panel only)\n' "$panel_hostname"
+  elif [[ "$webui_requested" == "yes" ]]; then
+    printf '  Web UI access      : SSH tunnel (127.0.0.1:8787)\n'
+  else
+    printf '  Web UI access      : not installed\n'
+  fi
   printf '  Internet interface : %s\n' "$OUT_IF"
   printf '  VPN subnet         : %s\n' "$VPN_SUBNET"
   if [[ "$IPV6_ENABLED" == "yes" ]]; then
@@ -2272,7 +2306,7 @@ install_vpn() {
   fi
   show_install_result
   if [[ "$webui_requested" == "yes" ]]; then
-    install_optional_webui
+    install_optional_webui "$panel_hostname"
   fi
 }
 

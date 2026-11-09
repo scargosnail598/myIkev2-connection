@@ -109,6 +109,37 @@ exit "${INSTALL_EXIT:-0}"
         self.assertEqual(self.vpn_state.read_bytes(), original)
         self.assertEqual(json.loads((self.config / 'origin.json').read_text())['hostname'], 'panel.example.com')
 
+    def test_install_selected_hostname_overrides_old_panel_default_without_changing_vpn(self):
+        self.existing()
+        self.vpn_state.write_text('SERVER_ID=vpn.example.com\nCERT_MODE=public\n')
+        self.vpn_state.chmod(0o600)
+        original = self.vpn_state.read_bytes()
+        result = self.run_setup('\n3\ny\n', '--hostname', 'new-panel.example.com')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('Panel hostname selected during VPN setup: new-panel.example.com', result.stdout)
+        self.assertEqual(json.loads((self.config / 'origin.json').read_text())['hostname'],
+                         'new-panel.example.com')
+        self.assertEqual(self.vpn_state.read_bytes(), original)
+
+    def test_install_selected_hostname_still_rejects_vpn_identity_before_writes(self):
+        original = self.existing()
+        self.vpn_state.write_text('SERVER_ID=vpn.example.com\nCERT_MODE=public\n')
+        self.vpn_state.chmod(0o600)
+        result = self.run_setup('8080\n', '--hostname', 'VPN.EXAMPLE.COM')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Panel hostname must differ', result.stderr)
+        for name, data in original.items():
+            self.assertEqual((self.config / name).read_text(), data)
+        self.assertFalse(self.trace.exists())
+
+    def test_install_selected_hostname_requires_confirmation(self):
+        result = self.run_setup(f'8080\n1\n{self.networks}\nn\n',
+                                '--hostname', 'panel.example.com')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('CDN setup canceled', result.stdout)
+        self.assertFalse(self.config.exists())
+        self.assertFalse(self.trace.exists())
+
     def test_file_input_creates_config_after_confirmation(self):
         result = self.run_setup(self.file_input())
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -272,9 +303,12 @@ exit "${INSTALL_EXIT:-0}"
         self.assertNotIn('network_source', json.loads(origin.read_text()))
 
     def test_unknown_arguments_are_rejected(self):
-        result = self.run_setup('', '--unknown')
-        self.assertEqual(result.returncode, 2)
-        self.assertFalse(self.config.exists())
+        for args in (('--unknown',), ('--hostname',), ('--hostname', ''),
+                     ('--hostname', 'a.example.com', '--hostname', 'b.example.com')):
+            with self.subTest(args=args):
+                result = self.run_setup('', *args)
+                self.assertEqual(result.returncode, 2)
+                self.assertFalse(self.config.exists())
 
 
 if __name__ == '__main__':

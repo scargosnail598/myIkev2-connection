@@ -21,6 +21,7 @@ def functions(start, following):
 WRAPPER = functions("install_webui", "on_error")
 INSTALL = functions("install_vpn", "safe_purge_new_packages")
 MAIN = SOURCE[SOURCE.index("\nmain() {") + 1:]
+VALIDATORS = functions("is_ipv4", "ipv4_to_int") + functions("validate_fqdn", "validate_ca_name")
 
 
 class OptionalWebuiTests(unittest.TestCase):
@@ -334,10 +335,11 @@ interactive_menu
         self.assertIn("CDN setup did not complete", result.stderr)
         self.assertEqual(self.calls(), "cdn setup\n")
 
-    def fresh_install(self, panel="no", proceed="yes", helper_exit="0"):
-        self.env.update(PANEL_CHOICE=panel, PROCEED_CHOICE=proceed, HELPER_EXIT=helper_exit)
+    def fresh_install(self, panel="no", proceed="yes", helper_exit="0", cdn="no", cdn_exit="0"):
+        self.env.update(PANEL_CHOICE=panel, PROCEED_CHOICE=proceed, HELPER_EXIT=helper_exit,
+                        CDN_CHOICE=cdn, CDN_EXIT=cdn_exit)
         # Only the prompt/orchestration runs. Every privileged action is a stub.
-        return self.run_script(WRAPPER + INSTALL + '''
+        return self.run_script(WRAPPER + INSTALL + VALIDATORS + '''
 STATE_FILE="$TMPDIR/nonexistent-state"
 IPSEC_CONF="$TMPDIR/nonexistent-conf"
 IPSEC_SECRETS="$TMPDIR/nonexistent-secrets"
@@ -345,7 +347,13 @@ FW_SERVICE=test-firewall
 CLIENT_DIR="$TMPDIR/client"
 default_interface() { printf eth0; }
 interface_ipv4() { printf 192.0.2.1; }
-ask_value() { printf -v "$1" '%s' "$4"; }
+ask_value() {
+  case "$1" in
+    SERVER_ID) printf -v "$1" '%s' vpn.example.test ;;
+    panel_value) printf -v "$1" '%s' panel.example.test ;;
+    *) printf -v "$1" '%s' "$4" ;;
+  esac
+}
 validate_server_id() { :; }
 validate_interface() { :; }
 validate_cidr() { :; }
@@ -359,6 +367,7 @@ package_installed() { return 1; }
 ask_yes_no() {
   case "$1" in
     'Install the Web UI management panel too?') [[ "$PANEL_CHOICE" == yes ]] ;;
+    'Configure the Web UI with a separate CDN hostname after installation?') [[ "$CDN_CHOICE" == yes ]] ;;
     'Proceed with installation?') [[ "$PROCEED_CHOICE" == yes ]] ;;
     *) return 1 ;;
   esac
@@ -376,6 +385,7 @@ start_and_verify() { printf 'vpn-verified\\n' >> "$TRACE"; }
 configure_connection_logging() { :; }
 show_install_result() { printf 'vpn-ready\\n' >> "$TRACE"; }
 install_webui() { printf 'panel install\\n' >> "$TRACE"; return "$HELPER_EXIT"; }
+configure_cdn() { printf 'cdn %s (vpn=%s)\\n' "$*" "$SERVER_ID" >> "$TRACE"; return "$CDN_EXIT"; }
 install_vpn
 ''', "1\n")
 
@@ -391,9 +401,45 @@ install_vpn
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(self.calls().endswith("vpn-verified\nvpn-ready\npanel install\n"))
         self.assertRegex(result.stdout, r"Install Web UI\s+: yes")
+        self.assertRegex(result.stdout, r"Web UI access\s+: SSH tunnel")
+
+    def test_initial_install_separately_collects_panel_hostname_and_runs_cdn_last(self):
+        result = self.fresh_install(panel="yes", cdn="yes")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertRegex(result.stdout, r"VPN address / ID\s+: vpn.example.test")
+        self.assertRegex(result.stdout, r"Web UI / CDN URL\s+: https://panel.example.test")
+        self.assertTrue(self.calls().endswith(
+            "vpn-verified\nvpn-ready\npanel install\ncdn --hostname panel.example.test (vpn=vpn.example.test)\n"))
+
+    def test_cdn_is_not_configured_when_panel_installation_fails(self):
+        result = self.fresh_install(panel="yes", cdn="yes", helper_exit="23")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("VPN installation is complete", result.stderr)
+        self.assertNotIn("cdn --hostname", self.calls())
+
+    def test_optional_cdn_failure_preserves_successful_vpn_and_panel(self):
+        result = self.fresh_install(panel="yes", cdn="yes", cdn_exit="23")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("panel install\ncdn --hostname", self.calls())
+        self.assertIn("Optional CDN setup did not complete", result.stderr)
+        self.assertIn("VPN installation is complete", result.stderr)
+
+    def test_panel_hostname_prompt_rejects_vpn_name_ip_url_and_invalid_labels(self):
+        body = (WRAPPER + VALIDATORS + functions("ask_value", "validate_email") + '''
+SERVER_ID=vpn.example.test
+panel_hostname=''
+collect_panel_hostname panel_hostname
+printf 'selected=%s vpn=%s\\n' "$panel_hostname" "$SERVER_ID"
+''')
+        result = self.run_script(body,
+            'VPN.EXAMPLE.TEST\n192.0.2.1\nhttps://panel.example.test\nbad..example.test\nPANEL.EXAMPLE.TEST\n')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("must differ", result.stderr)
+        self.assertIn("fully qualified panel DNS hostname", result.stderr)
+        self.assertIn("selected=panel.example.test vpn=vpn.example.test", result.stdout)
 
     def test_cancelled_initial_install_installs_neither_component(self):
-        result = self.fresh_install(panel="yes", proceed="no")
+        result = self.fresh_install(panel="yes", cdn="yes", proceed="no")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.calls(), "")
 

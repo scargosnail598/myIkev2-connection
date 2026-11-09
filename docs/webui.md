@@ -13,6 +13,13 @@ During fresh VPN setup, accept **Install the Web UI management panel too? [y/N]*
 The default is **No**. Installation starts after VPN verification and prompts
 for a separate panel admin password (at least 12 characters; username `admin`).
 Skipping the panel keeps the command-line VPN workflow available.
+Choosing the panel also offers optional CDN setup. Accept **Configure the Web UI
+with a separate CDN hostname after installation?** and enter a panel DNS name
+different from the **VPN address / certificate identity**. The final summary
+shows both addresses. After the VPN and panel succeed, the CDN wizard keeps that
+panel name and asks for the origin port, network source and confirmation. The
+default is SSH-tunnel access; the panel name never enters VPN profiles or the
+VPN certificate. DNS/CDN records and external firewall configuration remain manual.
 
 On an existing server, choose **14) Install / Update Web UI**, or run:
 

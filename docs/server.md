@@ -62,6 +62,13 @@ On a fresh server choose:
 The installer asks **Install the Web UI management panel too? [y/N]** before
 its final summary. Accept to install the panel after the VPN passes its checks;
 press Enter to skip. Panel setup asks for a separate admin password.
+If you accept the panel, the installer next asks **Configure the Web UI with a
+separate CDN hostname after installation? [y/N]**. Choose Yes and enter the
+**Web UI / CDN hostname**, or keep No for SSH-tunnel access. The VPN address and
+panel hostname are collected independently and shown separately in the summary.
+CDN setup runs only after both VPN verification and panel installation succeed;
+it still asks for the origin port, CDN networks and confirmation. A CDN failure
+prints a `cdn` retry command and leaves the installed VPN available.
 If panel setup fails, the VPN remains installed. Retry with
 `sudo bash ./ikev2-strongswan-ubuntu.sh webui`.
 See [Web UI installation and access](webui.md#install-with-working-service-controls)
@@ -75,7 +82,7 @@ DNS and firewall setup remain manual. See [CDN setup and rollback](../WEBUI_CDN_
 
 ### Installation prompts
 
-#### Server address / identity
+#### VPN address / certificate identity
 
 Enter the direct public IP address or DNS-only hostname that VPN clients will
 use. If you publish the Web UI through a CDN, give the panel a separate hostname.
@@ -95,6 +102,23 @@ or:
 ```
 
 Use this exact same value on Windows and Linux clients.
+
+#### Web UI / CDN hostname (optional)
+
+If both optional Web UI and CDN setup are selected, enter a separate DNS name,
+for example `panel.example.com`. It is only for browser access to the panel;
+it never replaces the VPN address, IKE identity or certificate domain. The VPN
+name is stored as `SERVER_ID` in managed VPN state; the panel name is stored as
+`hostname` in `/etc/ikev2-web-proxy/origin.json` after CDN setup is confirmed.
+The installer rejects the same name for these two roles. Leave CDN setup off
+to keep the panel available only through an SSH tunnel.
+
+The final summary shows both roles, for example:
+
+```text
+VPN address / ID   : vpn.example.com (direct; UDP 500/4500)
+Web UI / CDN URL   : https://panel.example.com (panel only)
+```
 
 #### Internet interface
 

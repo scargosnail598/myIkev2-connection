@@ -6,7 +6,7 @@ or install the optional Web UI during initial setup or later.
 
 | Component | File | Version / platform |
 | --- | --- | --- |
-| VPN server | `ikev2-strongswan-ubuntu.sh` | 6.4.13 / Ubuntu 22.04, 24.04 |
+| VPN server | `ikev2-strongswan-ubuntu.sh` | 6.4.14 / Ubuntu 22.04, 24.04 |
 | Windows client | `ikev2-windows-client.ps1` | 6.4.7 / PowerShell 5.1+ |
 | Linux client | `ikev2-linux-client.sh` | 1.9.8 / Ubuntu 22.04, 24.04 |
 | Web UI | `packaging/install-webui.sh` | Python 3 + systemd; optional |
@@ -43,7 +43,10 @@ cd myIkev2-connection
 sudo bash ./ikev2-strongswan-ubuntu.sh install
 ```
 
-Review the server identity, Internet interface, VPN subnet, IPv6, DNS,
+Enter **VPN address / certificate identity** for the direct VPN endpoint, for
+example `vpn.example.com`. This name is used by StrongSwan, the VPN certificate
+and all exported profiles; keep its DNS record unproxied.
+Review the Internet interface, VPN subnet, IPv6, DNS,
 certificate mode, Windows compatibility, optional SOCKS5 endpoint and VPN users.
 Before the final summary, the installer asks:
 
@@ -54,6 +57,15 @@ Install the Web UI management panel too? [y/N]:
 - **y**: install the panel after VPN provisioning succeeds; set its separate
   admin password when prompted.
 - **Enter / n**: install the VPN and skip the panel. You can add it later.
+
+If you choose the panel, a separate question asks whether to configure it with
+a CDN hostname. Answer **y** and enter **Web UI / CDN hostname**, for example
+`panel.example.com`, or press Enter to use an SSH tunnel. A panel hostname equal
+to the VPN address is rejected. The summary displays the VPN address and panel
+access separately. After VPN verification and panel installation, CDN setup uses
+the selected panel hostname and asks for the origin port, network source and
+confirmation. Only the panel uses this hostname; profiles keep the VPN identity.
+DNS/CDN records and provider firewall rules remain yours to configure.
 
 Private CA mode exports `ca-cert.cer` for client trust. ACME mode uses public
 system trust. Keep the server identity consistent with the certificate and
@@ -324,8 +336,8 @@ are unchanged from `linux-v1.9.8` and `windows-v6.4.7`. Keep
 version without moving or recreating those tags:
 
 ```bash
-git tag -a server-v6.4.13 -m "Server v6.4.13"
-git push origin server-v6.4.13
+git tag -a server-v6.4.14 -m "Server v6.4.14"
+git push origin server-v6.4.14
 ```
 
 When changing a client, bump its embedded version and publish its new component

@@ -8,18 +8,24 @@ PROXY_DIR=/etc/ikev2-web-proxy
 WEB_CONFIG=/etc/ikev2-web/config.json
 
 usage() {
-  printf 'Usage: sudo bash %s\n' "$0"
+  printf 'Usage: sudo bash %s [--hostname PANEL_HOSTNAME]\n' "$0"
   printf 'Interactively configure the installed Web UI for an HTTP CDN origin.\n'
 }
 
 die() { printf 'Error: %s\n' "$*" >&2; exit 1; }
 
-case "${1:-}" in
-  -h|--help) usage; exit 0 ;;
-  '') ;;
-  *) usage >&2; exit 2 ;;
-esac
-[[ $# -eq 0 ]] || { usage >&2; exit 2; }
+requested_hostname=''
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help) usage; exit 0 ;;
+    --hostname)
+      [[ $# -ge 2 && -n "$2" && -z "$requested_hostname" ]] || { usage >&2; exit 2; }
+      requested_hostname="$2"
+      shift 2
+      ;;
+    *) usage >&2; exit 2 ;;
+  esac
+done
 [[ ${EUID} -eq 0 ]] || die "Run with sudo or as root."
 command -v python3 >/dev/null || die "Python 3 is required."
 [[ -f "$WEB_CONFIG" ]] || die "Install the Web UI first: sudo bash ikev2-strongswan-ubuntu.sh webui"
@@ -79,8 +85,13 @@ printf 'The CDN hostname is for the panel only. Use a different hostname from th
 printf 'The CDN must support HTTP origins. The CDN-to-server leg is unencrypted.\n'
 printf 'This installs/restarts the root-managed proxy and enables Secure panel cookies.\n'
 printf 'VPN services, DNS and firewall rules are not changed.\n\n'
-read -r -p "Panel hostname${hostname_default:+ [$hostname_default]}: " hostname || exit 1
-hostname=${hostname:-$hostname_default}
+if [[ -n "$requested_hostname" ]]; then
+  hostname=$requested_hostname
+  printf 'Panel hostname selected during VPN setup: %s\n' "$hostname"
+else
+  read -r -p "Panel hostname${hostname_default:+ [$hostname_default]}: " hostname || exit 1
+  hostname=${hostname:-$hostname_default}
+fi
 read -r -p "HTTP origin port [$port_default]: " port || exit 1
 port=${port:-$port_default}
 

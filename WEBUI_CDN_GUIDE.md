@@ -64,12 +64,24 @@ the old proxy settings. There is no need to uninstall/reinstall the VPN.
 
 ## Interactive server setup
 
+During a fresh installation, **6.4.14** and later collect the **VPN address /
+certificate identity** first. If you select optional Web UI installation, you
+can also select CDN setup and enter a separate **Web UI / CDN hostname** before
+the final installation summary. The VPN uses only its direct identity; the
+CDN wizard runs after successful VPN and panel installation and uses only the
+selected panel name. It still requests an origin port, network source and
+confirmation. Skipping CDN setup keeps SSH-tunnel panel access.
+
 If the Web UI is already installed, open the server installer's main menu and
 choose **15) Configure Web UI for CDN**, or run:
 
 ```bash
 sudo bash ./ikev2-strongswan-ubuntu.sh cdn
 ```
+
+To pass a panel hostname selected earlier, use
+`sudo bash ./ikev2-strongswan-ubuntu.sh cdn --hostname panel.example.com`.
+This skips only the hostname question; validation and confirmation still apply.
 
 This wizard prepares the **managed HTTP origin** described below. It checks the
 local panel and asks for a hostname, origin port and network source. Choose
